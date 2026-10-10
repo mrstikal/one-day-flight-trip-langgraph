@@ -33,4 +33,10 @@ export async function writeWorkerHeartbeat(pool: Pool, identity: WorkerIdentity)
            pid = EXCLUDED.pid`,
     [identity.workerId, identity.host, identity.pid],
   );
+  // Bound table growth from restarts: drop stale rows from long-dead workers.
+  await pool.query(
+    `DELETE FROM odft_app.worker_heartbeat
+      WHERE last_heartbeat_at < now() - interval '1 day' AND worker_id <> $1`,
+    [identity.workerId],
+  );
 }

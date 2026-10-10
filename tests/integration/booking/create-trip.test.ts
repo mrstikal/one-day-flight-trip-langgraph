@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { admitOperation, createTrip } from "@odft/persistence";
+import { admitOperation, admitResume, createTrip, insertDecision } from "@odft/persistence";
 import { createFixtureSession } from "../../fixtures/session.js";
 import { fixtureCreationInput } from "../../fixtures/trip.js";
 import { createTestPool, resetDatabase } from "./_setup.js";
@@ -119,6 +119,115 @@ describe("trip creation and admission", () => {
       request: { requestId: randomUUID(), expectedRevision: 99, command: { type: "build_itinerary" } },
     });
     expect("code" in result ? result.code : undefined).toBe("STALE_REVISION");
+    const trip = await pool.query<{ revision: number }>(
+      "SELECT revision FROM odft_app.trips WHERE id = $1",
+      [created.tripId],
+    );
+    expect(trip.rows[0]?.revision).toBe(1);
+  });
+
+  it("rejects geographic references that are not admitted", async () => {
+    const bad = await createTrip(pool, {
+      sessionId: await newSession(),
+      input: fixtureCreationInput({ originAirportId: "ourairports:99999999" }),
+    });
+    expect("code" in bad ? bad.code : undefined).toBe("VALIDATION_FAILED");
+
+    const mismatched = await createTrip(pool, {
+      sessionId: await newSession(),
+      input: fixtureCreationInput({ destinationCountryKey: "FR" }),
+    });
+    expect("code" in mismatched ? mismatched.code : undefined).toBe("VALIDATION_FAILED");
+  });
+
+  it("rejects an expired session", async () => {
+    const client = await pool.connect();
+    const sessionId = randomUUID();
+    try {
+      await client.query(
+        `INSERT INTO odft_app.anonymous_sessions (id, token_hash, csrf_token_hash, expires_at)
+         VALUES ($1, $2, $3, now() - interval '1 hour')`,
+        [sessionId, randomUUID().replace(/-/g, "").repeat(2), "f".repeat(64)],
+      );
+    } finally {
+      client.release();
+    }
+    const result = await createTrip(pool, { sessionId, input: fixtureCreationInput() });
+    expect("code" in result ? result.code : undefined).toBe("FORBIDDEN");
+  });
+
+  it("rejects a no-op set_route command", async () => {
+    const sessionId = await newSession();
+    const created = await createTrip(pool, { sessionId, input: fixtureCreationInput() });
+    if (!("tripId" in created)) {
+      throw new Error("creation failed");
+    }
+    await pool.query(
+      "UPDATE odft_app.workflow_operations SET status = 'succeeded' WHERE trip_id = $1 AND status IN ('queued','running')",
+      [created.tripId],
+    );
+    const result = await admitOperation(pool, {
+      tripId: created.tripId,
+      sessionId,
+      request: { requestId: randomUUID(), expectedRevision: 1, command: { type: "set_route" } },
+    });
+    expect("code" in result ? result.code : undefined).toBe("VALIDATION_FAILED");
+  });
+
+  it("admits a decision resume without incrementing revision", async () => {
+    const sessionId = await newSession();
+    const created = await createTrip(pool, { sessionId, input: fixtureCreationInput() });
+    if (!("tripId" in created)) {
+      throw new Error("creation failed");
+    }
+    await pool.query(
+      "UPDATE odft_app.workflow_operations SET status = 'succeeded' WHERE trip_id = $1 AND status IN ('queued','running')",
+      [created.tripId],
+    );
+    const client = await pool.connect();
+    let decisionId: string;
+    try {
+      decisionId = await insertDecision(client, {
+        tripId: created.tripId,
+        kind: "itinerary_approval",
+        threadId: created.tripId,
+        graphVersion: "graph-v0",
+        createdRevision: 1,
+        sourceFingerprint: "a".repeat(64),
+        payloadHash: "a".repeat(64),
+      });
+    } finally {
+      client.release();
+    }
+
+    const accepted = await admitResume(pool, {
+      tripId: created.tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId,
+        response: { action: "approve_itinerary", itineraryId: randomUUID() },
+      },
+    });
+    expect(accepted).toMatchObject({ status: "accepted", revision: 1, deduped: false });
+
+    await pool.query(
+      "UPDATE odft_app.workflow_operations SET status = 'succeeded' WHERE trip_id = $1 AND status IN ('queued','running')",
+      [created.tripId],
+    );
+    const mismatched = await admitResume(pool, {
+      tripId: created.tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId,
+        response: { action: "choose_option", optionId: "x" },
+      },
+    });
+    expect("code" in mismatched ? mismatched.code : undefined).toBe("STALE_DECISION");
+
     const trip = await pool.query<{ revision: number }>(
       "SELECT revision FROM odft_app.trips WHERE id = $1",
       [created.tripId],

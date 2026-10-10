@@ -35,7 +35,7 @@ async function confirmOffer(
     sessionId: fixture.sessionId,
     service: "hotel",
     offerId,
-    operationId: randomUUID(),
+    operationId: fixture.operationId,
     sourceFingerprint: FINGERPRINT,
   });
   const decisionId = await createConfirmationDecision(pool, {
@@ -68,7 +68,7 @@ describe("replacement", () => {
       sessionId: fixture.sessionId,
       service: "hotel",
       offerId: FIXTURE_HOTEL_OFFER_ALT,
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
     });
     const decisionId = await createConfirmationDecision(pool, {
@@ -120,7 +120,7 @@ describe("replacement", () => {
       sessionId: fixture.sessionId,
       service: "hotel",
       offerId: FIXTURE_HOTEL_OFFER_ALT,
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
     });
     const decisionId = await createConfirmationDecision(pool, {

@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS odft_app.reservations (
     terms            jsonb NOT NULL DEFAULT '{}'::jsonb,
     disclaimer_acknowledged boolean NOT NULL DEFAULT true,
     demo_reference   text NOT NULL UNIQUE CHECK (demo_reference ~ '^DEMO-(FLT|HTL|RST)-[0-9A-F]{20}$'),
-    confirmation_key text NOT NULL UNIQUE CHECK (length(confirmation_key) > 0),
+    confirmation_key text NOT NULL CHECK (length(confirmation_key) > 0),
     proposal_id      uuid NOT NULL REFERENCES odft_app.selection_proposals (id),
     decision_id      uuid NOT NULL,
     party_total_minor integer NOT NULL CHECK (party_total_minor >= 0),
@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS odft_app.reservations (
 -- replacement must supersede the old row before inserting the new one.
 CREATE UNIQUE INDEX IF NOT EXISTS reservations_one_confirmed_per_service
     ON odft_app.reservations (trip_id, service_key) WHERE status = 'confirmed';
+CREATE UNIQUE INDEX IF NOT EXISTS reservations_trip_confirmation_key
+    ON odft_app.reservations (trip_id, confirmation_key);
 CREATE INDEX IF NOT EXISTS reservations_history_idx ON odft_app.reservations (trip_id, service_key, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS odft_app.pending_decisions (
@@ -292,3 +294,28 @@ CREATE TABLE IF NOT EXISTS odft_app.llm_calls (
     status            text NOT NULL,
     created_at        timestamptz NOT NULL DEFAULT now()
 );
+
+-- Deferred foreign keys (added after all tables exist; nullable so ordering stays flexible).
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trips_active_snapshot_fk') THEN
+        ALTER TABLE odft_app.trips ADD CONSTRAINT trips_active_snapshot_fk
+            FOREIGN KEY (active_scenario_snapshot_id) REFERENCES odft_app.scenario_snapshots (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trips_current_route_fk') THEN
+        ALTER TABLE odft_app.trips ADD CONSTRAINT trips_current_route_fk
+            FOREIGN KEY (current_route_validation_id) REFERENCES odft_app.route_validations (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trips_current_schedule_fk') THEN
+        ALTER TABLE odft_app.trips ADD CONSTRAINT trips_current_schedule_fk
+            FOREIGN KEY (current_schedule_validation_id) REFERENCES odft_app.schedule_validations (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_decisions_proposal_fk') THEN
+        ALTER TABLE odft_app.pending_decisions ADD CONSTRAINT pending_decisions_proposal_fk
+            FOREIGN KEY (proposal_id) REFERENCES odft_app.selection_proposals (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'execution_events_operation_fk') THEN
+        ALTER TABLE odft_app.execution_events ADD CONSTRAINT execution_events_operation_fk
+            FOREIGN KEY (operation_id) REFERENCES odft_app.workflow_operations (id);
+    END IF;
+END $$;

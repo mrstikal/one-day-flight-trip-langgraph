@@ -313,6 +313,7 @@ async function runGeonames(refresh: boolean): Promise<void> {
     license: "CC BY 4.0 (GeoNames); attribution and transformation notice in data/manifests/licenses/geonames-cc-by.txt",
     licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
     transformVersion: TRANSFORM_VERSION,
+    hashTarget: "downloaded cities15000.zip (upstream GeoNames artifact)",
     recordCount: cityCount,
     rejectedCount: reportToRows(rejected).reduce((sum, row) => sum + row.count, 0),
     rejectedReport: reportToRows(rejected),
@@ -456,7 +457,7 @@ async function runOurairports(refresh: boolean): Promise<void> {
     rows.push({
       id: `ourairports:${idNum}`,
       iata,
-      ...(ident ? { icao: ident } : {}),
+      ...(ident && /^[A-Z0-9]{4}$/.test(ident) ? { icao: ident } : {}),
       name,
       countryKey,
       ...(municipality ? { municipality } : {}),
@@ -494,6 +495,7 @@ async function runOurairports(refresh: boolean): Promise<void> {
     license: "Public domain (OurAirports); credit retained voluntarily.",
     licenseUrl: "https://ourairports.com/data/",
     transformVersion: TRANSFORM_VERSION,
+    hashTarget: "downloaded airports.csv (upstream OurAirports artifact)",
     recordCount: count,
     rejectedCount: reportToRows(rejected).reduce((sum, row) => sum + row.count, 0),
     rejectedReport: reportToRows(rejected),
@@ -519,6 +521,7 @@ async function runZones(): Promise<void> {
     license: "geo-tz code MIT; underlying boundary data ODbL (see data/manifests/licenses/odbl-timezone.txt).",
     licenseUrl: "https://github.com/evansiroky/node-geo-tz",
     transformVersion: TRANSFORM_VERSION,
+    hashTarget: "derived data/reference/airports.ndjson zone-resolution output",
     recordCount: count,
     rejectedCount: 0,
     rejectedReport: [],
@@ -533,7 +536,8 @@ async function runZones(): Promise<void> {
     license: "ODbL v1.0 (boundary data). Not redistributed; only derived zone lookups and this notice are committed.",
     licenseUrl: "https://opendatacommons.org/licenses/odbl/1-0/",
     transformVersion: TRANSFORM_VERSION,
-    recordCount: count,
+    hashTarget: "data/manifests/licenses/odbl-timezone.txt (committed license notice)",
+    recordCount: 0,
     rejectedCount: 0,
     rejectedReport: [],
     attribution: "Contains data derived from OpenStreetMap contributors and timezone-boundary-builder, licensed under ODbL.",
@@ -549,12 +553,14 @@ async function runCatchments(): Promise<void> {
     join(DATA_DIR, "airports.ndjson"),
   );
   const byIata = new Map(airports.map((airport) => [airport.iata, airport]));
-  const cityByNameCountry = new Map(cities.map((city) => [`${city.countryKey}:${city.name.toLowerCase()}`, city]));
+  const cityByNameCountry = new Map(
+    cities.map((city) => [`${city.countryKey}:${normalizeSearchKey(city.name)}`, city]),
+  );
   const evidenceRefs = (label: string): string[] => [`reviewed:${label}`];
 
   const links: Record<string, unknown>[] = [];
   for (const seed of REVIEWED_CITY_AIRPORTS) {
-    const city = cityByNameCountry.get(`${seed.country}:${seed.city.toLowerCase()}`);
+    const city = cityByNameCountry.get(`${seed.country}:${normalizeSearchKey(seed.city)}`);
     const airport = byIata.get(seed.iata);
     const metro = REVIEWED_METRO[seed.iata];
     if (!city || !airport || !metro) {
@@ -581,14 +587,16 @@ async function runCatchments(): Promise<void> {
   links.sort((a, b) => `${a.cityId}${a.airportId}`.localeCompare(`${b.cityId}${b.airportId}`));
   const linkCount = await writeNdjson(join(DATA_DIR, "city-airports.ndjson"), links);
 
-  const budejovice =
-    cityByNameCountry.get("CZ:ceské budějovice") ?? cityByNameCountry.get("CZ:ceske budejovice");
+  const budejovice = cityByNameCountry.get(`CZ:${normalizeSearchKey("České Budějovice")}`);
+  if (!budejovice) {
+    throw new Error("Ground-corridor evidence requires the reference city České Budějovice.");
+  }
   const routeEvidence: Record<string, unknown>[] = [
     {
       id: "ground-corridor:prg-ceske-budejovice",
       kind: "ground_corridor",
       originRef: "airport:PRG",
-      destinationRef: budejovice?.id ?? "geonames:3077916",
+      destinationRef: budejovice.id,
       minutes: 180,
       details:
         "Reviewed road/rail connected corridor. Conservative 180-minute ground estimate including access; not a current timetable.",
@@ -782,10 +790,12 @@ async function runLandmarks(): Promise<void> {
     license: "CC0 1.0 (Wikidata structured data); source QIDs retained.",
     licenseUrl: "https://www.wikidata.org/wiki/Wikidata:Licensing",
     transformVersion: TRANSFORM_VERSION,
+    hashTarget: "derived data/reference/landmarks.ndjson (reviewed, pinned QIDs and coordinates)",
     recordCount: count,
     rejectedCount: reportToRows(rejected).reduce((sum, row) => sum + row.count, 0),
     rejectedReport: reportToRows(rejected),
-    attribution: "Landmark identity and coordinates from Wikidata (CC0 1.0).",
+    attribution:
+      "Landmark identity and coordinates from Wikidata (CC0 1.0). QIDs are reviewed and pinned in the importer; no network lookup is required to reproduce this asset.",
   });
   process.stdout.write(`landmarks: ${count} (${JSON.stringify(perCity)})\n`);
 }

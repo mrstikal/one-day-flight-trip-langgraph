@@ -4,8 +4,9 @@ A hybrid graphical/conversational planner for one sightseeing day in a European 
 
 **DEMO APPLICATION - No real reservations are made and no payments are processed.**
 
-This repository is currently at **Phase 01: runtime/workspace foundation only**. The web page
-renders a scaffold notice; no travel feature is implemented yet.
+This repository has completed the **foundation, offline reference data, and domain/booking
+persistence phases (01-03)**. The web page renders a scaffold notice; no travel-planning feature or
+wizard UI is implemented yet.
 
 ## Requirements
 

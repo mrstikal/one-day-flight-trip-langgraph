@@ -7,8 +7,9 @@
   "license": "CC0 1.0 (Wikidata structured data); source QIDs retained.",
   "licenseUrl": "https://www.wikidata.org/wiki/Wikidata:Licensing",
   "transformVersion": "reference-import-v1",
+  "hashTarget": "derived data/reference/landmarks.ndjson (reviewed, pinned QIDs and coordinates)",
   "recordCount": 24,
   "rejectedCount": 0,
   "rejectedReport": [],
-  "attribution": "Landmark identity and coordinates from Wikidata (CC0 1.0)."
+  "attribution": "Landmark identity and coordinates from Wikidata (CC0 1.0). QIDs are reviewed and pinned in the importer; no network lookup is required to reproduce this asset."
 }

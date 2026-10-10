@@ -39,7 +39,11 @@ export class PostgresBookingStore implements BookingStore {
       await client.query("COMMIT");
       return result;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Do not let a dead-connection rollback mask the original error.
+      }
       throw error;
     } finally {
       client.release();

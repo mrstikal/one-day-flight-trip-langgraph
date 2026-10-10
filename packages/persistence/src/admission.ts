@@ -1,18 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
+  DECISION_ALLOWED_ACTIONS,
   DEFAULT_TRIP_PREFERENCES,
+  isNoOpSetRoute,
+  resumeRequestSchema,
   type AdmissionAccepted,
   type CommandRequest,
   type CreationInput,
   type EffectKey,
   type ErrorCode,
   type ErrorEnvelope,
+  type ResumeRequest,
   type TripPreferences,
 } from "@odft/contracts";
 import { contentHash } from "./hash.js";
 import { insertEvent } from "./events.js";
 import { readEffect, writeEffect } from "./effects.js";
+import { loadDecision } from "./decisions.js";
 import {
   getActiveOperation,
   getOperationByRequestId,
@@ -52,7 +57,11 @@ export interface AdmitOperationResult {
   readonly deduped: boolean;
 }
 
-function error(code: ErrorCode, message: string, extra: Partial<ErrorEnvelope> = {}): ErrorEnvelope {
+function error(
+  code: ErrorCode,
+  message: string,
+  extra: Partial<ErrorEnvelope> = {},
+): ErrorEnvelope {
   return { code, message, retryable: false, ...extra };
 }
 
@@ -107,12 +116,33 @@ export async function createTrip(
     }
 
     const existingSession = await client.query<{ id: string }>(
-      `SELECT id FROM odft_app.anonymous_sessions WHERE id = $1`,
+      `SELECT id FROM odft_app.anonymous_sessions WHERE id = $1 AND expires_at > now()`,
       [sessionId],
     );
     if (!existingSession.rows[0]) {
       await client.query("ROLLBACK");
-      return error("FORBIDDEN", "session does not exist");
+      return error("FORBIDDEN", "session does not exist or has expired");
+    }
+
+    // Geographic references must be admitted reference data, not just regex-valid.
+    const references = await client.query<{ airport_ok: boolean; city_country: string | null }>(
+      `SELECT
+         (SELECT true FROM odft_app.reference_airports WHERE id = $1 AND eligible_origin = true) AS airport_ok,
+         (SELECT country_key FROM odft_app.reference_cities WHERE id = $2) AS city_country`,
+      [input.originAirportId, input.destinationCityId],
+    );
+    const ref = references.rows[0];
+    if (!ref?.airport_ok) {
+      await client.query("ROLLBACK");
+      return error("VALIDATION_FAILED", "origin airport is not an admitted eligible origin");
+    }
+    if (!ref.city_country) {
+      await client.query("ROLLBACK");
+      return error("VALIDATION_FAILED", "destination city is not an admitted reference city");
+    }
+    if (ref.city_country !== input.destinationCountryKey) {
+      await client.query("ROLLBACK");
+      return error("VALIDATION_FAILED", "destination country does not match the destination city");
     }
 
     const tripId = randomUUID();
@@ -197,6 +227,11 @@ export async function admitOperation(
   try {
     await client.query("BEGIN");
 
+    if (isNoOpSetRoute(request.command)) {
+      await client.query("ROLLBACK");
+      return error("VALIDATION_FAILED", "set_route must change at least one route field");
+    }
+
     // 1. Deduplicate on (trip_id, request_id) first.
     const existing = await getOperationByRequestId(client, tripId, request.requestId);
     if (existing) {
@@ -263,7 +298,9 @@ export async function admitOperation(
     const active = await getActiveOperation(client, tripId);
     if (active) {
       await client.query("ROLLBACK");
-      return error("OPERATION_IN_PROGRESS", "another operation is already queued or running");
+      return error("OPERATION_IN_PROGRESS", "another operation is already queued or running", {
+        retryable: true,
+      });
     }
 
     const newRevision = trip.revision + 1;
@@ -296,3 +333,133 @@ export async function admitOperation(
 }
 
 export type AdmissionAcceptedEnvelope = AdmissionAccepted;
+
+export interface AdmitResumeOptions {
+  readonly tripId: string;
+  readonly sessionId: string;
+  readonly request: ResumeRequest;
+}
+
+export interface AdmitResumeResult {
+  readonly status: "accepted";
+  readonly operationId: string;
+  readonly revision: number;
+  readonly deduped: boolean;
+}
+
+/**
+ * Admit a decision resume (persistence half of Phase 03 §7 / Phase 05 wiring).
+ * Validates the resume envelope, ownership, revision, and that the pending
+ * decision accepts the submitted action. Does NOT increment `trip.revision`.
+ */
+export async function admitResume(
+  pool: Pool,
+  options: AdmitResumeOptions,
+): Promise<AdmitResumeResult | ErrorEnvelope> {
+  const parsed = resumeRequestSchema.safeParse(options.request);
+  if (!parsed.success) {
+    return error("VALIDATION_FAILED", "invalid resume request");
+  }
+  const request = parsed.data;
+  const { tripId, sessionId } = options;
+  const payloadHash = contentHash(request);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existing = await getOperationByRequestId(client, tripId, request.requestId);
+    if (existing) {
+      const owner = await client.query<{ session_id: string }>(
+        `SELECT session_id FROM odft_app.trips WHERE id = $1`,
+        [tripId],
+      );
+      if (owner.rows[0]?.session_id !== sessionId) {
+        await client.query("ROLLBACK");
+        return error("FORBIDDEN", "trip is not owned by this session");
+      }
+      if (existing.record.payloadHash !== payloadHash) {
+        await client.query("ROLLBACK");
+        return error("CONFLICT", "the request id was reused with a different payload");
+      }
+      await client.query("COMMIT");
+      return {
+        status: "accepted",
+        operationId: existing.record.id,
+        revision: existing.record.acceptedRevision,
+        deduped: true,
+      };
+    }
+
+    const trip = await lockTrip(client, tripId);
+    if (!trip) {
+      await client.query("ROLLBACK");
+      return error("NOT_FOUND", "trip not found");
+    }
+    if (trip.sessionId !== sessionId) {
+      await client.query("ROLLBACK");
+      return error("FORBIDDEN", "trip is not owned by this session");
+    }
+    const raced = await getOperationByRequestId(client, tripId, request.requestId);
+    if (raced) {
+      if (raced.record.payloadHash !== payloadHash) {
+        await client.query("ROLLBACK");
+        return error("CONFLICT", "the request id was reused with a different payload");
+      }
+      await client.query("COMMIT");
+      return {
+        status: "accepted",
+        operationId: raced.record.id,
+        revision: raced.record.acceptedRevision,
+        deduped: true,
+      };
+    }
+    if (trip.recoveryRequired) {
+      await client.query("ROLLBACK");
+      return error("RECOVERY_REQUIRED", "the trip must recover its unfinished operation first");
+    }
+    if (trip.revision !== request.expectedRevision) {
+      await client.query("ROLLBACK");
+      return error("STALE_REVISION", "expected revision does not match the current revision", {
+        currentRevision: trip.revision,
+      });
+    }
+    const active = await getActiveOperation(client, tripId);
+    if (active) {
+      await client.query("ROLLBACK");
+      return error("OPERATION_IN_PROGRESS", "another operation is already queued or running", {
+        retryable: true,
+      });
+    }
+    const decision = await loadDecision(client, request.decisionId);
+    if (!decision || decision.tripId !== tripId || decision.status !== "pending") {
+      await client.query("ROLLBACK");
+      return error("STALE_DECISION", "decision is missing, resolved, or owned by another trip");
+    }
+    if (!DECISION_ALLOWED_ACTIONS[decision.kind].includes(request.response.action)) {
+      await client.query("ROLLBACK");
+      return error("STALE_DECISION", "response action does not match the pending decision kind");
+    }
+
+    const operation = await insertOperation(client, {
+      tripId,
+      requestId: request.requestId,
+      payloadHash,
+      acceptedRevision: trip.revision,
+      kind: "decision",
+      payload: request,
+    });
+    await insertEvent(client, {
+      tripId,
+      operationId: operation.id,
+      type: "decision.admitted",
+      payload: { revision: trip.revision, decisionId: request.decisionId },
+    });
+    await client.query("COMMIT");
+    return { status: "accepted", operationId: operation.id, revision: trip.revision, deduped: false };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}

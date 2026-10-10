@@ -7,6 +7,7 @@
   "license": "Public domain (OurAirports); credit retained voluntarily.",
   "licenseUrl": "https://ourairports.com/data/",
   "transformVersion": "reference-import-v1",
+  "hashTarget": "downloaded airports.csv (upstream OurAirports artifact)",
   "recordCount": 690,
   "rejectedCount": 85541,
   "rejectedReport": [

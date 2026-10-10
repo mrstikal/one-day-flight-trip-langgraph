@@ -33,7 +33,7 @@ async function proposalFor(service: BookingService, fixture: BookingFixture, off
     sessionId: fixture.sessionId,
     service: "hotel",
     offerId,
-    operationId: randomUUID(),
+    operationId: fixture.operationId,
     sourceFingerprint: FINGERPRINT,
   });
 }
@@ -190,6 +190,36 @@ describe("confirmation authorization", () => {
     await expect(
       service.confirm(await confirmArgs(fixture, proposal.proposalId, decisionId)),
     ).rejects.toMatchObject({ code: "STALE_DECISION" });
+    expect(await reservationCount(fixture.tripId)).toBe(0);
+  });
+
+  it("rejects confirmation for a failed operation", async () => {
+    const fixture = await createBookingFixture(pool);
+    const service = createBookingService(pool);
+    const proposal = await proposalFor(service, fixture);
+    const decisionId = await createConfirmationDecision(pool, {
+      tripId: fixture.tripId,
+      proposalId: proposal.proposalId,
+      sourceFingerprint: FINGERPRINT,
+      allowedOfferIds: [FIXTURE_HOTEL_OFFER],
+      revision: fixture.revision,
+    });
+    const operationId = await createOperation(pool, fixture.tripId);
+    await pool.query("UPDATE odft_app.workflow_operations SET status = 'failed' WHERE id = $1", [
+      operationId,
+    ]);
+    await expect(
+      service.confirm({
+        tripId: fixture.tripId,
+        sessionId: fixture.sessionId,
+        proposalId: proposal.proposalId,
+        decisionId,
+        operationId,
+        acceptedRevision: fixture.revision,
+        acceptedDemoDisclaimer: true,
+        confirmationKey: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await reservationCount(fixture.tripId)).toBe(0);
   });
 

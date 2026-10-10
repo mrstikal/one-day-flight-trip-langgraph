@@ -97,7 +97,22 @@ async function runCheck(probe: () => Promise<string>): Promise<CheckStatus> {
   } catch (error) {
     return {
       ok: false,
-      detail: error instanceof Error ? error.message : "unknown error",
+      detail: sanitizeDetail(error instanceof Error ? error.message : "unknown error"),
     };
   }
+}
+
+/**
+ * Readiness detail must never leak connection strings, hosts, or credentials
+ * through a raw database error.
+ */
+function sanitizeDetail(message: string): string {
+  if (
+    /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|password|authentication|SASL|host|port|connect/i.test(
+      message,
+    )
+  ) {
+    return "dependency unavailable";
+  }
+  return message;
 }

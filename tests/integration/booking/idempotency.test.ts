@@ -30,7 +30,7 @@ async function setupWithProposal() {
     sessionId: fixture.sessionId,
     service: "hotel",
     offerId: FIXTURE_HOTEL_OFFER,
-    operationId: randomUUID(),
+    operationId: fixture.operationId,
     sourceFingerprint: FINGERPRINT,
   });
   const decisionId = await createConfirmationDecision(pool, {
@@ -108,5 +108,60 @@ describe("confirmation idempotency", () => {
       [fixture.tripId],
     );
     expect(rows.rows[0]?.c).toBe(1);
+
+    // No decision is left dangling by the idempotent path.
+    const pending = await pool.query<{ c: number }>(
+      "SELECT count(*)::int AS c FROM odft_app.pending_decisions WHERE trip_id = $1 AND status = 'pending'",
+      [fixture.tripId],
+    );
+    expect(pending.rows[0]?.c).toBe(0);
+
+    // A subsequent decision for the trip is therefore accepted (no raw 23505).
+    await expect(
+      createConfirmationDecision(pool, {
+        tripId: fixture.tripId,
+        proposalId: proposal.proposalId,
+        sourceFingerprint: FINGERPRINT,
+        allowedOfferIds: [FIXTURE_HOTEL_OFFER],
+        revision: fixture.revision,
+      }),
+    ).resolves.toEqual(expect.any(String));
+  });
+
+  it("allows the same confirmation key on a different trip", async () => {
+    const fixtureA = await createBookingFixture(pool);
+    const fixtureB = await createBookingFixture(pool);
+    const key = randomUUID();
+    const confirmOn = async (fixture: typeof fixtureA) => {
+      const service = createBookingService(pool);
+      const proposal = await service.propose({
+        tripId: fixture.tripId,
+        sessionId: fixture.sessionId,
+        service: "hotel",
+        offerId: FIXTURE_HOTEL_OFFER,
+        operationId: fixture.operationId,
+        sourceFingerprint: FINGERPRINT,
+      });
+      const decisionId = await createConfirmationDecision(pool, {
+        tripId: fixture.tripId,
+        proposalId: proposal.proposalId,
+        sourceFingerprint: FINGERPRINT,
+        allowedOfferIds: [FIXTURE_HOTEL_OFFER],
+        revision: fixture.revision,
+      });
+      return service.confirm({
+        tripId: fixture.tripId,
+        sessionId: fixture.sessionId,
+        proposalId: proposal.proposalId,
+        decisionId,
+        operationId: await createOperation(pool, fixture.tripId),
+        acceptedRevision: fixture.revision,
+        acceptedDemoDisclaimer: true,
+        confirmationKey: key,
+      });
+    };
+    const a = await confirmOn(fixtureA);
+    const b = await confirmOn(fixtureB);
+    expect(a.reservationId).not.toBe(b.reservationId);
   });
 });

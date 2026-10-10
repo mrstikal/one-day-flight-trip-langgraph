@@ -48,6 +48,13 @@ export class BookingService {
   async propose(input: ProposeSelectionInput): Promise<ProposalResult> {
     return this.store.transaction(async (tx) => {
       const trip = await this.requireTrip(tx, input.tripId, input.sessionId);
+      const operation = await tx.loadOperation(input.operationId);
+      if (!operation || operation.tripId !== input.tripId) {
+        throw new DomainError("CONFLICT", "proposal requires an admitted operation for this trip");
+      }
+      if (operation.status === "failed" || operation.status === "cancelled") {
+        throw new DomainError("CONFLICT", "operation is no longer active");
+      }
       const snapshotId = trip.activeScenarioSnapshotId;
       if (!snapshotId) {
         throw new DomainError("OFFER_UNAVAILABLE", "trip has no active scenario snapshot");
@@ -83,11 +90,31 @@ export class BookingService {
   }
 
   confirm(input: ConfirmBookingInput): Promise<ReservationResult> {
-    return this.performConfirmation(input, false);
+    return this.runConfirmation(input, false);
   }
 
   replaceConfirmed(input: ReplaceConfirmedInput): Promise<ReservationResult> {
-    return this.performConfirmation(input, true);
+    return this.runConfirmation(input, true);
+  }
+
+  private async runConfirmation(
+    input: ConfirmBookingInput | ReplaceConfirmedInput,
+    replacement: boolean,
+  ): Promise<ReservationResult> {
+    try {
+      return await this.performConfirmation(input, replacement);
+    } catch (error) {
+      // Persist proposal withdrawal after the failed transaction has rolled back,
+      // so no nested transaction is opened while the trip lock is held.
+      if (error instanceof DomainError && error.code === "PROPOSAL_EXPIRED") {
+        await this.withdraw(input.tripId, input.proposalId, "expired");
+      } else if (error instanceof DomainError && error.code === "OFFER_UNAVAILABLE") {
+        await this.withdraw(input.tripId, input.proposalId, "rejected");
+      } else if (error instanceof DomainError && error.code === "OFFER_MISMATCH") {
+        await this.withdraw(input.tripId, input.proposalId, "rejected");
+      }
+      throw error;
+    }
   }
 
   private async performConfirmation(
@@ -111,13 +138,20 @@ export class BookingService {
       if (!operation || operation.tripId !== input.tripId) {
         throw new DomainError("CONFLICT", "operation is not admitted for this trip");
       }
+      if (operation.status === "failed" || operation.status === "cancelled") {
+        throw new DomainError("CONFLICT", "operation is no longer active");
+      }
       if (operation.acceptedRevision !== input.acceptedRevision) {
         throw new DomainError("STALE_REVISION", "operation accepted revision does not match the request");
       }
 
       const stored = await tx.readEffect(effectKey);
       if (stored !== undefined) {
-        return { ...(stored as ReservationResult), idempotent: true };
+        if (!isReservationResult(stored)) {
+          throw new DomainError("INTERNAL_ERROR", "stored booking effect is malformed");
+        }
+        await tx.resolveDecision(input.decisionId);
+        return { ...stored, idempotent: true };
       }
 
       if (trip.revision !== input.acceptedRevision) {
@@ -156,13 +190,13 @@ export class BookingService {
         if (byKey.proposalId !== input.proposalId || byKey.serviceKey !== proposal.serviceKey) {
           throw new DomainError("CONFLICT", "confirmation key is already bound to another proposal");
         }
-        await this.completeEffect(tx, effectKey, proposal.id, byKey);
+        await this.completeEffect(tx, effectKey, proposal.id, byKey, input.decisionId);
         return toResult(byKey, true);
       }
 
       const active = await tx.getActiveReservation(input.tripId, proposal.serviceKey);
       if (active && active.offerId === proposal.offerId) {
-        await this.completeEffect(tx, effectKey, proposal.id, active);
+        await this.completeEffect(tx, effectKey, proposal.id, active, input.decisionId);
         return toResult(active, true);
       }
       if (active && !replacement) {
@@ -177,7 +211,6 @@ export class BookingService {
         throw new DomainError("STALE_DECISION", `proposal is ${proposal.status}`);
       }
       if (Date.parse(proposal.expiresAt) <= this.now().getTime()) {
-        await this.withdraw(input.tripId, proposal.id, "expired");
         throw new DomainError("PROPOSAL_EXPIRED", "proposal has expired");
       }
 
@@ -189,7 +222,6 @@ export class BookingService {
 
       const offer = await tx.loadOffer(proposal.snapshotId, proposal.serviceKey, proposal.offerId);
       if (!offer) {
-        await this.withdraw(input.tripId, proposal.id, "rejected");
         throw new DomainError("OFFER_UNAVAILABLE", "the proposed offer is no longer in the snapshot");
       }
       this.assertOfferMatchesTrip(offer, trip);
@@ -294,11 +326,13 @@ export class BookingService {
     effectKey: EffectKey,
     proposalId: string,
     reservation: ReservationRecord,
+    decisionId: string,
   ): Promise<void> {
     const proposal = await tx.loadProposal(reservation.tripId, proposalId);
     if (proposal && isProposalActionable(proposal.status)) {
       await tx.markProposalResolved(proposalId, "accepted");
     }
+    await tx.resolveDecision(decisionId);
     await tx.writeEffect(effectKey, toResult(reservation, true));
   }
 
@@ -324,4 +358,17 @@ function toResult(reservation: ReservationRecord, idempotent: boolean): Reservat
     partyTotalMinor: reservation.partyTotalMinor,
     idempotent,
   };
+}
+
+function isReservationResult(value: unknown): value is ReservationResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.status === "confirmed" &&
+    typeof candidate.reservationId === "string" &&
+    typeof candidate.demoReference === "string" &&
+    typeof candidate.serviceKey === "string"
+  );
 }

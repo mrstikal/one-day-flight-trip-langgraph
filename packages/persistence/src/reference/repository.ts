@@ -41,6 +41,11 @@ const MANIFEST_DIR = join(REPO_ROOT, "data", "manifests");
 export const DATASET_LIMITATION =
   "cities15000 covers places above roughly 15,000 people and capitals; smaller places may be absent.";
 
+/** Escape LIKE wildcards so user input is treated literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
 async function readNdjson<T>(path: string, parse: (row: unknown) => T): Promise<T[]> {
   const content = await readFile(path, "utf8");
   const rows: T[] = [];
@@ -240,10 +245,11 @@ export async function searchCountries(pool: Pool, q: string, limit = 20): Promis
     `SELECT country_key, name, extension, policy_note
        FROM odft_app.reference_countries
       WHERE admitted = true
-        AND ($1 = '' OR lower(name) LIKE '%' || $1 || '%' OR lower(country_key) LIKE $1 || '%')
+        AND ($1 = '' OR lower(name) LIKE '%' || $1 || '%' ESCAPE '\\'
+                     OR lower(country_key) LIKE $1 || '%' ESCAPE '\\')
       ORDER BY name ASC
       LIMIT $2`,
-    [needle, Math.max(1, Math.min(limit, 50))],
+    [escapeLike(needle), Math.max(1, Math.min(limit, 50))],
   );
   return result.rows.map(toCountryRef);
 }
@@ -297,10 +303,10 @@ export async function searchCities(pool: Pool, input: CitySearchInput): Promise<
   const result = await pool.query<CityRow>(
     `SELECT id, country_key, name, ascii_name, lat, lon, zone, coverage_flag, population, search_key
        FROM odft_app.reference_cities
-      WHERE country_key = $1 AND ($2 = '' OR search_key LIKE '%' || $2 || '%')
+      WHERE country_key = $1 AND ($2 = '' OR search_key LIKE '%' || $2 || '%' ESCAPE '\\')
       ORDER BY search_key ASC, population DESC, id ASC
       LIMIT $3 OFFSET $4`,
-    [input.countryKey, needle, limit + 1, offset],
+    [input.countryKey, escapeLike(needle), limit + 1, offset],
   );
   const rows = result.rows.slice(0, limit);
   const items = rows.map(toCityRef);
@@ -375,10 +381,10 @@ export async function searchAirports(
   const needle = normalizeSearchKey(input.q);
   const result = await pool.query<AirportRow>(
     `SELECT * FROM odft_app.reference_airports
-      WHERE eligible_origin = true AND ($1 = '' OR search_key LIKE '%' || $1 || '%')
+      WHERE eligible_origin = true AND ($1 = '' OR search_key LIKE '%' || $1 || '%' ESCAPE '\\')
       ORDER BY search_key ASC, id ASC
       LIMIT $2 OFFSET $3`,
-    [needle, limit + 1, offset],
+    [escapeLike(needle), limit + 1, offset],
   );
   const rows = result.rows.slice(0, limit);
   return {
@@ -470,7 +476,7 @@ export async function resolveCatchment(
   }
   const result = await pool.query<{ airport_id: string; city_id: string; metro_catchment_id: string }>(
     `SELECT airport_id, city_id, metro_catchment_id FROM odft_app.reference_city_airports
-      WHERE airport_id = ANY($1::text[])`,
+      WHERE airport_id = ANY($1::text[]) ORDER BY airport_id, city_id`,
     [airportIds],
   );
   const links = result.rows.map((row) => ({

@@ -7,6 +7,7 @@
   "license": "CC BY 4.0 (GeoNames); attribution and transformation notice in data/manifests/licenses/geonames-cc-by.txt",
   "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
   "transformVersion": "reference-import-v1",
+  "hashTarget": "downloaded cities15000.zip (upstream GeoNames artifact)",
   "recordCount": 7059,
   "rejectedCount": 27097,
   "rejectedReport": [

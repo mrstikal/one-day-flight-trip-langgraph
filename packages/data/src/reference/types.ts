@@ -115,6 +115,8 @@ export const manifestSchema = z
     license: z.string().min(1),
     licenseUrl: z.string().min(1).optional(),
     transformVersion: z.string().min(1),
+    /** What the `sha256` value covers, so provenance is unambiguous per source. */
+    hashTarget: z.string().min(1),
     recordCount: z.number().int().nonnegative(),
     rejectedCount: z.number().int().nonnegative(),
     rejectedReport: z

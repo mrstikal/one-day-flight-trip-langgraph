@@ -6,6 +6,7 @@ import {
   createTrip,
   insertDecision,
   insertOperation,
+  loadReferenceData,
   runMigrations,
 } from "@odft/persistence";
 import { createFixtureSession } from "../../fixtures/session.js";
@@ -41,11 +42,15 @@ export async function resetDatabase(pool: Pool): Promise<void> {
   await pool.query("DROP SCHEMA IF EXISTS odft_app CASCADE");
   await pool.query("DROP SCHEMA IF EXISTS odft_checkpoint CASCADE");
   await runMigrations(pool);
+  // createTrip validates geographic references, so booking tests need the
+  // committed reference data loaded.
+  await loadReferenceData(pool);
 }
 
 export interface BookingFixture {
   readonly sessionId: string;
   readonly tripId: string;
+  readonly operationId: string;
   readonly snapshotId: string;
   readonly routeValidationId: string;
   readonly scheduleValidationId: string;
@@ -83,7 +88,8 @@ export async function createBookingFixture(pool: Pool): Promise<BookingFixture> 
       routeValidationId,
       snapshotId,
     });
-    return { sessionId, tripId, snapshotId, routeValidationId, scheduleValidationId, revision: 1 };
+    const operationId = await createOperation(pool, tripId);
+    return { sessionId, tripId, operationId, snapshotId, routeValidationId, scheduleValidationId, revision: 1 };
   } finally {
     client.release();
   }

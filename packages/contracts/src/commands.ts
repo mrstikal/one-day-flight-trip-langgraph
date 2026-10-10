@@ -24,16 +24,22 @@ const uniqueTags = z
   .max(8)
   .refine((tags) => new Set(tags).size === tags.length, "preferred tags must be unique");
 
-export const domainCommandSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("set_route"),
-      originAirportId: geographicRefIdSchema.optional(),
-      destinationCityId: geographicRefIdSchema.optional(),
-      sightseeingDate: localDateSchema.optional(),
-      travelVariant: travelVariantSchema.optional(),
-    })
-    .strict(),
+const setRoute = z
+  .object({
+    type: z.literal("set_route"),
+    originAirportId: geographicRefIdSchema.optional(),
+    destinationCityId: geographicRefIdSchema.optional(),
+    sightseeingDate: localDateSchema.optional(),
+    travelVariant: travelVariantSchema.optional(),
+  })
+  .strict();
+
+/**
+ * Conversational command members, shared by the full union and the model-facing
+ * subset so the two lists cannot drift apart.
+ */
+const conversationalMembers = [
+  setRoute,
   z.object({ type: z.literal("set_default_service_level"), level: serviceLevelSchema }).strict(),
   z
     .object({
@@ -77,79 +83,36 @@ export const domainCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("set_program"),
       mealOfferIds: mealSelectionsSchema,
-      preferredActivityIds: z.array(nonEmptyStringSchema),
-    })
-    .strict(),
-  z.object({ type: z.literal("build_itinerary") }).strict(),
-  z.object({ type: z.literal("retry_failed_domains") }).strict(),
-  z.object({ type: z.literal("set_simulation"), mode: simulationModeSchema }).strict(),
-]);
-
-export type DomainCommand = z.infer<typeof domainCommandSchema>;
-
-const modelFacingMembers = [
-  z
-    .object({
-      type: z.literal("set_route"),
-      originAirportId: geographicRefIdSchema.optional(),
-      destinationCityId: geographicRefIdSchema.optional(),
-      sightseeingDate: localDateSchema.optional(),
-      travelVariant: travelVariantSchema.optional(),
-    })
-    .strict(),
-  z.object({ type: z.literal("set_default_service_level"), level: serviceLevelSchema }).strict(),
-  z
-    .object({
-      type: z.literal("set_service_override"),
-      service: serviceKeySchema,
-      level: serviceLevelSchema.nullable(),
-    })
-    .strict(),
-  z.object({ type: z.literal("set_activity_pace"), pace: activityPaceSchema }).strict(),
-  z
-    .object({
-      type: z.literal("set_interests"),
-      interests: interestsSchema,
-      preferredTags: uniqueTags,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("set_activity_requirement"),
-      tag: activityTagSchema,
-      minimumCount: z.number().int().min(1).max(7).nullable(),
-    })
-    .strict(),
-  z.object({ type: z.literal("set_budget"), maxBudgetMinor: moneyMinorSchema.nullable() }).strict(),
-  z
-    .object({
-      type: z.literal("find_alternatives"),
-      target: z.union([serviceKeySchema, z.literal("activities")]),
-      objective: z.enum(["cheaper", "better_location", "higher_rating", "match_preferences"]),
-      level: serviceLevelSchema.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("propose_selection"),
-      service: bookableKeySchema,
-      offerId: nonEmptyStringSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("set_program"),
-      mealOfferIds: mealSelectionsSchema,
-      preferredActivityIds: z.array(nonEmptyStringSchema),
+      preferredActivityIds: z.array(nonEmptyStringSchema).max(20),
     })
     .strict(),
   z.object({ type: z.literal("build_itinerary") }).strict(),
   z.object({ type: z.literal("retry_failed_domains") }).strict(),
 ] as const;
 
+const setSimulation = z.object({ type: z.literal("set_simulation"), mode: simulationModeSchema }).strict();
+
+export const domainCommandSchema = z.discriminatedUnion("type", [
+  ...conversationalMembers,
+  setSimulation,
+]);
+
+export type DomainCommand = z.infer<typeof domainCommandSchema>;
+
 /** Commands acceptable from model/chat output (excludes the protected inspector command). */
-export const modelFacingCommandSchema = z.discriminatedUnion("type", modelFacingMembers);
+export const modelFacingCommandSchema = z.discriminatedUnion("type", [...conversationalMembers]);
 export type ModelFacingCommand = z.infer<typeof modelFacingCommandSchema>;
+
+/** `set_route` must change at least one route field. */
+export function isNoOpSetRoute(command: DomainCommand): boolean {
+  return (
+    command.type === "set_route" &&
+    command.originAirportId === undefined &&
+    command.destinationCityId === undefined &&
+    command.sightseeingDate === undefined &&
+    command.travelVariant === undefined
+  );
+}
 
 export const intentResultSchema = z.discriminatedUnion("kind", [
   z

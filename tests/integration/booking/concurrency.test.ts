@@ -35,7 +35,7 @@ describe("concurrency", () => {
       sessionId: fixture.sessionId,
       service: "hotel",
       offerId: FIXTURE_HOTEL_OFFER,
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
     });
     const decisionId = await createConfirmationDecision(poolA, {

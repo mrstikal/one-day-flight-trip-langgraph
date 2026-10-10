@@ -1,9 +1,10 @@
 import { DEMO_DISCLAIMER, SCAFFOLD_STATUS } from "@/lib/disclaimers";
 
 const SCAFFOLDED_CAPABILITIES = [
-  "Next.js web/BFF shell, an independent Node.js worker, and PostgreSQL are scaffolded.",
-  "Strict shared packages exist only as empty boundaries; no travel domain yet.",
-  "Country/city data, flights, hotels, meals, activities, AI roles, and maps are not implemented.",
+  "Runnable Next.js BFF, a dedicated Node.js worker, and PostgreSQL 17 with migrations 0001-0003.",
+  "Offline European reference data (countries, cities, airports, curated landmarks) is imported and loaded.",
+  "A deterministic booking foundation exists (command admission, effect ledger, BookingService) with no UI yet.",
+  "The travel planner, AI roles, maps, itineraries, and booking dialogs are not implemented yet.",
 ];
 
 export default function HomePage() {
@@ -17,9 +18,9 @@ export default function HomePage() {
       </div>
 
       <p className="max-w-2xl text-ink-muted">
-        This deployment is the repository and runtime foundation only. It allows the team to verify
-        the pinned toolchain, database setup, worker health, and test commands before any travel
-        feature is built.
+        This deployment is the repository and runtime foundation plus offline reference data and the
+        deterministic booking service. It lets the team verify the pinned toolchain, database setup,
+        worker health, and test commands before any travel-planning UI is built.
       </p>
 
       <section aria-labelledby="capabilities-heading" className="max-w-2xl">

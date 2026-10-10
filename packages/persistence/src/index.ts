@@ -81,10 +81,12 @@ export type { InsertDecisionInput } from "./decisions.js";
 
 export { PostgresBookingStore } from "./booking-store.js";
 
-export { GRAPH_VERSION, admitOperation, createTrip, withEffect } from "./admission.js";
+export { GRAPH_VERSION, admitOperation, admitResume, createTrip, withEffect } from "./admission.js";
 export type {
   AdmitOperationOptions,
   AdmitOperationResult,
+  AdmitResumeOptions,
+  AdmitResumeResult,
   CreateTripOptions,
   CreateTripResult,
 } from "./admission.js";

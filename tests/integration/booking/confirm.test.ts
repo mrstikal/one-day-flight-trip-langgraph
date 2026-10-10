@@ -35,7 +35,7 @@ async function proposeHotel(service: BookingService, fixture: BookingFixture) {
     sessionId: fixture.sessionId,
     service: "hotel",
     offerId: FIXTURE_HOTEL_OFFER,
-    operationId: randomUUID(),
+    operationId: fixture.operationId,
     sourceFingerprint: FINGERPRINT,
   });
 }
@@ -128,7 +128,7 @@ describe("confirmation", () => {
       sessionId: fixture.sessionId,
       service: "hotel",
       offerId: FIXTURE_HOTEL_OFFER,
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
       expiresInMs: -1000,
     });
@@ -180,7 +180,7 @@ describe("confirmation", () => {
       sessionId: fixture.sessionId,
       service: "lunch",
       offerId: "DEMO-LUNCH-1",
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
     });
     const setupClient = await pool.connect();
@@ -215,7 +215,7 @@ describe("confirmation", () => {
       sessionId: fixture.sessionId,
       service: "dinner",
       offerId: "DEMO-DINNER-1",
-      operationId: randomUUID(),
+      operationId: fixture.operationId,
       sourceFingerprint: FINGERPRINT,
     });
     const client = await pool.connect();
