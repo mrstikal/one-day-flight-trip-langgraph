@@ -2,3 +2,20 @@
 /.idea/
 /ODFT_BRIEF.md
 /agent-memory/
+
+# Build output
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+
+# Local secrets and environment
+.env
+.env.*
+!.env.example

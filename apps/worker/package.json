@@ -1,0 +1,20 @@
+{
+  "name": "@odft/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -b tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@odft/ai": "*",
+    "@odft/contracts": "*",
+    "@odft/data": "*",
+    "@odft/domain": "*",
+    "@odft/persistence": "*",
+    "@odft/workflow": "*"
+  }
+}
