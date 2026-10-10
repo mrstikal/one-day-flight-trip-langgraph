@@ -110,25 +110,43 @@ export interface ApprovalGuardState {
   readonly scheduleStatus: string | null;
   readonly routeApprovalFingerprint: string | null;
   readonly currentRouteFingerprint: string | null;
+  readonly currentRouteValidationId: string | null;
+  readonly scheduleRouteValidationId: string | null;
+  readonly activeSnapshotId: string | null;
+  readonly scheduleSnapshotId: string | null;
+  readonly scheduleValidCombinationIds: string[] | null;
 }
 
 /**
- * Recompares the stored route approval with the current route inputs. Used as
- * the booking service's independent guard (FR-FEAS-8 / T-INV-10b).
+ * Recompares the stored route approval with the current route inputs and binds
+ * the current schedule validation to that same route approval and snapshot.
+ * Used as the booking service's independent guard (FR-FEAS-8 / T-INV-10b).
  */
 export async function currentApprovalGuard(
   client: Queryable,
   tripId: string,
 ): Promise<ApprovalGuardState> {
   const result = await client.query<{
+    current_route_validation_id: string | null;
+    current_schedule_validation_id: string | null;
+    active_scenario_snapshot_id: string | null;
     route_status: string | null;
-    schedule_status: string | null;
     route_fingerprint: string | null;
+    schedule_status: string | null;
+    schedule_route_validation_id: string | null;
+    schedule_snapshot_id: string | null;
+    schedule_result: unknown;
   }>(
     `SELECT
+       t.current_route_validation_id,
+       t.current_schedule_validation_id,
+       t.active_scenario_snapshot_id,
        (SELECT status FROM odft_app.route_validations WHERE id = t.current_route_validation_id) AS route_status,
+       (SELECT fingerprint FROM odft_app.route_validations WHERE id = t.current_route_validation_id) AS route_fingerprint,
        (SELECT status FROM odft_app.schedule_validations WHERE id = t.current_schedule_validation_id) AS schedule_status,
-       (SELECT fingerprint FROM odft_app.route_validations WHERE id = t.current_route_validation_id) AS route_fingerprint
+       (SELECT route_validation_id FROM odft_app.schedule_validations WHERE id = t.current_schedule_validation_id) AS schedule_route_validation_id,
+       (SELECT snapshot_id FROM odft_app.schedule_validations WHERE id = t.current_schedule_validation_id) AS schedule_snapshot_id,
+       (SELECT result FROM odft_app.schedule_validations WHERE id = t.current_schedule_validation_id) AS schedule_result
      FROM odft_app.trips t WHERE t.id = $1`,
     [tripId],
   );
@@ -141,11 +159,23 @@ export async function currentApprovalGuard(
       currentRouteFingerprint = computeRouteFingerprint(inputs);
     }
   }
+  let scheduleValidCombinationIds: string[] | null = null;
+  if (row?.schedule_result !== undefined && row?.schedule_result !== null) {
+    const parsed = scheduleValidationSchema.safeParse(row.schedule_result);
+    if (parsed.success) {
+      scheduleValidCombinationIds = parsed.data.validCombinationIds;
+    }
+  }
   return {
     routeStatus: row?.route_status ?? null,
     scheduleStatus: row?.schedule_status ?? null,
     routeApprovalFingerprint: row?.route_fingerprint ?? null,
     currentRouteFingerprint,
+    currentRouteValidationId: row?.current_route_validation_id ?? null,
+    scheduleRouteValidationId: row?.schedule_route_validation_id ?? null,
+    activeSnapshotId: row?.active_scenario_snapshot_id ?? null,
+    scheduleSnapshotId: row?.schedule_snapshot_id ?? null,
+    scheduleValidCombinationIds,
   };
 }
 

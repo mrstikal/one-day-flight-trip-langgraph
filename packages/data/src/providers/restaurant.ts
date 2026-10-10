@@ -43,12 +43,14 @@ export class SyntheticRestaurantSearchProvider implements RestaurantSearchProvid
     if (!content) {
       return unavailable(`snapshot ${input.snapshotId} is not materialized`);
     }
-    if (content.restaurants.length === 0) {
-      return unsupported("the restaurant domain is not materialized in this snapshot version");
+    const mealOffers = content.restaurants.filter((restaurant) => restaurant.meal === input.meal);
+    if (mealOffers.length === 0) {
+      return unsupported(`the ${input.meal} domain is not materialized in this snapshot version`);
     }
-    const offers = content.restaurants.filter(
-      (restaurant) => restaurant.meal === input.meal && restaurant.level === input.level,
-    );
+    if (content.context.adults !== input.adults) {
+      return unavailable("the snapshot party size does not match the requested party");
+    }
+    const offers = mealOffers.filter((restaurant) => restaurant.level === input.level);
     return offers.length > 0
       ? ok(offers)
       : unavailable("no restaurant in the snapshot matches the meal and effective level");

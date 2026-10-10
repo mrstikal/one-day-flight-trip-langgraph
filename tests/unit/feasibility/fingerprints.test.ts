@@ -100,20 +100,41 @@ describe("flight generator", () => {
     generatorVersion: "generator-v1",
   };
 
-  it("is deterministic and rejects a stale approval when current inputs are supplied", () => {
+  it("is deterministic and rejects a stale approval or a mismatched context", () => {
     const inputs = routeInputs();
     const approval = approvalFor(inputs);
-    const first = generateFlights(approval, context);
-    const second = generateFlights(approval, context);
+    const first = generateFlights(approval, context, inputs);
+    const second = generateFlights(approval, context, inputs);
     expect(first).toEqual(second);
     expect(first.length).toBeGreaterThanOrEqual(6);
     expect(first.every((combination) => combination.synthetic && combination.adults === 2)).toBe(
       true,
     );
 
+    // A stale approval (inputs changed) is rejected.
     expect(() =>
       generateFlights(approval, context, routeInputs({ sightseeingDate: "2026-12-02" })),
     ).toThrowError(DomainError);
+    // A context that diverges from the current inputs is rejected even when the
+    // approval itself is current.
+    expect(() => generateFlights(approval, { ...context, adults: 4 }, inputs)).toThrowError(
+      DomainError,
+    );
+    expect(() =>
+      generateFlights(approval, { ...context, travelVariant: "one_night" }, inputs),
+    ).toThrowError(DomainError);
     expect(() => generateFlights(approval, context, inputs)).not.toThrow();
+  });
+
+  it("produces order-independent offers for equal pairs", () => {
+    const inputs = routeInputs();
+    const approval = approvalFor(inputs);
+    const forward = generateFlights(approval, context, inputs);
+    const reversed = generateFlights(
+      { ...approval, approvedPairDetails: [...approval.approvedPairDetails].reverse() },
+      context,
+      inputs,
+    );
+    expect(reversed).toEqual(forward);
   });
 });

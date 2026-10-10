@@ -127,4 +127,35 @@ describe("Stage A route policy", () => {
     expect(result.status).toBe("INFEASIBLE");
     expect(reasonCodes(result)).toContain("NO_PLAUSIBLE_ROUTE");
   });
+
+  it("does not authorize a connection with an unjustified short sub-leg", () => {
+    const base = routeInputs();
+    const farAirport = {
+      ...base.destinationAirports[0]!,
+      airportId: "fixture:far",
+      iata: "LHA",
+      lat: 1,
+      lon: 1,
+      eligibleDestination: true,
+      largeAirport: true,
+    };
+    const result = validateRoute(
+      routeInputs({
+        origin: {
+          ...base.origin,
+          airportId: "ourairports:4409",
+          iata: "BRQ",
+          lat: 49.151276,
+          lon: 16.693972,
+          metroCatchmentId: "brno",
+          largeAirport: false,
+        },
+        destinationAirports: [farAirport],
+        hubAirports: [{ iata: "VIE", lat: 48.110298, lon: 16.5697, zone: "Europe/Vienna" }],
+      }),
+    );
+    // BRQ -> VIE is ~116 km (< 350 km) with no exception: never a valid connection.
+    expect(result.status).toBe("UNDETERMINED");
+    expect(reasonCodes(result)).toContain("SHORT_ROUTE_UNJUSTIFIED");
+  });
 });

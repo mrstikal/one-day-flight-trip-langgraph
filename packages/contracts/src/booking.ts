@@ -146,12 +146,17 @@ export interface EffectKey {
   readonly effectScope: string;
 }
 
-/** Current approval status plus the independent route-freshness comparison. */
+/** Current approval status plus the independent route/schedule freshness checks. */
 export interface CurrentApprovals {
   readonly routeStatus: string | null;
   readonly scheduleStatus: string | null;
   readonly routeApprovalFingerprint: string | null;
   readonly currentRouteFingerprint: string | null;
+  readonly currentRouteValidationId: string | null;
+  readonly scheduleRouteValidationId: string | null;
+  readonly activeSnapshotId: string | null;
+  readonly scheduleSnapshotId: string | null;
+  readonly scheduleValidCombinationIds: string[] | null;
 }
 
 /** One database transaction's operations, implemented by `@odft/persistence`. */

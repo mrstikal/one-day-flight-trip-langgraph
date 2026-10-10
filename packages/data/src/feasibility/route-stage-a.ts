@@ -84,13 +84,52 @@ function isExceptionPair(
   return { isException, evidenceRefs: evidence };
 }
 
-function pickHub(input: RouteInputs, airport: RouteAirport): RouteHub | null {
-  for (const hub of input.hubAirports) {
-    if (hub.iata !== input.origin.iata && hub.iata !== airport.iata) {
-      return hub;
+function hubLegException(input: RouteInputs, fromIata: string, toIata: string): boolean {
+  const fromRef = `airport:${fromIata}`;
+  const toRef = `airport:${toIata}`;
+  for (const exception of input.islandExceptions) {
+    if (
+      (exception.originRef === fromRef && exception.destinationRef === toRef) ||
+      (exception.originRef === toRef && exception.destinationRef === fromRef)
+    ) {
+      return true;
     }
   }
-  return null;
+  for (const [from, to] of input.curatedDirectPairs) {
+    if ((from === fromIata && to === toIata) || (from === toIata && to === fromIata)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Choose the first reviewed hub whose two legs are each eligible: every leg must
+ * clear the same `< 350 km` short-route rule as a direct pair, unless it is an
+ * explicit reviewed exception. This prevents authorizing arbitrary short
+ * sub-legs (e.g. BRQ -> VIE) as a "connection".
+ */
+function pickEligibleHub(
+  input: RouteInputs,
+  airport: RouteAirport,
+): { hub: RouteHub | null; onlyShortLegs: boolean } {
+  let sawShortLeg = false;
+  for (const hub of input.hubAirports) {
+    if (hub.iata === input.origin.iata || hub.iata === airport.iata) {
+      continue;
+    }
+    const originToHub = haversineKm(input.origin, hub);
+    const hubToDestination = haversineKm(hub, airport);
+    const firstOk =
+      originToHub >= DIRECT_MIN_KM || hubLegException(input, input.origin.iata, hub.iata);
+    const secondOk =
+      hubToDestination >= DIRECT_MIN_KM || hubLegException(input, hub.iata, airport.iata);
+    if (firstOk && secondOk) {
+      return { hub, onlyShortLegs: false };
+    }
+    sawShortLeg = true;
+  }
+  return { hub: null, onlyShortLegs: sawShortLeg };
 }
 
 interface PairEvaluation {
@@ -131,9 +170,16 @@ function evaluatePair(input: RouteInputs, airport: RouteAirport): PairEvaluation
           "practical comparison or geographic short-link exception.",
       });
     } else {
-      connectionHub = pickHub(input, airport);
+      const picked = pickEligibleHub(input, airport);
+      connectionHub = picked.hub;
       if (connectionHub) {
         hasConnection = true;
+      } else if (picked.onlyShortLegs) {
+        failures.push({
+          code: "SHORT_ROUTE_UNJUSTIFIED",
+          explanation:
+            "Every reviewed connection hub would require a sub-350 km leg without an explicit exception.",
+        });
       } else {
         failures.push({
           code: "NO_PLAUSIBLE_ROUTE",

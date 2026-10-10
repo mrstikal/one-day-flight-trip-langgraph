@@ -103,7 +103,7 @@ export class SyntheticRoutingProvider implements RoutingProvider {
       pathFactor: assumption.pathFactor,
       estimatedMinutes,
       uncertaintyMinutes: assumption.uncertaintyMinutes,
-      partyTotalMinor: transferCostMinor(input.mode, input.adults, distanceKm),
+      partyTotalMinor: transferCostMinor(input.mode, input.adults, pathKm),
       simulated: true,
       ruleVersion: input.ruleVersion,
     };

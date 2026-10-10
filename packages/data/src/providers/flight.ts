@@ -49,6 +49,11 @@ export class SyntheticFlightSearchProvider implements FlightSearchProvider {
     if (content.flights.length === 0) {
       return unsupported("the flights domain is not materialized in this snapshot version");
     }
+    if (content.routeFingerprint !== input.approval.fingerprint) {
+      return unavailable(
+        "the snapshot was generated for a different route approval and must be regenerated",
+      );
+    }
     const approvedPairs = new Set(
       input.approval.approvedAirportPairs.map(([from, to]) => `${from}-${to}`),
     );

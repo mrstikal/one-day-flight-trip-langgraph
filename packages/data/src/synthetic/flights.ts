@@ -11,6 +11,7 @@ import type {
 } from "@odft/contracts";
 import { assertApprovalCurrent } from "../feasibility/approval-guard.js";
 import { haversineKm } from "../routing/haversine.js";
+import { DomainError } from "@odft/domain";
 import { createDomainFaker } from "./seed.js";
 import { deriveOfferId } from "./ids.js";
 import { priceFlightPerAdult, seasonFactor } from "./pricing.js";
@@ -283,22 +284,41 @@ function buildDirection(
 export function generateFlights(
   approval: FeasibleRouteApproval,
   context: FlightGenerationContext,
-  current?: RouteInputs,
+  current: RouteInputs,
 ): FlightCombination[] {
-  if (current) {
-    assertApprovalCurrent(approval, current);
+  // The approval must match the live inputs AND the generation context, so a
+  // caller cannot generate offers for unapproved dates/variants/party sizes.
+  assertApprovalCurrent(approval, current);
+  if (
+    context.sightseeingDate !== current.sightseeingDate ||
+    context.travelVariant !== current.travelVariant ||
+    context.adults !== current.adults
+  ) {
+    throw new DomainError(
+      "STALE_ROUTE_APPROVAL",
+      "flight generation context does not match the current route inputs",
+    );
   }
-  const faker = createDomainFaker(
-    context.seed,
-    context.scenarioKey,
-    "flights",
-    context.generatorVersion,
-  );
+
   const month = Temporal.PlainDate.from(context.sightseeingDate).month;
   const season = seasonFactor(month);
   const combinations: FlightCombination[] = [];
 
-  for (const pair of approval.approvedPairDetails) {
+  // Deterministic pair order (independent of DB/array order).
+  const pairs = [...approval.approvedPairDetails].sort((a, b) =>
+    `${a.destinationAirportId}:${a.destinationIata}`.localeCompare(
+      `${b.destinationAirportId}:${b.destinationIata}`,
+    ),
+  );
+
+  for (const pair of pairs) {
+    // A dedicated per-pair stream so one pair's output never depends on order.
+    const faker = createDomainFaker(
+      context.seed,
+      context.scenarioKey,
+      "flights",
+      `${context.generatorVersion}:${pair.destinationIata}`,
+    );
     const enriched: ApprovedRoutePair & {
       __sightseeingDate: string;
       __seasonFactor: number;
@@ -311,12 +331,7 @@ export function generateFlights(
         faker,
       );
       combinations.push({
-        id: deriveOfferId(
-          context.scenarioKey,
-          "flights",
-          combinations.length,
-          `${pair.destinationIata}:${index}`,
-        ),
+        id: deriveOfferId(context.scenarioKey, "flights", index, pair.destinationIata),
         outbound,
         inbound,
         adults: context.adults,

@@ -172,18 +172,23 @@ async function persistFlightSnapshot(tripId: string, seed: string) {
     referenceVersion: REFERENCE_VERSION,
     routePolicyVersion: inputs.routePolicyVersion,
   });
-  const flights = generateFlights(approval, {
-    scenarioKey,
-    seed,
-    sightseeingDate: context.sightseeingDate,
-    travelVariant: context.travelVariant,
-    adults: context.adults,
-    generatorVersion: GENERATOR_VERSION,
-  });
+  const flights = generateFlights(
+    approval,
+    {
+      scenarioKey,
+      seed,
+      sightseeingDate: context.sightseeingDate,
+      travelVariant: context.travelVariant,
+      adults: context.adults,
+      generatorVersion: GENERATOR_VERSION,
+    },
+    inputs,
+  );
   const content = initialSnapshotContent({
     scenarioKey,
     seed,
     referenceVersion: REFERENCE_VERSION,
+    routeFingerprint: approval.fingerprint,
     generatedAt: "2026-10-10T00:00:00.000Z",
     context,
     flights,
@@ -304,6 +309,77 @@ describe("Stage A/B and scenario snapshots (real PostgreSQL)", () => {
     });
     expect(flights.status).toBe("ok");
   });
+
+  it("can reserve an offer from a newly generated snapshot (P1 booking-store fix)", async () => {
+    const tripId = await createTrip(FIXTURE_ORIGIN_AIRPORT, FIXTURE_DESTINATION_CITY, "IT");
+    const { approval, flights, inputs, scenarioKey } = await persistFlightSnapshot(
+      tripId,
+      "seed-reserve",
+    );
+    const scenarioService = new ScenarioService(pool);
+    const extended = await scenarioService.ensureDomains(tripId, [
+      "hotels",
+      "breakfast",
+      "lunch",
+      "dinner",
+      "activities",
+      "events",
+    ]);
+
+    const schedule = validateSchedules({
+      approval,
+      combinations: flights,
+      scenarioKey,
+      flightDomainVersion: extended.domainVersions.flights,
+      flightDomainHash: extended.domainContentHashes.flights,
+      scheduleRuleVersion: SCHEDULE_RULE_VERSION,
+      sightseeingDate: inputs.sightseeingDate,
+      travelVariant: inputs.travelVariant,
+      destinationZone: inputs.destination.zone as string,
+      destinationTransferMinutes: approval.approvedPairDetails[0]!.destinationTransferMinutes,
+      routeValidationId: approval.routeValidationId,
+    });
+    expect(schedule.status).toBe("VALID");
+    await persistScheduleValidation(pool, {
+      tripId,
+      snapshotId: extended.snapshotId,
+      result: schedule,
+    });
+
+    const source = new PostgresSnapshotSource(pool);
+    const content = await source.getContent(extended.snapshotId);
+    expect(content).toBeDefined();
+    const hotelOfferId = content!.hotels[0]!.id;
+
+    const booking = createBookingService(pool);
+    const operationId = await createOperation(pool, tripId);
+    const proposal = await booking.propose({
+      tripId,
+      sessionId: await sessionForTrip(tripId),
+      service: "hotel",
+      offerId: hotelOfferId,
+      operationId,
+      sourceFingerprint: "c".repeat(64),
+    });
+    const decisionId = await createConfirmationDecision(pool, {
+      tripId,
+      proposalId: proposal.proposalId,
+      sourceFingerprint: "c".repeat(64),
+      allowedOfferIds: [hotelOfferId],
+      revision: 1,
+    });
+    const result = await booking.confirm({
+      tripId,
+      sessionId: await sessionForTrip(tripId),
+      proposalId: proposal.proposalId,
+      decisionId,
+      operationId: await createOperation(pool, tripId),
+      acceptedRevision: 1,
+      acceptedDemoDisclaimer: true,
+      confirmationKey: randomUUID(),
+    });
+    expect(result.status).toBe("confirmed");
+  });
 });
 
 describe("independent approval freshness guards", () => {
@@ -319,6 +395,9 @@ describe("independent approval freshness guards", () => {
       const trip = await getTrip(client, tripId);
       changed = trip ? await buildRouteInputs(client, trip) : undefined;
       expect(changed).toBeDefined();
+      if (!changed) {
+        throw new Error("changed route inputs unavailable");
+      }
       expect(() =>
         generateFlights(
           approval,
@@ -330,7 +409,7 @@ describe("independent approval freshness guards", () => {
             adults: inputs.adults,
             generatorVersion: GENERATOR_VERSION,
           },
-          changed,
+          changed as RouteInputs,
         ),
       ).toThrowError();
     } finally {
@@ -415,6 +494,69 @@ describe("booking confirmation route-freshness guard (T-INV-10b)", () => {
       }),
     ).rejects.toMatchObject({ code: "STALE_ROUTE_APPROVAL" });
   });
+
+  it("rejects a flight that is not in the current schedule's valid combinations", async () => {
+    const tripId = await createTrip(FIXTURE_ORIGIN_AIRPORT, FIXTURE_DESTINATION_CITY, "IT");
+    const { approval, flights, manifest, inputs, scenarioKey } = await persistFlightSnapshot(
+      tripId,
+      "seed-flight-membership",
+    );
+    const schedule = validateSchedules({
+      approval,
+      combinations: flights,
+      scenarioKey,
+      flightDomainVersion: manifest.domainVersions.flights,
+      flightDomainHash: manifest.domainContentHashes.flights,
+      scheduleRuleVersion: SCHEDULE_RULE_VERSION,
+      sightseeingDate: inputs.sightseeingDate,
+      travelVariant: inputs.travelVariant,
+      destinationZone: inputs.destination.zone as string,
+      destinationTransferMinutes: approval.approvedPairDetails[0]!.destinationTransferMinutes,
+      routeValidationId: approval.routeValidationId,
+    });
+    expect(schedule.status).toBe("VALID");
+    const flightOfferId = schedule.validCombinationIds[0]!;
+    // Persist a VALID schedule that does NOT include the offered flight.
+    await persistScheduleValidation(pool, {
+      tripId,
+      snapshotId: manifest.snapshotId,
+      result: {
+        ...schedule,
+        validCombinationIds: schedule.validCombinationIds.filter((id) => id !== flightOfferId),
+      },
+    });
+
+    const sessionId = await sessionForTrip(tripId);
+    const booking = createBookingService(pool);
+    const operationId = await createOperation(pool, tripId);
+    const proposal = await booking.propose({
+      tripId,
+      sessionId,
+      service: "flights",
+      offerId: flightOfferId,
+      operationId,
+      sourceFingerprint: "c".repeat(64),
+    });
+    const decisionId = await createConfirmationDecision(pool, {
+      tripId,
+      proposalId: proposal.proposalId,
+      sourceFingerprint: "c".repeat(64),
+      allowedOfferIds: [flightOfferId],
+      revision: 1,
+    });
+    await expect(
+      booking.confirm({
+        tripId,
+        sessionId,
+        proposalId: proposal.proposalId,
+        decisionId,
+        operationId: await createOperation(pool, tripId),
+        acceptedRevision: 1,
+        acceptedDemoDisclaimer: true,
+        confirmationKey: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "STALE_ROUTE_APPROVAL" });
+  });
 });
 
 async function withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -424,4 +566,16 @@ async function withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>
   } finally {
     client.release();
   }
+}
+
+async function sessionForTrip(tripId: string): Promise<string> {
+  const row = await pool.query<{ session_id: string }>(
+    `SELECT session_id FROM odft_app.trips WHERE id = $1`,
+    [tripId],
+  );
+  const sessionId = row.rows[0]?.session_id;
+  if (!sessionId) {
+    throw new Error(`trip ${tripId} has no session`);
+  }
+  return sessionId;
 }

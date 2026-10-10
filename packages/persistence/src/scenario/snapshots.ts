@@ -160,6 +160,9 @@ async function insertSnapshot(
 export async function persistSnapshot(pool: Pool, input: SnapshotInput): Promise<ScenarioManifest> {
   const content = snapshotContentSchema.parse(input.content);
   assertSnapshotBounded(content);
+  if (content.routeFingerprint !== input.routeFingerprint) {
+    throw new Error("snapshot content routeFingerprint must match the persisted route fingerprint");
+  }
   const manifest = buildManifest(randomUUID(), content, input.routeFingerprint, input.scenarioId);
   if (manifest.snapshotVersion !== input.snapshotVersion) {
     throw new Error(
@@ -314,14 +317,35 @@ export class ScenarioService {
       context,
     };
 
+    // Fetch curated landmarks once and reuse them for safe anchors and activities.
+    const needsLandmarks =
+      requested.has("hotels") ||
+      requested.has("breakfast") ||
+      requested.has("lunch") ||
+      requested.has("dinner") ||
+      requested.has("activities") ||
+      requested.has("events");
+    let landmarkAnchors: { lat: number; lon: number }[] = [];
+    if (needsLandmarks) {
+      const landmarksClient = await this.pool.connect();
+      try {
+        const { landmarks } = await getCuratedLandmarks(landmarksClient, cityId);
+        landmarkAnchors = landmarks.map((landmark) => ({ lat: landmark.lat, lon: landmark.lon }));
+      } finally {
+        landmarksClient.release();
+      }
+    }
+
     if (requested.has("hotels") && !previousManifest.materializedDomains.includes("hotels")) {
-      additions.hotels = generateHotels(genInput);
+      additions.hotels = generateHotels({ ...genInput, landmarks: landmarkAnchors });
     }
     const mealDomains = (["breakfast", "lunch", "dinner"] as const).filter(
       (meal) => requested.has(meal) && !previousManifest.materializedDomains.includes(meal),
     );
     if (mealDomains.length > 0) {
-      additions.restaurants = mealDomains.flatMap((meal) => generateMeals({ ...genInput, meal }));
+      additions.restaurants = mealDomains.flatMap((meal) =>
+        generateMeals({ ...genInput, meal, landmarks: landmarkAnchors }),
+      );
     }
     if (
       requested.has("activities") &&
@@ -347,7 +371,7 @@ export class ScenarioService {
       }
     }
     if (requested.has("events") && !previousManifest.materializedDomains.includes("events")) {
-      additions.events = generateEvents(genInput);
+      additions.events = generateEvents({ ...genInput, landmarks: landmarkAnchors });
     }
 
     if (Object.keys(additions).length === 0) {
@@ -362,6 +386,7 @@ export function initialSnapshotContent(input: {
   scenarioKey: string;
   seed: string;
   referenceVersion: string;
+  routeFingerprint: string;
   generatedAt: string;
   context: SnapshotContent["context"];
   flights: SnapshotContent["flights"];
@@ -373,6 +398,7 @@ export function initialSnapshotContent(input: {
     generatorVersion: GENERATOR_VERSION,
     fakerVersion: FAKER_VERSION,
     referenceVersion: input.referenceVersion,
+    routeFingerprint: input.routeFingerprint,
     generatedAt: input.generatedAt,
     context: input.context,
     flights: input.flights,

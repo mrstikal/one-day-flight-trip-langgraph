@@ -10,6 +10,7 @@ export * from "./reference/landmarks.js";
 export * from "./synthetic/seed.js";
 export * from "./synthetic/scenario-key.js";
 export * from "./synthetic/ids.js";
+export * from "./synthetic/anchors.js";
 export * from "./synthetic/pricing.js";
 export * from "./synthetic/flights.js";
 export * from "./synthetic/hotels.js";

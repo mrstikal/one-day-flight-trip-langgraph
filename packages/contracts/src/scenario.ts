@@ -182,6 +182,8 @@ export const snapshotContentSchema = z
     generatorVersion: z.string().min(1),
     fakerVersion: z.string().min(1),
     referenceVersion: z.string().min(1),
+    /** Route approval fingerprint this snapshot was generated for. */
+    routeFingerprint: fingerprintSchema,
     /** Metadata only; excluded from payload-determinism comparisons. */
     generatedAt: z.string().min(1),
     context: snapshotContextSchema,

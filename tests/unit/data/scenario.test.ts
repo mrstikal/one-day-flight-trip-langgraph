@@ -96,6 +96,7 @@ describe("snapshot domain hashes", () => {
       generatorVersion: GENERATOR_VERSION,
       fakerVersion: FAKER_VERSION,
       referenceVersion: REFERENCE_VERSION,
+      routeFingerprint: "c".repeat(64),
       generatedAt: "2026-10-10T00:00:00.000Z",
       context,
       flights: [directCombination({ sightseeingDate: context.sightseeingDate })],

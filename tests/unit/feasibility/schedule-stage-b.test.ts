@@ -196,6 +196,61 @@ describe("Stage B schedule validation", () => {
     expect(codesFor(result, brokenConnection.id)).toContain("INVALID_CONNECTION");
   });
 
+  it("rejects an inbound leg that does not return to the origin", () => {
+    const combination = directCombination({ sightseeingDate: SIGHTSEEING_DATE });
+    const inboundSegment = combination.inbound.segments[0]!;
+    const wrongReturn: FlightCombination = {
+      ...combination,
+      id: "demo-wrong-return",
+      inbound: {
+        ...combination.inbound,
+        segments: [
+          {
+            ...inboundSegment,
+            fromAirportId: "ourairports:4408",
+            toAirportId: "ourairports:4372",
+            fromIata: "PRG",
+            toIata: "FCO",
+          },
+        ],
+      },
+    };
+    const result = validateSchedules(scheduleInput([wrongReturn]));
+    expect(result.status).toBe("NO_VALID_OFFERS");
+    expect(codesFor(result, wrongReturn.id)).toContain("NO_MATCHING_SCHEDULE");
+  });
+
+  it("checks the return leg duration against its distance", () => {
+    const combination = directCombination({ sightseeingDate: SIGHTSEEING_DATE });
+    const inboundSegment = combination.inbound.segments[0]!;
+    const departure = inboundSegment.departureInstant;
+    const shortArrival = new Date(Date.parse(departure) + 35 * 60_000)
+      .toISOString()
+      .replace(".000Z", "Z");
+    const shortReturn: FlightCombination = {
+      ...combination,
+      id: "demo-short-return",
+      inbound: {
+        ...combination.inbound,
+        segments: [{ ...inboundSegment, arrivalInstant: shortArrival, elapsedMinutes: 35 }],
+      },
+    };
+    const result = validateSchedules(scheduleInput([shortReturn]));
+    expect(codesFor(result, shortReturn.id)).toContain("INVALID_DURATION");
+  });
+
+  it("uses the approved pair's transfer, not a caller-supplied value", () => {
+    const combination = directCombination({
+      sightseeingDate: SIGHTSEEING_DATE,
+      returnDepartureLocalMinutes: 20 * 60 + 10,
+    });
+    // Caller tries to understate the transfer as 0; the pair's 45 minutes must win.
+    const result = validateSchedules(
+      scheduleInput([combination], flightApproval(), { destinationTransferMinutes: 0 }),
+    );
+    expect(codesFor(result, combination.id)).toContain("RETURN_TOO_EARLY");
+  });
+
   it("rejects a combination that does not support the trip variant", () => {
     const combination = directCombination({
       sightseeingDate: SIGHTSEEING_DATE,
@@ -207,7 +262,7 @@ describe("Stage B schedule validation", () => {
     expect(codesFor(result, combination.id)).toContain("NO_MATCHING_SCHEDULE");
   });
 
-  it("rejects an ambiguous local time across a DST fold", () => {
+  it("accepts an unambiguous UTC instant whose local time falls in a DST fold", () => {
     const combination = directCombination({
       sightseeingDate: "2026-10-26",
       variant: "one_night",
@@ -219,7 +274,9 @@ describe("Stage B schedule validation", () => {
         travelVariant: "one_night",
       }),
     );
-    expect(codesFor(result, combination.id)).toContain("INVALID_TIMEZONE");
+    // 02:30 local on 2026-10-25 is repeated, but the UTC instant is unambiguous.
+    expect(codesFor(result, combination.id)).not.toContain("INVALID_TIMEZONE");
+    expect(result.validCombinationIds).toContain(combination.id);
   });
 
   it.each(["2026-07-15", "2026-12-01"])(
@@ -240,14 +297,18 @@ describe("Stage B schedule validation", () => {
         approvedPairDetails: route.approvedPairDetails,
         expiresWithInputs: true,
       };
-      const flights = generateFlights(approval, {
-        scenarioKey: "key",
-        seed: "seed",
-        sightseeingDate,
-        travelVariant: "two_nights",
-        adults: 2,
-        generatorVersion: "generator-v1",
-      });
+      const flights = generateFlights(
+        approval,
+        {
+          scenarioKey: "key",
+          seed: "seed",
+          sightseeingDate,
+          travelVariant: "two_nights",
+          adults: 2,
+          generatorVersion: "generator-v1",
+        },
+        inputs,
+      );
       const result = validateSchedules(scheduleInput(flights, approval, { sightseeingDate }));
       expect(result.status).toBe("VALID");
       expect(result.validCombinationIds.length).toBeGreaterThanOrEqual(3);

@@ -1,5 +1,5 @@
 import type { Meal, RestaurantOffer, ServiceLevel, SnapshotContext } from "@odft/contracts";
-import { haversineKm } from "../routing/haversine.js";
+import { safeAnchor, type LandmarkAnchor } from "./anchors.js";
 import { deriveEntityId } from "./ids.js";
 import { mealBaseMinor, priceMeal } from "./pricing.js";
 import { createDomainFaker } from "./seed.js";
@@ -16,6 +16,7 @@ export interface MealGenInput {
   readonly generatorVersion: string;
   readonly context: SnapshotContext;
   readonly meal: Meal;
+  readonly landmarks?: readonly LandmarkAnchor[];
 }
 
 const LEVELS: readonly ServiceLevel[] = ["budget", "standard", "luxury"];
@@ -60,13 +61,7 @@ export function generateMeals(input: MealGenInput): RestaurantOffer[] {
       const cuisines = CUISINES[
         Math.floor(seedFraction * CUISINES.length) % CUISINES.length
       ] as string;
-      const distanceKm = context.envelopeRadiusKm * 0.5 * seedFraction;
-      const bearing = seedFraction * Math.PI * 2;
-      const lat = context.center.lat + (distanceKm * Math.cos(bearing)) / 111;
-      const lon =
-        context.center.lon +
-        (distanceKm * Math.sin(bearing)) /
-          (111 * Math.max(0.1, Math.cos((context.center.lat * Math.PI) / 180)));
+      const anchor = safeAnchor(faker, context, input.landmarks ?? [], index);
       const window = WINDOWS[meal];
       offers.push({
         id: deriveEntityId(input.scenarioKey, meal, index, `${level}:${slot}`),
@@ -80,11 +75,11 @@ export function generateMeals(input: MealGenInput): RestaurantOffer[] {
         windowStart: `${window.start} (simulated)`,
         windowEnd: `${window.end} (simulated)`,
         anchor: {
-          lat: Math.round(lat * 1e6) / 1e6,
-          lon: Math.round(lon * 1e6) / 1e6,
+          lat: anchor.lat,
+          lon: anchor.lon,
           precisionMeters: 500,
         },
-        centerDistanceKm: Math.round(haversineKm(context.center, { lat, lon }) * 100) / 100,
+        centerDistanceKm: anchor.centerDistanceKm,
         synthetic: true,
         demoLabels: ["Demo offer", "Simulated schedule/price", "Approximate location"],
       });

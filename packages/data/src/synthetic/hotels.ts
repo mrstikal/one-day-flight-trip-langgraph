@@ -1,8 +1,7 @@
-import type { Faker } from "@faker-js/faker";
 import { Temporal } from "@js-temporal/polyfill";
 import type { HotelOffer, ServiceLevel, SnapshotContext } from "@odft/contracts";
 import { checkInDate, nightsForVariant } from "@odft/domain";
-import { haversineKm } from "../routing/haversine.js";
+import { safeAnchor, type LandmarkAnchor } from "./anchors.js";
 import { deriveEntityId } from "./ids.js";
 import { hotelBaseMinor, hotelPartyTotalMinor, seasonFactor } from "./pricing.js";
 import { createDomainFaker } from "./seed.js";
@@ -18,6 +17,7 @@ export interface HotelGenInput {
   readonly seed: string;
   readonly generatorVersion: string;
   readonly context: SnapshotContext;
+  readonly landmarks?: readonly LandmarkAnchor[];
 }
 
 const LEVELS: readonly ServiceLevel[] = ["budget", "standard", "luxury"];
@@ -32,23 +32,6 @@ const HOTEL_BRANDS = [
   "Metro",
   "Harbor",
 ];
-
-function boundedAnchor(
-  faker: Faker,
-  context: SnapshotContext,
-): { lat: number; lon: number; centerDistanceKm: number } {
-  const maxKm = context.envelopeRadiusKm * 0.6;
-  const distance = maxKm * faker.number.float({ min: 0, max: 1 });
-  const bearing = faker.number.float({ min: 0, max: Math.PI * 2 });
-  const dLat = (distance * Math.cos(bearing)) / 111;
-  const dLon =
-    (distance * Math.sin(bearing)) /
-    (111 * Math.max(0.1, Math.cos((context.center.lat * Math.PI) / 180)));
-  const lat = context.center.lat + dLat;
-  const lon = context.center.lon + dLon;
-  const centerDistanceKm = haversineKm(context.center, { lat, lon });
-  return { lat, lon, centerDistanceKm };
-}
 
 function nightDates(context: SnapshotContext): string[] {
   const checkIn = checkInDate(context.sightseeingDate);
@@ -82,7 +65,7 @@ export function generateHotels(input: HotelGenInput): HotelOffer[] {
     for (let slot = 0; slot < PER_LEVEL; slot += 1) {
       const seedFraction = faker.number.float({ min: 0, max: 1 });
       const base = hotelBaseMinor(level, seedFraction);
-      const anchor = boundedAnchor(faker, context);
+      const anchor = safeAnchor(faker, context, input.landmarks ?? [], index);
       const brand = HOTEL_BRANDS[
         Math.floor(seedFraction * HOTEL_BRANDS.length) % HOTEL_BRANDS.length
       ] as string;

@@ -249,6 +249,32 @@ export class BookingService {
           "the current route approval does not match the live route inputs and must be revalidated",
         );
       }
+      // The current schedule validation must be bound to the same route approval
+      // and to the snapshot the proposal was built from.
+      if (
+        approvals.currentRouteValidationId === null ||
+        approvals.scheduleRouteValidationId === null ||
+        approvals.scheduleRouteValidationId !== approvals.currentRouteValidationId ||
+        approvals.activeSnapshotId === null ||
+        approvals.scheduleSnapshotId === null ||
+        approvals.scheduleSnapshotId !== approvals.activeSnapshotId ||
+        proposal.snapshotId !== approvals.activeSnapshotId
+      ) {
+        throw new DomainError(
+          "STALE_ROUTE_APPROVAL",
+          "the current schedule validation is not bound to the current route approval and snapshot",
+        );
+      }
+      // A confirmed flight must be one of the schedule-valid combinations.
+      if (proposal.serviceKey === "flights") {
+        const validIds = approvals.scheduleValidCombinationIds ?? [];
+        if (!validIds.includes(proposal.offerId)) {
+          throw new DomainError(
+            "STALE_ROUTE_APPROVAL",
+            "the proposed flight is not an independently validated schedule combination",
+          );
+        }
+      }
 
       const offer = await tx.loadOffer(proposal.snapshotId, proposal.serviceKey, proposal.offerId);
       if (!offer) {

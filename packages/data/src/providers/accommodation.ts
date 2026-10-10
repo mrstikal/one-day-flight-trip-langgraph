@@ -51,7 +51,8 @@ export class SyntheticAccommodationSearchProvider implements AccommodationSearch
       (hotel) =>
         hotel.level === input.level &&
         hotel.adults === input.adults &&
-        (input.dates.length === 0 || hotel.nights === input.dates.length) &&
+        (input.dates.length === 0 ||
+          (hotel.nights === input.dates.length && input.dates[0] === hotel.date)) &&
         (input.maxNightlyMinor === undefined || hotel.perNightMinor <= input.maxNightlyMinor),
     );
     return offers.length > 0

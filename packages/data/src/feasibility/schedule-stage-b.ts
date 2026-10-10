@@ -38,20 +38,28 @@ function zoned(value: string, zone: string): Temporal.ZonedDateTime {
 }
 
 /** Destination-local wall clock anchored to a calendar date (DST-aware). */
-function localWallClock(date: string, minuteOfDay: number, zone: string): Temporal.ZonedDateTime {
+function tryLocalWallClock(
+  date: string,
+  minuteOfDay: number,
+  zone: string,
+): Temporal.ZonedDateTime | null {
   const day = Temporal.PlainDate.from(date);
-  return Temporal.ZonedDateTime.from(
-    {
-      timeZone: zone,
-      year: day.year,
-      month: day.month,
-      day: day.day,
-      hour: Math.floor(minuteOfDay / 60),
-      minute: minuteOfDay % 60,
-      second: 0,
-    },
-    { disambiguation: "compatible" },
-  );
+  try {
+    return Temporal.ZonedDateTime.from(
+      {
+        timeZone: zone,
+        year: day.year,
+        month: day.month,
+        day: day.day,
+        hour: Math.floor(minuteOfDay / 60),
+        minute: minuteOfDay % 60,
+        second: 0,
+      },
+      { disambiguation: "reject" },
+    );
+  } catch {
+    return null;
+  }
 }
 
 function localDate(value: string, zone: string): string {
@@ -60,28 +68,6 @@ function localDate(value: string, zone: string): string {
 
 function minutesBetween(start: string, end: string): number {
   return Math.round(instant(start).until(instant(end)).total({ unit: "minutes" }));
-}
-
-/** Reject nonexistent/ambiguous local times (DST gap/fold) in a segment zone. */
-function isAmbiguousLocal(value: string, zone: string): boolean {
-  const local = zoned(value, zone);
-  try {
-    Temporal.ZonedDateTime.from(
-      {
-        timeZone: zone,
-        year: local.year,
-        month: local.month,
-        day: local.day,
-        hour: local.hour,
-        minute: local.minute,
-        second: local.second,
-      },
-      { disambiguation: "reject" },
-    );
-    return false;
-  } catch {
-    return true;
-  }
 }
 
 function firstDeparture(direction: FlightDirection): FlightSegment {
@@ -112,12 +98,6 @@ function evaluateDirection(
     const fromZone = zones.get(segment.fromIata) ?? fallbackZone;
     const toZone = zones.get(segment.toIata) ?? fallbackZone;
     if (segment.departureZone !== fromZone || segment.arrivalZone !== toZone) {
-      codes.push("INVALID_TIMEZONE");
-    }
-    if (
-      isAmbiguousLocal(segment.departureInstant, segment.departureZone) ||
-      isAmbiguousLocal(segment.arrivalInstant, segment.arrivalZone)
-    ) {
       codes.push("INVALID_TIMEZONE");
     }
     const actualElapsed = minutesBetween(segment.departureInstant, segment.arrivalInstant);
@@ -152,6 +132,11 @@ function evaluateDirection(
   }
 }
 
+function addLeg(map: Map<string, number>, from: string, to: string, distanceKm: number): void {
+  map.set(`${from}-${to}`, distanceKm);
+  map.set(`${to}-${from}`, distanceKm);
+}
+
 function legDistancesFor(
   pair: ScheduleValidationInput["approval"]["approvedPairDetails"][number] | undefined,
 ): Map<string, number> {
@@ -159,27 +144,14 @@ function legDistancesFor(
   if (!pair) {
     return map;
   }
+  const origin = { lat: pair.originLat, lon: pair.originLon };
+  const destination = { lat: pair.destinationLat, lon: pair.destinationLon };
   if (pair.connectionHub) {
-    const hub = pair.connectionHub;
-    map.set(
-      `${pair.originIata}-${hub.iata}`,
-      haversineKm({ lat: pair.originLat, lon: pair.originLon }, { lat: hub.lat, lon: hub.lon }),
-    );
-    map.set(
-      `${hub.iata}-${pair.destinationIata}`,
-      haversineKm(
-        { lat: hub.lat, lon: hub.lon },
-        { lat: pair.destinationLat, lon: pair.destinationLon },
-      ),
-    );
+    const hubPoint = { lat: pair.connectionHub.lat, lon: pair.connectionHub.lon };
+    addLeg(map, pair.originIata, pair.connectionHub.iata, haversineKm(origin, hubPoint));
+    addLeg(map, pair.connectionHub.iata, pair.destinationIata, haversineKm(hubPoint, destination));
   }
-  map.set(
-    `${pair.originIata}-${pair.destinationIata}`,
-    haversineKm(
-      { lat: pair.originLat, lon: pair.originLon },
-      { lat: pair.destinationLat, lon: pair.destinationLon },
-    ),
-  );
+  addLeg(map, pair.originIata, pair.destinationIata, haversineKm(origin, destination));
   return map;
 }
 
@@ -200,7 +172,6 @@ function evaluateCombination(
 ): ScheduleReason[] {
   const codes: ScheduleReason[] = [];
   const destinationZone = input.destinationZone;
-  const transfer = input.destinationTransferMinutes;
 
   if (!combination.supportedVariants.includes(input.travelVariant)) {
     codes.push("NO_MATCHING_SCHEDULE");
@@ -214,6 +185,27 @@ function evaluateCombination(
       detail.originIata === firstDeparture(combination.outbound).fromIata &&
       detail.destinationIata === lastArrival(combination.outbound).toIata,
   );
+  // A combination that does not correspond to an approved pair is rejected, and
+  // the inbound route must return to the origin for the same pair.
+  if (!pair) {
+    codes.push("NO_MATCHING_SCHEDULE");
+  } else {
+    const outFirst = firstDeparture(combination.outbound);
+    const outLast = lastArrival(combination.outbound);
+    const inFirst = firstDeparture(combination.inbound);
+    const inLast = lastArrival(combination.inbound);
+    if (
+      outFirst.fromAirportId !== pair.originAirportId ||
+      outLast.toAirportId !== pair.destinationAirportId ||
+      inFirst.fromAirportId !== pair.destinationAirportId ||
+      inLast.toAirportId !== pair.originAirportId
+    ) {
+      codes.push("NO_MATCHING_SCHEDULE");
+    }
+  }
+
+  // Always use the approved pair's transfer, not a caller-supplied value.
+  const transfer = pair?.destinationTransferMinutes ?? input.destinationTransferMinutes;
   const legDistances = legDistancesFor(pair);
   evaluateDirection(combination.outbound, codes, zones, legDistances, destinationZone);
 
@@ -225,12 +217,16 @@ function evaluateCombination(
   }
 
   // Arrival + clearance + transfer + check-in <= destination-local D-1 22:00.
-  const latest = localWallClock(arrivalDate, HOTEL_LATEST_ARRIVAL_MINUTES, destinationZone);
-  const readyBy = zoned(outboundArrival, destinationZone).add({
-    minutes: ARRIVAL_CLEARANCE_MINUTES + transfer + CHECKIN_BUFFER_MINUTES,
-  });
-  if (Temporal.ZonedDateTime.compare(readyBy, latest) > 0) {
-    codes.push("ARRIVAL_TOO_LATE");
+  const latest = tryLocalWallClock(arrivalDate, HOTEL_LATEST_ARRIVAL_MINUTES, destinationZone);
+  if (!latest) {
+    codes.push("INVALID_TIMEZONE");
+  } else {
+    const readyBy = zoned(outboundArrival, destinationZone).add({
+      minutes: ARRIVAL_CLEARANCE_MINUTES + transfer + CHECKIN_BUFFER_MINUTES,
+    });
+    if (Temporal.ZonedDateTime.compare(readyBy, latest) > 0) {
+      codes.push("ARRIVAL_TOO_LATE");
+    }
   }
   if (transfer > 120) {
     codes.push("TRANSFER_BUFFER");
@@ -246,16 +242,19 @@ function evaluateCombination(
   }
 
   // Late return: at/after destination-local 18:00 core end + transfer + buffer.
-  const threshold = localWallClock(
+  const sightseeingEnd = tryLocalWallClock(
     expectedReturn,
     CORE_SIGHTSEEING_END_MINUTES,
     destinationZone,
-  ).add({
-    minutes: transfer + DEPARTURE_BUFFER_MINUTES,
-  });
-  if (Temporal.ZonedDateTime.compare(zoned(returnDeparture, destinationZone), threshold) < 0) {
-    codes.push("RETURN_TOO_EARLY");
-    codes.push("INSUFFICIENT_SIGHTSEEING");
+  );
+  if (!sightseeingEnd) {
+    codes.push("INVALID_TIMEZONE");
+  } else {
+    const threshold = sightseeingEnd.add({ minutes: transfer + DEPARTURE_BUFFER_MINUTES });
+    if (Temporal.ZonedDateTime.compare(zoned(returnDeparture, destinationZone), threshold) < 0) {
+      codes.push("RETURN_TOO_EARLY");
+      codes.push("INSUFFICIENT_SIGHTSEEING");
+    }
   }
 
   // Realized door-to-door per direction (connections once).

@@ -55,6 +55,91 @@ export class PostgresBookingStore implements BookingStore {
 
 const VALID_VARIANTS = new Set(["one_night", "two_nights"]);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readLegacyOffer(
+  inventory: Record<string, unknown>,
+  serviceKey: BookableKey,
+  offerId: string,
+): Record<string, unknown> | undefined {
+  const offers = inventory["offers"];
+  if (!isRecord(offers)) {
+    return undefined;
+  }
+  const byService = offers[serviceKey];
+  if (!isRecord(byService)) {
+    return undefined;
+  }
+  const offer = byService[offerId];
+  return isRecord(offer) ? offer : undefined;
+}
+
+function findById(list: unknown, id: string): Record<string, unknown> | undefined {
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  return list.find((entry) => isRecord(entry) && entry["id"] === id) as
+    Record<string, unknown> | undefined;
+}
+
+function findMeal(
+  list: unknown,
+  meal: BookableKey,
+  id: string,
+): Record<string, unknown> | undefined {
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  return list.find((entry) => isRecord(entry) && entry["id"] === id && entry["meal"] === meal) as
+    Record<string, unknown> | undefined;
+}
+
+function readContext(inventory: Record<string, unknown>): Record<string, unknown> | undefined {
+  return isRecord(inventory["context"]) ? inventory["context"] : undefined;
+}
+
+function readContextVariant(
+  inventory: Record<string, unknown>,
+): "one_night" | "two_nights" | undefined {
+  const variant = readContext(inventory)?.["travelVariant"];
+  return typeof variant === "string" && VALID_VARIANTS.has(variant)
+    ? (variant as "one_night" | "two_nights")
+    : undefined;
+}
+
+function readContextAdults(inventory: Record<string, unknown>): number | undefined {
+  const adults = readContext(inventory)?.["adults"];
+  return typeof adults === "number" ? adults : undefined;
+}
+
+function buildOfferRecord(
+  offerId: string,
+  serviceKey: BookableKey,
+  snapshotId: string,
+  raw: Record<string, unknown>,
+): OfferRecord | undefined {
+  if (typeof raw["partyTotalMinor"] !== "number" || typeof raw["adults"] !== "number") {
+    return undefined;
+  }
+  const variants = Array.isArray(raw["supportedVariants"])
+    ? raw["supportedVariants"].filter((value): value is string => typeof value === "string")
+    : [];
+  if (variants.length === 0 || !variants.every((variant) => VALID_VARIANTS.has(variant))) {
+    return undefined;
+  }
+  return {
+    offerId,
+    serviceKey,
+    snapshotId,
+    partyTotalMinor: raw["partyTotalMinor"],
+    adults: raw["adults"],
+    supportedVariants: variants as ("one_night" | "two_nights")[],
+    synthetic: true,
+  };
+}
+
 class PostgresBookingTx implements BookingTx {
   constructor(private readonly client: PoolClient) {}
 
@@ -83,33 +168,50 @@ class PostgresBookingTx implements BookingTx {
     serviceKey: BookableKey,
     offerId: string,
   ): Promise<OfferRecord | undefined> {
-    const result = await this.client.query<{ offer: unknown }>(
-      `SELECT inventory -> 'offers' -> $2::text -> $3::text AS offer
-         FROM odft_app.scenario_snapshots WHERE id = $1`,
-      [snapshotId, serviceKey, offerId],
+    const result = await this.client.query<{ inventory: unknown }>(
+      `SELECT inventory FROM odft_app.scenario_snapshots WHERE id = $1`,
+      [snapshotId],
     );
-    const offer = result.rows[0]?.offer as
-      | { partyTotalMinor?: unknown; adults?: unknown; supportedVariants?: unknown }
-      | null
-      | undefined;
-    if (!offer || typeof offer.partyTotalMinor !== "number" || typeof offer.adults !== "number") {
+    const inventory = result.rows[0]?.inventory as Record<string, unknown> | null | undefined;
+    if (!inventory) {
       return undefined;
     }
-    const variants = Array.isArray(offer.supportedVariants)
-      ? offer.supportedVariants.filter((value): value is string => typeof value === "string")
-      : [];
-    if (variants.length === 0 || !variants.every((variant) => VALID_VARIANTS.has(variant))) {
+
+    // Phase 03 fixture shape: inventory.offers[serviceKey][offerId].
+    const legacy = readLegacyOffer(inventory, serviceKey, offerId);
+    if (legacy) {
+      return buildOfferRecord(offerId, serviceKey, snapshotId, legacy);
+    }
+
+    // Phase 04 SnapshotContent shape: flights/hotels/restaurants arrays.
+    const contextVariant = readContextVariant(inventory);
+    if (serviceKey === "flights") {
+      const combination = findById(inventory["flights"], offerId);
+      if (combination) {
+        return buildOfferRecord(offerId, serviceKey, snapshotId, combination);
+      }
       return undefined;
     }
-    return {
-      offerId,
-      serviceKey,
-      snapshotId,
-      partyTotalMinor: offer.partyTotalMinor,
-      adults: offer.adults,
-      supportedVariants: variants as ("one_night" | "two_nights")[],
-      synthetic: true,
-    };
+    if (serviceKey === "hotel") {
+      const hotel = findById(inventory["hotels"], offerId);
+      if (hotel && contextVariant) {
+        return buildOfferRecord(offerId, serviceKey, snapshotId, {
+          ...hotel,
+          supportedVariants: [contextVariant],
+          adults: hotel["adults"],
+        });
+      }
+      return undefined;
+    }
+    const meal = findMeal(inventory["restaurants"], serviceKey, offerId);
+    if (meal && contextVariant) {
+      return buildOfferRecord(offerId, serviceKey, snapshotId, {
+        ...meal,
+        supportedVariants: [contextVariant],
+        adults: readContextAdults(inventory),
+      });
+    }
+    return undefined;
   }
 
   getActiveReservation(tripId: string, serviceKey: BookableKey) {

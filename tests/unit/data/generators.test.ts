@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   GENERIC_ACTIVITY_CATEGORIES,
+  SyntheticAccommodationSearchProvider,
+  SyntheticFlightSearchProvider,
+  SyntheticRestaurantSearchProvider,
   SyntheticRoutingProvider,
   generateActivities,
   generateEvents,
@@ -11,8 +14,13 @@ import {
   priceMeal,
   withinEnvelope,
 } from "@odft/data";
-import { GENERATOR_VERSION } from "@odft/contracts";
-import { snapshotContext } from "../../fixtures/scenario.js";
+import {
+  FAKER_VERSION,
+  GENERATOR_VERSION,
+  REFERENCE_VERSION,
+  SCHEMA_VERSION,
+} from "@odft/contracts";
+import { directCombination, flightApproval, snapshotContext } from "../../fixtures/scenario.js";
 
 /** T-UT-DATA-02 (pricing separation) and T-UT-DATA-03 (geographic safety). */
 
@@ -132,5 +140,114 @@ describe("simulated routing provider", () => {
 
     const taxi = provider.estimate({ ...input, mode: "taxi" });
     expect(taxi.partyTotalMinor).toBeGreaterThan(0);
+  });
+
+  it("prices taxi from the estimated road distance, not the straight line", () => {
+    const provider = new SyntheticRoutingProvider();
+    const estimate = provider.estimate({
+      startRef: "a",
+      endRef: "b",
+      mode: "taxi",
+      adults: 2,
+      start: { lat: 0, lon: 0 },
+      end: { lat: 0, lon: 0.089932 }, // ~10 km at the equator
+      ruleVersion: "route-policy-v1",
+    });
+    // Old bug used the 10 km straight line (17 EUR); the road estimate is ~21.2 EUR.
+    expect(estimate.partyTotalMinor).toBeGreaterThan(1800);
+    expect(estimate.partyTotalMinor).toBeLessThan(2300);
+  });
+});
+
+describe("provider guards", () => {
+  const context = snapshotContext();
+  const gen = { scenarioKey: "key", seed: "seed", generatorVersion: GENERATOR_VERSION, context };
+
+  function sourceFor(content: unknown) {
+    return { getContent: async () => content as never };
+  }
+
+  function snapshotContent(overrides: Record<string, unknown>) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      scenarioKey: "key",
+      seed: "seed",
+      generatorVersion: GENERATOR_VERSION,
+      fakerVersion: FAKER_VERSION,
+      referenceVersion: REFERENCE_VERSION,
+      routeFingerprint: "a".repeat(64),
+      generatedAt: "2026-10-10T00:00:00.000Z",
+      context,
+      flights: [],
+      hotels: [],
+      restaurants: [],
+      activities: [],
+      events: [],
+      ...overrides,
+    };
+  }
+
+  it("restaurant provider distinguishes an unmaterialized meal from a party mismatch", async () => {
+    const breakfastOnly = snapshotContent({
+      restaurants: generateMeals({ ...gen, meal: "breakfast" }),
+    });
+    const provider = new SyntheticRestaurantSearchProvider(sourceFor(breakfastOnly));
+    const dinner = await provider.search({
+      snapshotId: "s",
+      meal: "dinner",
+      level: "standard",
+      adults: 2,
+    });
+    expect(dinner.status).toBe("unsupported");
+
+    const mismatch = await provider.search({
+      snapshotId: "s",
+      meal: "breakfast",
+      level: "standard",
+      adults: 6,
+    });
+    expect(mismatch.status).toBe("unavailable");
+
+    const ok = await provider.search({
+      snapshotId: "s",
+      meal: "breakfast",
+      level: "standard",
+      adults: 2,
+    });
+    expect(ok.status).toBe("ok");
+  });
+
+  it("accommodation provider rejects a stay with different dates", async () => {
+    const withHotels = snapshotContent({ hotels: generateHotels(gen) });
+    const provider = new SyntheticAccommodationSearchProvider(sourceFor(withHotels));
+    const matching = await provider.search({
+      snapshotId: "s",
+      level: "standard",
+      adults: 2,
+      dates: ["2026-11-30", "2026-12-01"],
+    });
+    expect(matching.status).toBe("ok");
+    const wrongMonth = await provider.search({
+      snapshotId: "s",
+      level: "standard",
+      adults: 2,
+      dates: ["2026-06-14", "2026-06-15"],
+    });
+    expect(wrongMonth.status).toBe("unavailable");
+  });
+
+  it("flight provider rejects a snapshot generated for another route approval", async () => {
+    const content = snapshotContent({
+      routeFingerprint: "b".repeat(64),
+      flights: [directCombination({ sightseeingDate: context.sightseeingDate })],
+    });
+    const provider = new SyntheticFlightSearchProvider(sourceFor(content));
+    const result = await provider.search({
+      snapshotId: "s",
+      approval: flightApproval(),
+      travelVariant: "two_nights",
+      adults: 2,
+    });
+    expect(result.status).toBe("unavailable");
   });
 });
