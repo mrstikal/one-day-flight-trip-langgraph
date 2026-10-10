@@ -1,4 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
+import { loadLocalEnv } from "./scripts/_load-env.js";
+
+// Populate process.env (DATABASE_URL, PUBLIC_BASE_URL, ...) for the web server
+// and for test workers that spawn the Phase 05 worker process.
+loadLocalEnv();
 
 const BASE_URL = "http://127.0.0.1:3000";
 

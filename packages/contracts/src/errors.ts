@@ -6,6 +6,7 @@ import { uuidSchema } from "./primitives.js";
 export const errorCodeSchema = z.enum([
   "VALIDATION_FAILED",
   "FORBIDDEN",
+  "UNAUTHORIZED",
   "NOT_FOUND",
   "CREATION_CONFLICT",
   "STALE_REVISION",
@@ -19,6 +20,7 @@ export const errorCodeSchema = z.enum([
   "DISCLAIMER_REQUIRED",
   "REPLACEMENT_CONFIRMATION_REQUIRED",
   "REF_GENERATION_FAILED",
+  "RATE_LIMITED",
   "CONFLICT",
   "INTERNAL_ERROR",
 ]);

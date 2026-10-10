@@ -32,6 +32,7 @@ export const MIGRATION_VERSIONS: readonly string[] = [
   "0001-foundation",
   "0002-reference",
   "0003-domain",
+  "0004-graph-lease",
 ];
 
 export interface MigrationResult {

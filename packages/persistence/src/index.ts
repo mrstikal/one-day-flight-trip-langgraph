@@ -3,13 +3,15 @@ export const PACKAGE_ID = "@odft/persistence" as const;
 export { ConfigError, parseServerConfig } from "./config.js";
 export type { AiMode, ServerConfig } from "./config.js";
 
+export { contentHash } from "./hash.js";
+
 export { createPool } from "./pool.js";
 export type { CreatePoolOptions } from "./pool.js";
 
 export { listMigrationVersions, MIGRATION_VERSIONS, runMigrations } from "./migrate.js";
 export type { MigrationResult } from "./migrate.js";
 
-export { CHECKPOINT_SCHEMA, setupCheckpointer } from "./checkpointer-setup.js";
+export { CHECKPOINT_SCHEMA, CHECKPOINT_TABLES, setupCheckpointer, verifyCheckpointerSetup } from "./checkpointer-setup.js";
 
 export { createWorkerIdentity, writeWorkerHeartbeat } from "./heartbeat.js";
 export type { WorkerIdentity } from "./heartbeat.js";
@@ -39,7 +41,7 @@ export type {
   RouteEvidenceQuery,
 } from "./reference/repository.js";
 
-export { createSession, getSession } from "./sessions.js";
+export { createSession, getSession, getSessionByTokenHash, renewSession } from "./sessions.js";
 export type { SessionRecord } from "./sessions.js";
 
 export {
@@ -62,8 +64,8 @@ export {
 export type { InsertOperationInput, StoredOperation } from "./operations.js";
 
 export { readEffect, writeEffect } from "./effects.js";
-export { insertEvent } from "./events.js";
-export type { ExecutionEventInput } from "./events.js";
+export { insertEvent, listTripEvents } from "./events.js";
+export type { ExecutionEventInput, ProjectedEvent } from "./events.js";
 
 export { getProposal, insertProposal, markProposalResolved } from "./proposals.js";
 
@@ -76,10 +78,38 @@ export {
   supersedeReservation,
 } from "./reservations.js";
 
-export { insertDecision, loadDecision, resolveDecision } from "./decisions.js";
+export { insertDecision, getPendingDecisionForTrip, loadDecision, resolveDecision } from "./decisions.js";
 export type { InsertDecisionInput } from "./decisions.js";
 
 export { PostgresBookingStore } from "./booking-store.js";
+
+export {
+  claimNextOperation,
+  claimOperationById,
+  DEFAULT_LEASE_MS,
+  LEASE_RENEW_MS,
+  MAX_AUTO_CLAIMS_PER_ROUND,
+} from "./operations/claim.js";
+export type { ClaimedOperation, ClaimedOperationKind, ClaimOptions } from "./operations/claim.js";
+
+export { completeOperation, releaseClaim, renewLease } from "./operations/lease.js";
+export type { CompleteOperationInput } from "./operations/lease.js";
+
+export {
+  acquireCheckpointGate,
+  assertFencingCurrent,
+  checkpointGateKey,
+  isFencingCurrent,
+  readOperationOwnership,
+  StaleFencingError,
+} from "./operations/fencing.js";
+export type { OperationFencingContext, OperationOwnership } from "./operations/fencing.js";
+
+export { retryOperation, setRecoveryRequired } from "./operations/control.js";
+export type {
+  RetryOperationOptions,
+  RetryOperationResult,
+} from "./operations/control.js";
 
 export { GRAPH_VERSION, admitOperation, admitResume, createTrip, withEffect } from "./admission.js";
 export type {

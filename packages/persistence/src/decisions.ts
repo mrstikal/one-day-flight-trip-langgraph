@@ -88,3 +88,30 @@ export async function resolveDecision(
     [decisionId, status],
   );
 }
+
+/** The single current pending decision for a trip, if any. */
+export async function getPendingDecisionForTrip(
+  client: Queryable,
+  tripId: string,
+): Promise<DecisionBindingRecord | undefined> {
+  const result = await client.query<DecisionRow>(
+    `SELECT id, trip_id, kind, proposal_id, status, source_fingerprint, allowed_offer_ids
+       FROM odft_app.pending_decisions
+      WHERE trip_id = $1 AND status = 'pending'
+      LIMIT 1`,
+    [tripId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return undefined;
+  }
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    kind: row.kind,
+    ...(row.proposal_id ? { proposalId: row.proposal_id } : {}),
+    status: row.status,
+    sourceFingerprint: row.source_fingerprint,
+    allowedOfferIds: Array.isArray(row.allowed_offer_ids) ? (row.allowed_offer_ids as string[]) : [],
+  };
+}

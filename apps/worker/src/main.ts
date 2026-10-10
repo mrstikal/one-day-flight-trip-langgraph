@@ -1,26 +1,20 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  ConfigError,
-  createPool,
-  createWorkerIdentity,
-  parseServerConfig,
-  writeWorkerHeartbeat,
-  type ServerConfig,
-  type WorkerIdentity,
-} from "@odft/persistence";
+import { ConfigError, parseServerConfig, type ServerConfig } from "@odft/persistence";
+import { runWorker } from "./worker.js";
+import { createShutdownController } from "./shutdown.js";
 
 /**
- * Dedicated Node.js graph worker entry point (Phase 01 foundation).
+ * Dedicated Node.js graph worker entry point (Phase 05).
  *
- * Phase 01 establishes only durable process health: PostgreSQL connectivity, a
- * persisted heartbeat every 10 seconds, and graceful shutdown. It deliberately
- * exposes no public HTTP API/port and does not claim or fabricate travel
- * operations; graph driving arrives in later phases.
+ * Claims durable operations, drives the graph under a trip lock and lease with
+ * a fenced checkpointer, and shuts down gracefully. Exposes no public HTTP API.
+ * The process does not write graph state when it is not ready (missing
+ * migrations/checkpointer schema or a stale heartbeat).
  */
 
-const HEARTBEAT_INTERVAL_MS = 10_000;
+const GRACE_MS = 30_000;
 
 function loadEnv(): void {
   const rootDir = fileURLToPath(new URL("../../../", import.meta.url));
@@ -60,67 +54,15 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const pool = createPool(config, {
-    max: Math.max(2, config.workerConcurrency + 2),
-    applicationName: "odft-worker",
+  const shutdown = createShutdownController(GRACE_MS);
+  process.on("SIGTERM", () => {
+    log({ level: "info", component: "worker", message: "worker stopping", reason: "SIGTERM" });
+    shutdown.requestStop("SIGTERM");
   });
-  const identity: WorkerIdentity = createWorkerIdentity();
-
-  try {
-    await writeWorkerHeartbeat(pool, identity);
-  } catch (error) {
-    log({
-      level: "error",
-      component: "worker",
-      message: "database not ready for worker heartbeat",
-      error: error instanceof Error ? error.message : "unknown error",
-    });
-    await pool.end();
-    process.exitCode = 1;
-    return;
-  }
-
-  log({
-    level: "info",
-    component: "worker",
-    message: "worker started",
-    workerId: identity.workerId,
-    pid: identity.pid,
-    host: identity.host,
-    aiMode: config.aiMode,
-    publicHttpPort: null,
-    heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+  process.on("SIGINT", () => {
+    log({ level: "info", component: "worker", message: "worker stopping", reason: "SIGINT" });
+    shutdown.requestStop("SIGINT");
   });
-
-  const timer = setInterval(() => {
-    void writeWorkerHeartbeat(pool, identity).catch((error: unknown) => {
-      log({
-        level: "error",
-        component: "worker",
-        message: "heartbeat failed",
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-    });
-  }, HEARTBEAT_INTERVAL_MS);
-
-  let shuttingDown = false;
-  const shutdown = async (reason: string, exitCode: number): Promise<void> => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    clearInterval(timer);
-    log({ level: "info", component: "worker", message: "worker stopping", reason, exitCode });
-    try {
-      await pool.end();
-    } catch {
-      // Ignore pool shutdown errors during termination.
-    }
-    process.exit(exitCode);
-  };
-
-  process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
-  process.on("SIGINT", () => void shutdown("SIGINT", 0));
   process.on("unhandledRejection", (reason) => {
     log({
       level: "error",
@@ -128,8 +70,21 @@ async function main(): Promise<void> {
       message: "unhandled rejection",
       error: reason instanceof Error ? reason.message : String(reason),
     });
-    void shutdown("unhandledRejection", 1);
+    process.exitCode = 1;
+    shutdown.requestStop("unhandledRejection");
   });
+
+  try {
+    await runWorker({ server: config, shutdown, logger: log });
+  } catch (error) {
+    log({
+      level: "error",
+      component: "worker",
+      message: "worker failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exitCode = 1;
+  }
 }
 
 await main();
