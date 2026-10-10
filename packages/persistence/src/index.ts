@@ -90,3 +90,36 @@ export type {
   CreateTripOptions,
   CreateTripResult,
 } from "./admission.js";
+
+export { buildRouteInputs, HUB_IATAS, TRANSFER_POLICY } from "./scenario/route-inputs.js";
+
+export {
+  currentApprovalGuard,
+  evaluateAndPersistRoute,
+  loadFeasibleRouteApproval,
+  loadRouteValidation,
+  loadScheduleValidation,
+  persistRouteValidation,
+  persistScheduleValidation,
+} from "./scenario/validations.js";
+export type {
+  ApprovalGuardState,
+  EvaluatedRoute,
+  PersistScheduleInput,
+} from "./scenario/validations.js";
+
+export {
+  extendSnapshot,
+  initialSnapshotContent,
+  loadLatestManifest,
+  loadSnapshotContent,
+  loadSnapshotManifest,
+  persistSnapshot,
+  PostgresSnapshotSource,
+  ScenarioService,
+  scenarioUuid,
+} from "./scenario/snapshots.js";
+export type { ExtensionInput } from "./scenario/snapshots.js";
+
+export { loadOverlay, upsertFault } from "./scenario/faults.js";
+export type { UpsertFaultInput } from "./scenario/faults.js";

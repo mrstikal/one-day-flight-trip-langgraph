@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import {
   airportRefSchema,
   cityAirportLinkSchema,
@@ -500,7 +500,7 @@ export interface CuratedLandmarksResult {
 
 /** Curated landmarks for a city, plus its coverage flag. */
 export async function getCuratedLandmarks(
-  pool: Pool,
+  pool: Pick<PoolClient, "query">,
   cityId: string,
 ): Promise<CuratedLandmarksResult> {
   const cityResult = await pool.query<{ coverage_flag: CoverageFlag }>(

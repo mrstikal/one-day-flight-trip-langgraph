@@ -61,7 +61,10 @@ export class BookingService {
       }
       const offer = await tx.loadOffer(snapshotId, input.service, input.offerId);
       if (!offer) {
-        throw new DomainError("OFFER_UNAVAILABLE", `offer ${input.offerId} is not in the active snapshot`);
+        throw new DomainError(
+          "OFFER_UNAVAILABLE",
+          `offer ${input.offerId} is not in the active snapshot`,
+        );
       }
       this.assertOfferMatchesTrip(offer, trip);
       const expiresAt = new Date(
@@ -142,7 +145,10 @@ export class BookingService {
         throw new DomainError("CONFLICT", "operation is no longer active");
       }
       if (operation.acceptedRevision !== input.acceptedRevision) {
-        throw new DomainError("STALE_REVISION", "operation accepted revision does not match the request");
+        throw new DomainError(
+          "STALE_REVISION",
+          "operation accepted revision does not match the request",
+        );
       }
 
       const stored = await tx.readEffect(effectKey);
@@ -155,7 +161,10 @@ export class BookingService {
       }
 
       if (trip.revision !== input.acceptedRevision) {
-        throw new DomainError("STALE_REVISION", "accepted revision does not match the current trip");
+        throw new DomainError(
+          "STALE_REVISION",
+          "accepted revision does not match the current trip",
+        );
       }
       if (input.acceptedDemoDisclaimer !== true) {
         throw new DomainError("DISCLAIMER_REQUIRED", "the demo disclaimer must be acknowledged");
@@ -166,7 +175,10 @@ export class BookingService {
         : "booking_confirmation";
       const decision = await tx.loadDecision(input.decisionId);
       if (!decision || decision.tripId !== input.tripId || decision.status !== "pending") {
-        throw new DomainError("STALE_DECISION", "decision is missing, resolved, or owned by another trip");
+        throw new DomainError(
+          "STALE_DECISION",
+          "decision is missing, resolved, or owned by another trip",
+        );
       }
       if (decision.kind !== expectedKind) {
         throw new DomainError("STALE_DECISION", `decision kind must be ${expectedKind}`);
@@ -188,7 +200,10 @@ export class BookingService {
       const byKey = await tx.getReservationByConfirmationKey(input.tripId, input.confirmationKey);
       if (byKey) {
         if (byKey.proposalId !== input.proposalId || byKey.serviceKey !== proposal.serviceKey) {
-          throw new DomainError("CONFLICT", "confirmation key is already bound to another proposal");
+          throw new DomainError(
+            "CONFLICT",
+            "confirmation key is already bound to another proposal",
+          );
         }
         await this.completeEffect(tx, effectKey, proposal.id, byKey, input.decisionId);
         return toResult(byKey, true);
@@ -217,15 +232,36 @@ export class BookingService {
       // Current approvals must be present.
       const approvals = await tx.loadCurrentApprovals(input.tripId);
       if (approvals.routeStatus !== "FEASIBLE" || approvals.scheduleStatus !== "VALID") {
-        throw new DomainError("STALE_DECISION", "current route/schedule approvals are missing or stale");
+        throw new DomainError(
+          "STALE_DECISION",
+          "current route/schedule approvals are missing or stale",
+        );
+      }
+      // Independent freshness guard (FR-FEAS-8): the persisted approval must
+      // match the fingerprint recomputed from the live route inputs.
+      if (
+        approvals.routeApprovalFingerprint === null ||
+        approvals.currentRouteFingerprint === null ||
+        approvals.routeApprovalFingerprint !== approvals.currentRouteFingerprint
+      ) {
+        throw new DomainError(
+          "STALE_ROUTE_APPROVAL",
+          "the current route approval does not match the live route inputs and must be revalidated",
+        );
       }
 
       const offer = await tx.loadOffer(proposal.snapshotId, proposal.serviceKey, proposal.offerId);
       if (!offer) {
-        throw new DomainError("OFFER_UNAVAILABLE", "the proposed offer is no longer in the snapshot");
+        throw new DomainError(
+          "OFFER_UNAVAILABLE",
+          "the proposed offer is no longer in the snapshot",
+        );
       }
       this.assertOfferMatchesTrip(offer, trip);
-      if (decision.allowedOfferIds.length === 0 || !decision.allowedOfferIds.includes(offer.offerId)) {
+      if (
+        decision.allowedOfferIds.length === 0 ||
+        !decision.allowedOfferIds.includes(offer.offerId)
+      ) {
         throw new DomainError("STALE_DECISION", "offer is not among the decision's allowed offers");
       }
 
@@ -251,7 +287,10 @@ export class BookingService {
           throw new DomainError("CONFLICT", "there is no active reservation to replace");
         }
         if (!("affectedReservationId" in input) || active.id !== input.affectedReservationId) {
-          throw new DomainError("CONFLICT", "affected reservation does not match the active reservation");
+          throw new DomainError(
+            "CONFLICT",
+            "affected reservation does not match the active reservation",
+          );
         }
         // Supersede before insert: partial unique indexes are checked immediately.
         await tx.supersedeReservation(active.id, reservationId);
@@ -311,7 +350,11 @@ export class BookingService {
     }
   }
 
-  private async withdraw(tripId: string, proposalId: string, status: "expired" | "rejected"): Promise<void> {
+  private async withdraw(
+    tripId: string,
+    proposalId: string,
+    status: "expired" | "rejected",
+  ): Promise<void> {
     // Persist the withdrawal in its own transaction so it survives the throw.
     await this.store.transaction(async (tx) => {
       const proposal = await tx.loadProposal(tripId, proposalId);

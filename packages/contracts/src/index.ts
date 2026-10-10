@@ -9,3 +9,5 @@ export * from "./errors.js";
 export * from "./operations.js";
 export * from "./booking.js";
 export * from "./api.js";
+export * from "./feasibility.js";
+export * from "./scenario.js";

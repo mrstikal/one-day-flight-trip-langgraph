@@ -4,6 +4,7 @@ import type {
   BookingEventInput,
   BookingStore,
   BookingTx,
+  CurrentApprovals,
   EffectKey,
   InsertProposalInput,
   InsertReservationInput,
@@ -24,6 +25,7 @@ import {
   insertReservationWithGeneratedReference,
   supersedeReservation,
 } from "./reservations.js";
+import { currentApprovalGuard } from "./scenario/validations.js";
 import { lockTrip, upsertSelection } from "./trips.js";
 
 /** Postgres-backed implementation of the `BookingStore` port (one tx per call). */
@@ -64,18 +66,8 @@ class PostgresBookingTx implements BookingTx {
     return loadOperationById(this.client, operationId);
   }
 
-  async loadCurrentApprovals(
-    tripId: string,
-  ): Promise<{ routeStatus: string | null; scheduleStatus: string | null }> {
-    const result = await this.client.query<{ route_status: string | null; schedule_status: string | null }>(
-      `SELECT
-         (SELECT status FROM odft_app.route_validations WHERE id = t.current_route_validation_id) AS route_status,
-         (SELECT status FROM odft_app.schedule_validations WHERE id = t.current_schedule_validation_id) AS schedule_status
-       FROM odft_app.trips t WHERE t.id = $1`,
-      [tripId],
-    );
-    const row = result.rows[0];
-    return { routeStatus: row?.route_status ?? null, scheduleStatus: row?.schedule_status ?? null };
+  async loadCurrentApprovals(tripId: string): Promise<CurrentApprovals> {
+    return currentApprovalGuard(this.client, tripId);
   }
 
   loadDecision(decisionId: string) {
@@ -165,7 +157,11 @@ class PostgresBookingTx implements BookingTx {
   }
 
   recordEvent(input: BookingEventInput): Promise<void> {
-    return insertEvent(this.client, { tripId: input.tripId, type: input.type, payload: input.payload });
+    return insertEvent(this.client, {
+      tripId: input.tripId,
+      type: input.type,
+      payload: input.payload,
+    });
   }
 
   readEffect(key: EffectKey) {

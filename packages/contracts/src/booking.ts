@@ -146,17 +146,30 @@ export interface EffectKey {
   readonly effectScope: string;
 }
 
+/** Current approval status plus the independent route-freshness comparison. */
+export interface CurrentApprovals {
+  readonly routeStatus: string | null;
+  readonly scheduleStatus: string | null;
+  readonly routeApprovalFingerprint: string | null;
+  readonly currentRouteFingerprint: string | null;
+}
+
 /** One database transaction's operations, implemented by `@odft/persistence`. */
 export interface BookingTx {
   lockTrip(tripId: string): Promise<TripRecord | undefined>;
   loadOperation(operationId: string): Promise<OperationRef | undefined>;
-  loadCurrentApprovals(
-    tripId: string,
-  ): Promise<{ routeStatus: string | null; scheduleStatus: string | null }>;
+  loadCurrentApprovals(tripId: string): Promise<CurrentApprovals>;
   loadDecision(decisionId: string): Promise<DecisionBindingRecord | undefined>;
   loadProposal(tripId: string, proposalId: string): Promise<ProposalRecord | undefined>;
-  loadOffer(snapshotId: string, serviceKey: BookableKey, offerId: string): Promise<OfferRecord | undefined>;
-  getActiveReservation(tripId: string, serviceKey: BookableKey): Promise<ReservationRecord | undefined>;
+  loadOffer(
+    snapshotId: string,
+    serviceKey: BookableKey,
+    offerId: string,
+  ): Promise<OfferRecord | undefined>;
+  getActiveReservation(
+    tripId: string,
+    serviceKey: BookableKey,
+  ): Promise<ReservationRecord | undefined>;
   getReservationByConfirmationKey(
     tripId: string,
     confirmationKey: string,
