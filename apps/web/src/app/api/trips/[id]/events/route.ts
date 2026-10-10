@@ -20,15 +20,19 @@ const MAX_STREAM_MS = 5 * 60 * 1_000;
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -54,7 +58,7 @@ export async function GET(
   }
 
   const limit = await consumeRateLimit(deps.pool, {
-    scopeHash: scopeHash(deps.config, `${session.sessionId}:${id}:${clientIp(request)}`),
+    scopeHash: scopeHash(deps.config, `${session.sessionId}:${id}:${clientIp(request, deps.config.trustProxy)}`),
     endpoint: "sse:connect",
     limit: 30,
     windowMs: 60_000,

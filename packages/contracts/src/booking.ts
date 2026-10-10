@@ -114,6 +114,8 @@ export interface DecisionBindingRecord {
   readonly status: "pending" | "resolved" | "cancelled";
   readonly sourceFingerprint: string;
   readonly allowedOfferIds: string[];
+  /** Option ids a `choose_option` response may select (empty = not offered). */
+  readonly allowedOptionIds?: string[];
 }
 
 export interface InsertProposalInput {

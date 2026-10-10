@@ -30,7 +30,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const limit = await consumeRateLimit(deps.pool, {
-    scopeHash: scopeHash(deps.config, `ip:${clientIp(request)}`),
+    scopeHash: scopeHash(deps.config, `ip:${clientIp(request, deps.config.trustProxy)}`),
     endpoint: "session:create",
     limit: 10,
     windowMs: 60 * 60 * 1000,

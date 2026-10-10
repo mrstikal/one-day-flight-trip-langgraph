@@ -3,7 +3,8 @@ import type { ErrorCode, ErrorEnvelope } from "@odft/contracts";
 
 /** Shared HTTP helpers for the BFF: error envelopes, JSON parsing, origin. */
 
-export const NO_STORE_HEADERS = { "cache-control": "no-store" } as const;
+export { clientIp, MAX_JSON_BODY_BYTES, readJson, readJsonResult } from "@/lib/request";
+export type { JsonReadResult } from "@/lib/request";
 
 /** Session-dependent responses are private and varied by cookie. */
 export const PRIVATE_HEADERS = { "cache-control": "no-store", vary: "Cookie" } as const;
@@ -74,23 +75,6 @@ export function scopeErrorResponse(envelope: ErrorEnvelope): NextResponse {
     return notFoundResponse();
   }
   return envelopeResponse(envelope);
-}
-
-/** Best-effort client IP for pre-session rate limiting (never trusted for auth). */
-export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    return forwarded.split(",")[0]?.trim() ?? "unknown";
-  }
-  return request.headers.get("x-real-ip") ?? "unknown";
-}
-
-export async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return undefined;
-  }
 }
 
 /** Defense-in-depth CSRF check: the request Origin must match the configured base URL. */

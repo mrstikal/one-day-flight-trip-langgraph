@@ -1,6 +1,6 @@
 import { createTripRequestSchema } from "@odft/contracts";
 import { createTrip } from "@odft/persistence";
-import { envelopeResponse, jsonResponse, readJson } from "@/lib/http";
+import { envelopeResponse, errorResponse, jsonResponse, readJsonResult } from "@/lib/http";
 import { guardMutation } from "@/lib/guard";
 
 /**
@@ -22,7 +22,16 @@ export async function POST(request: Request): Promise<Response> {
     return guard.response;
   }
 
-  const parsed = createTripRequestSchema.safeParse(await readJson(request));
+  const body = await readJsonResult(request);
+  if (!body.ok) {
+    return errorResponse(
+      "VALIDATION_FAILED",
+      body.reason === "too_large" ? "request body too large" : "invalid JSON body",
+      {},
+      body.reason === "too_large" ? 413 : 400,
+    );
+  }
+  const parsed = createTripRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return envelopeResponse({ code: "VALIDATION_FAILED", message: "invalid trip creation input", retryable: false });
   }

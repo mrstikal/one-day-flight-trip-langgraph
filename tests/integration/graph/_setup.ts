@@ -84,6 +84,11 @@ export function createHarnessDriver(pools: WorkerPools): OperationDriver {
     workerId: "test-worker",
     leaseMs: 30_000,
     graphVersion: "harness-graph-v0",
+    logger: (record) => {
+      if (record.level === "warn" || record.level === "error") {
+        process.stderr.write(`[driver] ${JSON.stringify(record)}\n`);
+      }
+    },
     buildGraph: (checkpointer) => buildHarnessGraph({ checkpointer }) as never,
     buildSaver: () => new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA }),
   });

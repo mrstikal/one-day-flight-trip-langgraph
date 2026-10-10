@@ -66,6 +66,9 @@ describe("BFF session, CSRF, and rate limiting", () => {
     expect(first?.sessionId).toBe(session.sessionId);
     expect(second?.sessionId).toBe(session.sessionId);
     expect(second?.csrfToken).toBe(first?.csrfToken);
+    // Renewal returns a refreshed cookie so the browser Max-Age slides too.
+    expect(first?.setCookie).toContain(SESSION_COOKIE);
+    expect(first?.setCookie).toContain("Max-Age=");
   });
 
   it("rejects a tampered cookie and an expired session", async () => {

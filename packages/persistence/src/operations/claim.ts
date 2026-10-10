@@ -180,3 +180,59 @@ export async function claimOperationById(
     client.release();
   }
 }
+
+/**
+ * Reap operations that exhausted their automatic-claim budget while `running`
+ * and whose lease expired (the worker crashed after its final claim). Without
+ * this, such an operation blocks its trip forever: it is no longer claimable
+ * (auto_claims >= max) and not retryable while its status is still `running`.
+ *
+ * Marks them `failed`, flags the trip for owner recovery, and records an event.
+ * Returns the number reaped.
+ */
+export async function reapExhaustedOperations(pool: Pool, options: { limit?: number } = {}): Promise<number> {
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const selected = await client.query<{ id: string; trip_id: string }>(
+      `SELECT id, trip_id
+         FROM odft_app.workflow_operations
+        WHERE status = 'running'
+          AND auto_claims >= $1
+          AND lease_expires_at < now()
+        ORDER BY lease_expires_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT $2`,
+      [MAX_AUTO_CLAIMS_PER_ROUND, limit],
+    );
+    for (const row of selected.rows) {
+      await client.query(
+        `UPDATE odft_app.workflow_operations
+            SET status = 'failed', lease_expires_at = NULL, claimed_by = NULL,
+                completed_at = now(), updated_at = now()
+          WHERE id = $1`,
+        [row.id],
+      );
+      await client.query(
+        `UPDATE odft_app.trips
+            SET recovery_required = true, workflow_status = 'failed',
+                last_unfinished_operation_id = $2, updated_at = now()
+          WHERE id = $1`,
+        [row.trip_id, row.id],
+      );
+      await client.query(
+        `INSERT INTO odft_app.execution_events (trip_id, operation_id, type, payload)
+         VALUES ($1, $2, 'operation.failed', $3::jsonb)`,
+        [row.trip_id, row.id, JSON.stringify({ code: "CLAIM_BUDGET_EXHAUSTED" })],
+      );
+    }
+    await client.query("COMMIT");
+    return selected.rows.length;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}

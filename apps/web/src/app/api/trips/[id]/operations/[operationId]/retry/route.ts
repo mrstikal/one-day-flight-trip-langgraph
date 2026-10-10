@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { technicalRetryApiRequestSchema } from "@odft/contracts";
 import { retryOperation } from "@odft/persistence";
-import { envelopeResponse, jsonResponse, readJson, scopeErrorResponse } from "@/lib/http";
+import { envelopeResponse, errorResponse, jsonResponse, readJsonResult, scopeErrorResponse } from "@/lib/http";
 import { guardMutation } from "@/lib/guard";
 
 /**
@@ -25,7 +25,16 @@ export async function POST(
     return guard.response;
   }
 
-  const parsed = technicalRetryApiRequestSchema.safeParse(await readJson(request));
+  const body = await readJsonResult(request);
+  if (!body.ok) {
+    return errorResponse(
+      "VALIDATION_FAILED",
+      body.reason === "too_large" ? "request body too large" : "invalid JSON body",
+      {},
+      body.reason === "too_large" ? 413 : 400,
+    );
+  }
+  const parsed = technicalRetryApiRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return envelopeResponse({ code: "VALIDATION_FAILED", message: "invalid retry request", retryable: false });
   }

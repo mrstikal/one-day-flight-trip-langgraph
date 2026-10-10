@@ -89,8 +89,12 @@ export {
   DEFAULT_LEASE_MS,
   LEASE_RENEW_MS,
   MAX_AUTO_CLAIMS_PER_ROUND,
+  reapExhaustedOperations,
 } from "./operations/claim.js";
 export type { ClaimedOperation, ClaimedOperationKind, ClaimOptions } from "./operations/claim.js";
+
+export { finalizeConflict, finalizeFailure, finalizeSuccess, finalizeWaiting } from "./operations/finalize.js";
+export type { FailureSpec, FinalizeFence, SuccessSpec, WaitingSpec } from "./operations/finalize.js";
 
 export { completeOperation, releaseClaim, renewLease } from "./operations/lease.js";
 export type { CompleteOperationInput } from "./operations/lease.js";

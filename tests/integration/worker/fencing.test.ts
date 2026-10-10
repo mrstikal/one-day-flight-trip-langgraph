@@ -115,6 +115,10 @@ describe("worker lease fencing", () => {
       `SELECT count(*)::text AS count FROM odft_app.execution_events WHERE trip_id = $1`,
       [tripId],
     );
+    const effectsBefore = await pools.operations.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM odft_app.workflow_effects WHERE operation_id = $1`,
+      [claimA.operationId],
+    );
 
     // Simulate the old process finally running after losing the lease.
     await driver.runOperation(claimA);
@@ -124,6 +128,13 @@ describe("worker lease fencing", () => {
       [tripId],
     );
     expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+
+    // The fenced effect path also rejects the stale writer: no callback ran.
+    const effectsAfter = await pools.operations.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM odft_app.workflow_effects WHERE operation_id = $1`,
+      [claimA.operationId],
+    );
+    expect(effectsAfter.rows[0]?.count).toBe(effectsBefore.rows[0]?.count);
 
     // The current owner can still drive the operation to a clean outcome.
     await driver.runOperation(claimB);

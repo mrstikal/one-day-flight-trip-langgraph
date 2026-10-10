@@ -1,12 +1,14 @@
 import type { Pool } from "pg";
-import { claimNextOperation, type ClaimedOperation } from "@odft/persistence";
+import { claimNextOperation, reapExhaustedOperations, type ClaimedOperation } from "@odft/persistence";
 import type { OperationDriver } from "./driver.js";
 import type { ShutdownController } from "./shutdown.js";
 
 /**
  * Bounded concurrency claim loop (02-architecture.md section 6). Claims up to
  * `concurrency` ready operations and drives each under its own trip lock and
- * lease. Claiming stops as soon as shutdown is requested; in-flight work drains.
+ * lease. Claiming stops as soon as shutdown is requested; in-flight work is
+ * aborted and drained within the grace window so a blocked run cannot hold the
+ * process forever.
  */
 
 export interface ClaimLoopOptions {
@@ -17,21 +19,25 @@ export interface ClaimLoopOptions {
   readonly leaseMs: number;
   readonly concurrency: number;
   readonly pollIntervalMs: number;
+  readonly graceMs: number;
   readonly logger: (record: Record<string, unknown>) => void;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -60,11 +66,16 @@ export async function runClaimLoop(options: ClaimLoopOptions): Promise<void> {
 
   while (!options.shutdown.isStopping) {
     if (active.size >= options.concurrency) {
-      await Promise.race(active);
+      // Race the active work against a shutdown-aware sleep so a shutdown request
+      // is noticed even while the concurrency limit is saturated.
+      await Promise.race([...active, sleep(options.pollIntervalMs, options.shutdown.signal)]);
       continue;
     }
     let claim: ClaimedOperation | null;
     try {
+      // Reap operations whose worker crashed after exhausting its claim budget,
+      // so they do not block their trip forever.
+      await reapExhaustedOperations(options.operationsPool).catch(() => {});
       claim = await claimNextOperation(options.operationsPool, {
         workerId: options.workerId,
         leaseMs: options.leaseMs,
@@ -86,5 +97,10 @@ export async function runClaimLoop(options: ClaimLoopOptions): Promise<void> {
     track(claim);
   }
 
-  await Promise.allSettled([...active]);
+  // Drain in-flight work, bounded by the grace window (the driver aborts on the
+  // shutdown signal, so this normally resolves quickly).
+  await Promise.race([
+    Promise.allSettled([...active]),
+    sleep(options.graceMs, new AbortController().signal),
+  ]);
 }

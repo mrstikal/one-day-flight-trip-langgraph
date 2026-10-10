@@ -24,6 +24,8 @@ export interface ServerConfig {
   readonly demoControlsEnabled: boolean;
   readonly mapTileUrl: string | undefined;
   readonly workerConcurrency: number;
+  /** Trust `X-Forwarded-For`/`X-Real-IP` for client IP (only behind a known proxy). */
+  readonly trustProxy: boolean;
 }
 
 /** Configuration error whose message never contains secret values. */
@@ -70,6 +72,7 @@ const rawSchema = z
     DEMO_CONTROLS_ENABLED: booleanString.optional(),
     MAP_TILE_URL: z.string().min(1).optional(),
     WORKER_CONCURRENCY: intEnv(1, 16, 2),
+    TRUST_PROXY: booleanString.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.AI_MODE === "openrouter" && !value.OPENROUTER_API_KEY) {
@@ -134,5 +137,6 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
     demoControlsEnabled: raw.DEMO_CONTROLS_ENABLED ?? false,
     mapTileUrl: raw.MAP_TILE_URL,
     workerConcurrency: raw.WORKER_CONCURRENCY,
+    trustProxy: raw.TRUST_PROXY ?? false,
   };
 }

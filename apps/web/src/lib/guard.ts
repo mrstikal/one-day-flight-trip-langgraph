@@ -55,7 +55,7 @@ export async function guardMutation(
   const limit = await consumeRateLimit(deps.pool, {
     scopeHash:
       policy.scope === "ip"
-        ? scopeHash(deps.config, `ip:${clientIp(request)}`)
+        ? scopeHash(deps.config, `ip:${clientIp(request, deps.config.trustProxy)}`)
         : scopeHash(deps.config, session.sessionId),
     endpoint: policy.endpoint,
     limit: policy.limit,

@@ -12,6 +12,7 @@ interface DecisionRow {
   status: "pending" | "resolved" | "cancelled";
   source_fingerprint: string;
   allowed_offer_ids: unknown;
+  allowed_option_ids?: unknown;
 }
 
 export async function loadDecision(
@@ -19,7 +20,7 @@ export async function loadDecision(
   decisionId: string,
 ): Promise<DecisionBindingRecord | undefined> {
   const result = await client.query<DecisionRow>(
-    `SELECT id, trip_id, kind, proposal_id, status, source_fingerprint, allowed_offer_ids
+    `SELECT id, trip_id, kind, proposal_id, status, source_fingerprint, allowed_offer_ids, allowed_option_ids
        FROM odft_app.pending_decisions WHERE id = $1`,
     [decisionId],
   );
@@ -35,6 +36,9 @@ export async function loadDecision(
     status: row.status,
     sourceFingerprint: row.source_fingerprint,
     allowedOfferIds: Array.isArray(row.allowed_offer_ids) ? (row.allowed_offer_ids as string[]) : [],
+    allowedOptionIds: Array.isArray(row.allowed_option_ids)
+      ? (row.allowed_option_ids as string[])
+      : [],
   };
 }
 
@@ -95,7 +99,7 @@ export async function getPendingDecisionForTrip(
   tripId: string,
 ): Promise<DecisionBindingRecord | undefined> {
   const result = await client.query<DecisionRow>(
-    `SELECT id, trip_id, kind, proposal_id, status, source_fingerprint, allowed_offer_ids
+    `SELECT id, trip_id, kind, proposal_id, status, source_fingerprint, allowed_offer_ids, allowed_option_ids
        FROM odft_app.pending_decisions
       WHERE trip_id = $1 AND status = 'pending'
       LIMIT 1`,
@@ -113,5 +117,8 @@ export async function getPendingDecisionForTrip(
     status: row.status,
     sourceFingerprint: row.source_fingerprint,
     allowedOfferIds: Array.isArray(row.allowed_offer_ids) ? (row.allowed_offer_ids as string[]) : [],
+    allowedOptionIds: Array.isArray(row.allowed_option_ids)
+      ? (row.allowed_option_ids as string[])
+      : [],
   };
 }

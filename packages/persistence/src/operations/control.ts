@@ -38,6 +38,21 @@ function error(
   return { code, message, retryable: false, ...extra };
 }
 
+/** Resolve a stored idempotency result, or a typed conflict on a payload mismatch. */
+function storedRetryResult(
+  row: { payload_hash: string; result: unknown },
+  payloadHash: string,
+): RetryOperationResult | ErrorEnvelope {
+  if (row.payload_hash !== payloadHash) {
+    return error("CONFLICT", "the control request id was reused with a different payload");
+  }
+  const stored = row.result as RetryOperationResult | null;
+  if (!stored) {
+    return error("CONFLICT", "stored control request has no result");
+  }
+  return { ...stored, deduped: true };
+}
+
 export async function retryOperation(
   pool: Pool,
   options: RetryOperationOptions,
@@ -48,33 +63,31 @@ export async function retryOperation(
   try {
     await client.query("BEGIN");
 
-    const existing = await client.query<{ payload_hash: string; result: unknown }>(
+    const preExisting = await client.query<{ payload_hash: string; result: unknown }>(
       `SELECT payload_hash, result FROM odft_app.workflow_control_requests
         WHERE trip_id = $1 AND control_request_id = $2`,
       [tripId, controlRequestId],
     );
-    const prior = existing.rows[0];
-    if (prior) {
-      if (prior.payload_hash !== payloadHash) {
+    if (preExisting.rows[0]) {
+      // Ownership is validated even on the dedupe path: another session must not
+      // learn a foreign operation id or revision from a replayed control key.
+      const owner = await client.query<{ session_id: string }>(
+        `SELECT session_id FROM odft_app.trips WHERE id = $1`,
+        [tripId],
+      );
+      if (!owner.rows[0] || owner.rows[0].session_id !== sessionId) {
         await client.query("ROLLBACK");
-        return error("CONFLICT", "the control request id was reused with a different payload");
+        return error("NOT_FOUND", "trip not found");
       }
-      const stored = prior.result as RetryOperationResult | null;
+      const stored = storedRetryResult(preExisting.rows[0], payloadHash);
       await client.query("COMMIT");
-      if (!stored) {
-        return error("CONFLICT", "stored control request has no result");
-      }
-      return { ...stored, deduped: true };
+      return stored;
     }
 
     const trip = await lockTrip(client, tripId);
-    if (!trip) {
+    if (!trip || trip.sessionId !== sessionId) {
       await client.query("ROLLBACK");
       return error("NOT_FOUND", "trip not found");
-    }
-    if (trip.sessionId !== sessionId) {
-      await client.query("ROLLBACK");
-      return error("FORBIDDEN", "trip is not owned by this session");
     }
     if (trip.revision !== expectedRevision) {
       await client.query("ROLLBACK");
@@ -83,8 +96,27 @@ export async function retryOperation(
       });
     }
 
-    const target = await client.query<{ id: string; status: string; created_at: string }>(
-      `SELECT id, status, created_at::text AS created_at
+    // Re-check after taking the lock: a concurrent identical retry may have won
+    // the race and returned before we acquired the lock.
+    const raced = await client.query<{ payload_hash: string; result: unknown }>(
+      `SELECT payload_hash, result FROM odft_app.workflow_control_requests
+        WHERE trip_id = $1 AND control_request_id = $2`,
+      [tripId, controlRequestId],
+    );
+    if (raced.rows[0]) {
+      const stored = storedRetryResult(raced.rows[0], payloadHash);
+      await client.query("COMMIT");
+      return stored;
+    }
+
+    const target = await client.query<{
+      id: string;
+      status: string;
+      created_at: string;
+      lease_expired: boolean;
+    }>(
+      `SELECT id, status, created_at::text AS created_at,
+              (lease_expires_at IS NOT NULL AND lease_expires_at < now()) AS lease_expired
          FROM odft_app.workflow_operations
         WHERE trip_id = $1 AND id = $2`,
       [tripId, operationId],
@@ -94,9 +126,10 @@ export async function retryOperation(
       await client.query("ROLLBACK");
       return error("NOT_FOUND", "operation not found");
     }
-    if (row.status !== "failed") {
-      // Only an unfinished failed operation may be technically retried; a
-      // queued/running/succeeded/waiting operation is not retryable this way.
+    // Recoverable = a terminal failure, or a crashed `running` operation whose
+    // lease expired (its worker never marked it failed, e.g. SIGKILL).
+    const recoverable = row.status === "failed" || (row.status === "running" && row.lease_expired);
+    if (!recoverable) {
       const active = await getActiveOperation(client, tripId);
       if (active && active.id === operationId) {
         await client.query("ROLLBACK");
@@ -108,19 +141,18 @@ export async function retryOperation(
       return error("CONFLICT", "only a failed unfinished operation can be retried");
     }
 
-    // The retry target must be the latest unfinished operation; a newer command
-    // must not be skipped by retrying an older failure.
+    // The retry target must be the latest operation of the trip: ANY newer
+    // operation (including succeeded/waiting) means this is not the latest
+    // unfinished failure, so retrying it would re-run stale input past a newer run.
     const newer = await client.query<{ id: string }>(
       `SELECT id FROM odft_app.workflow_operations
-        WHERE trip_id = $1
-          AND status IN ('queued','running','failed')
-          AND created_at > $2
+        WHERE trip_id = $1 AND created_at > $2
         LIMIT 1`,
       [tripId, row.created_at],
     );
     if (newer.rows[0]) {
       await client.query("ROLLBACK");
-      return error("CONFLICT", "a newer unfinished operation exists; retry the latest failure");
+      return error("CONFLICT", "a newer operation exists; retry the latest failure");
     }
 
     await client.query(

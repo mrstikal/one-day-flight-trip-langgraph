@@ -120,6 +120,7 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       buildGraph,
       buildSaver: () =>
         new PostgresSaver(saverPool, undefined, { schema: CHECKPOINT_SCHEMA }),
+      signal: shutdown.signal,
     });
 
     await runClaimLoop({
@@ -130,10 +131,9 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       leaseMs,
       concurrency,
       pollIntervalMs,
+      graceMs: options.graceMs ?? 30_000,
       logger,
     });
-
-    await shutdown.waitForIdle(options.graceMs ?? 30_000);
   } finally {
     clearInterval(heartbeat);
     await Promise.allSettled([

@@ -126,6 +126,9 @@ export async function resolveSession(
     sessionId: session.id,
     csrfToken: deriveCsrf(session.id, config),
     expiresAt: (renew ? expiresAt : session.expiresAt).toISOString(),
+    // Refresh the cookie Max-Age on renewal so the browser keeps the token for
+    // as long as the session is valid (sliding expiry, same secret).
+    ...(renew ? { setCookie: serializeSessionCookie(raw, SESSION_TTL_MS, config) } : {}),
   };
 }
 

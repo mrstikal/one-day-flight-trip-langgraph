@@ -85,6 +85,10 @@ async function main(): Promise<void> {
     });
     process.exitCode = 1;
   }
+  // The claim loop bounds shutdown by the grace window and aborts in-flight
+  // work. Exit explicitly so a connection stuck in a query cannot keep the
+  // process alive past the grace period.
+  process.exit(process.exitCode ?? 0);
 }
 
 await main();

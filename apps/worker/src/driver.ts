@@ -7,19 +7,19 @@ import {
 } from "@langchain/langgraph";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
-  completeOperation,
   contentHash,
+  finalizeConflict,
+  finalizeFailure,
+  finalizeSuccess,
+  finalizeWaiting,
   getPendingDecisionForTrip,
   getTrip,
-  insertDecision,
   MAX_AUTO_CLAIMS_PER_ROUND,
   releaseClaim,
-  resolveDecision,
-  setRecoveryRequired,
-  setTripWorkflowStatus,
   StaleFencingError,
   withEffect,
   type ClaimedOperation,
+  type OperationFencingContext,
 } from "@odft/persistence";
 import { decisionKindSchema, type DecisionKind } from "@odft/contracts";
 import {
@@ -62,6 +62,8 @@ export interface DriverDeps {
   readonly buildGraph: (checkpointer: BaseCheckpointSaver) => WorkerGraph;
   readonly buildSaver: () => BaseCheckpointSaver;
   readonly logger?: DriverLogger;
+  /** Shutdown signal: aborts local graph work and releases locks immediately. */
+  readonly signal?: AbortSignal;
 }
 
 export interface OperationDriver {
@@ -120,13 +122,29 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     );
   }
 
-  function buildPorts(ctx: { operationId: string }): HarnessPorts {
+  function buildPorts(ctx: OperationFencingContext): HarnessPorts {
     return {
       now: () => new Date(),
       runEffect: async <T>(nodeName: string, effectScope: string, fn: () => Promise<T>): Promise<T> => {
         const client = await deps.operationsPool.connect();
         try {
           await client.query("BEGIN");
+          // Fence the effect: a stale worker (token rotated) performs no callback.
+          // `FOR SHARE` also blocks a concurrent fencing-token rotation until the
+          // effect transaction commits.
+          const owned = await client.query(
+            `SELECT 1 FROM odft_app.workflow_operations
+              WHERE id = $1 AND trip_id = $2 AND fencing_token = $3::bigint
+              FOR SHARE`,
+            [ctx.operationId, ctx.tripId, ctx.fencingToken],
+          );
+          if (owned.rowCount !== 1) {
+            throw new StaleFencingError(ctx.operationId);
+          }
+          // Serialize concurrent identical effect scopes so the callback runs once.
+          await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+            `effect:${ctx.operationId}:${nodeName}:${effectScope}`,
+          ]);
           const result = await withEffect<T>(
             client,
             { operationId: ctx.operationId, nodeName, effectScope },
@@ -135,7 +153,11 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
           await client.query("COMMIT");
           return result;
         } catch (error) {
-          await client.query("ROLLBACK");
+          try {
+            await client.query("ROLLBACK");
+          } catch {
+            // Ignore rollback failures; the original error is what matters.
+          }
           throw error;
         } finally {
           client.release();
@@ -159,51 +181,18 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       interruptId: view.interrupts[0]?.id ?? null,
       allowedOptionIds,
     });
-
-    const completed = await completeOperation(deps.operationsPool, {
-      operationId: claim.operationId,
-      fencingToken: claim.fencingToken,
-      status: "waiting",
-      result: { kind, interruptId: view.interrupts[0]?.id ?? null },
-    });
-    if (!completed) {
-      // Fenced out: a newer owner owns the transition; do not touch the trip.
-      return;
-    }
-
-    // Bind the pending decision after the fenced transition. A decision from a
-    // previous run is retired so its kind/binding cannot go stale.
-    const existing = await getPendingDecisionForTrip(deps.operationsPool, claim.tripId);
-    if (existing && (existing.kind !== kind || existing.sourceFingerprint !== fingerprint)) {
-      const cancelClient = await deps.operationsPool.connect();
-      try {
-        await resolveDecision(cancelClient, existing.id, "cancelled");
-      } finally {
-        cancelClient.release();
-      }
-    }
-    if (!existing || existing.kind !== kind || existing.sourceFingerprint !== fingerprint) {
-      const client = await deps.operationsPool.connect();
-      try {
-        await insertDecision(client, {
-          tripId: claim.tripId,
-          kind,
-          threadId: claim.tripId,
-          graphVersion: deps.graphVersion,
-          createdRevision: claim.acceptedRevision,
-          sourceFingerprint: fingerprint,
-          payloadHash: fingerprint,
-          allowedOptionIds,
-        });
-      } finally {
-        client.release();
-      }
-    }
-
-    await setTripWorkflowStatus(deps.operationsPool, claim.tripId, "waiting_user");
-    await insertFencedEvent(
-      { tripId: claim.tripId, operationId: claim.operationId, fencingToken: claim.fencingToken },
-      { type: "decision.awaiting", payload: { kind } },
+    // Operation transition, pending decision, trip projection, and event commit
+    // together in one fencing-token-guarded transaction.
+    await finalizeWaiting(
+      deps.operationsPool,
+      { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+      {
+        kind,
+        fingerprint,
+        allowedOptionIds,
+        graphVersion: deps.graphVersion,
+        createdRevision: claim.acceptedRevision,
+      },
     );
   }
 
@@ -216,55 +205,35 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       payload: claim.payload,
     };
     const reconciliation = reconcileCompleted(view, operation);
-    const completed = await completeOperation(deps.operationsPool, {
-      operationId: claim.operationId,
-      fencingToken: claim.fencingToken,
-      status: "succeeded",
-      result: reconciliation,
-    });
-    if (!completed) {
-      return;
-    }
-    await setTripWorkflowStatus(deps.operationsPool, claim.tripId, "ready");
-    await insertFencedEvent(
-      { tripId: claim.tripId, operationId: claim.operationId, fencingToken: claim.fencingToken },
-      { type: "operation.succeeded", payload: { summary: reconciliation.summary } },
+    const payload = (claim.payload ?? {}) as Record<string, unknown>;
+    const resolveDecisionId =
+      claim.kind === "decision" && typeof payload.decisionId === "string"
+        ? payload.decisionId
+        : undefined;
+    await finalizeSuccess(
+      deps.operationsPool,
+      { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+      {
+        result: reconciliation,
+        summary: reconciliation.summary,
+        ...(resolveDecisionId ? { resolveDecisionId } : {}),
+      },
     );
-    if (claim.kind === "decision") {
-      const payload = (claim.payload ?? {}) as Record<string, unknown>;
-      const decisionId = typeof payload.decisionId === "string" ? payload.decisionId : undefined;
-      if (decisionId) {
-        const client = await deps.operationsPool.connect();
-        try {
-          await resolveDecision(client, decisionId, "resolved");
-        } finally {
-          client.release();
-        }
-      }
-    }
   }
 
   async function fail(claim: ClaimedOperation, error: unknown): Promise<void> {
     const code = safeErrorCode(error);
-    if (claim.autoClaims >= MAX_AUTO_CLAIMS_PER_ROUND) {
-      const failed = await completeOperation(deps.operationsPool, {
-        operationId: claim.operationId,
-        fencingToken: claim.fencingToken,
-        status: "failed",
-        result: { code },
-      });
-      if (failed) {
-        await setRecoveryRequired(deps.operationsPool, claim.tripId, claim.operationId);
-        logger({ level: "warn", component: "driver", message: "operation exhausted automatic claims", operationId: claim.operationId, code });
-      }
-    } else {
-      // Leave it claimable for the next bounded automatic attempt.
-      await releaseClaim(deps.operationsPool, claim);
-    }
-    await insertFencedEvent(
-      { tripId: claim.tripId, operationId: claim.operationId, fencingToken: claim.fencingToken },
-      { type: "operation.failed", payload: { code } },
+    const exhausted = claim.autoClaims >= MAX_AUTO_CLAIMS_PER_ROUND;
+    const committed = await finalizeFailure(
+      deps.operationsPool,
+      { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+      { code, exhausted },
     );
+    if (committed && exhausted) {
+      logger({ level: "warn", component: "driver", message: "operation exhausted automatic claims", operationId: claim.operationId, code });
+    } else if (committed) {
+      logger({ level: "info", component: "driver", message: "operation failed; requeued for a bounded retry", operationId: claim.operationId, code });
+    }
   }
 
   async function invoke(
@@ -273,22 +242,30 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     input: unknown,
     abort: AbortController,
   ): Promise<void> {
-    const context = { operationId: claim.operationId, ports: buildPorts({ operationId: claim.operationId }) };
+    const ctx = {
+      operationId: claim.operationId,
+      tripId: claim.tripId,
+      fencingToken: claim.fencingToken,
+    };
+    const context = { operationId: claim.operationId, ports: buildPorts(ctx) };
     const stream = await graph.stream(input, {
       configurable: { thread_id: claim.tripId },
       durability: "sync",
       recursionLimit: 100,
       context,
       signal: abort.signal,
-      streamMode: ["updates"],
+      streamMode: "updates",
     });
     for await (const chunk of stream) {
-      if (chunk && typeof chunk === "object" && !Array.isArray(chunk)) {
-        for (const node of Object.keys(chunk as Record<string, unknown>)) {
-          await insertFencedEvent(
-            { tripId: claim.tripId, operationId: claim.operationId, fencingToken: claim.fencingToken },
-            { type: "node.updated", payload: { node } },
-          );
+      // With a single stream mode the chunk is the updates object; a multi-mode
+      // request would yield `[mode, payload]` tuples, so unwrap both shapes.
+      const payload =
+        Array.isArray(chunk) && chunk.length === 2 && typeof chunk[0] === "string"
+          ? chunk[1]
+          : chunk;
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        for (const node of Object.keys(payload as Record<string, unknown>)) {
+          await insertFencedEvent(ctx, { type: "node.updated", payload: { node } });
         }
       }
     }
@@ -301,14 +278,28 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       return;
     }
 
-    const lock = await acquireTripLock(deps.lockPool, claim.tripId);
+    const abort = new AbortController();
+    const onShutdown = (): void => abort.abort(new Error("worker shutdown"));
+    if (deps.signal?.aborted) {
+      onShutdown();
+    } else {
+      deps.signal?.addEventListener("abort", onShutdown, { once: true });
+    }
+
+    const lock = await acquireTripLock(deps.lockPool, claim.tripId, {
+      onLost: (error) => {
+        // A lost lock connection means this process no longer owns the trip.
+        logger({ level: "warn", component: "driver", message: "trip lock lost", error: String(error) });
+        abort.abort(error);
+      },
+    });
     if (!lock) {
+      deps.signal?.removeEventListener("abort", onShutdown);
       // Another worker holds the trip; leave the lease to expire.
       logger({ level: "info", component: "driver", message: "trip lock busy", tripId: claim.tripId });
       return;
     }
 
-    const abort = new AbortController();
     const stopRenewal = startLeaseRenewal(deps.operationsPool, claim, abort, {
       onLost: (error) => logger({ level: "warn", component: "driver", message: "lease lost", error: String(error) }),
     });
@@ -339,15 +330,11 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
 
       switch (choice.kind) {
         case "conflict": {
-          const failed = await completeOperation(deps.operationsPool, {
-            operationId: claim.operationId,
-            fencingToken: claim.fencingToken,
-            status: "failed",
-            result: { code: "STALE_DECISION", message: choice.message },
-          });
-          if (failed) {
-            await insertFencedEvent(ctx, { type: "operation.rejected", payload: { code: "STALE_DECISION" } });
-          }
+          await finalizeConflict(
+            deps.operationsPool,
+            { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+            { code: "STALE_DECISION", message: choice.message },
+          );
           return;
         }
         case "waiting": {
@@ -401,6 +388,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       await fail(claim, error);
     } finally {
       stopRenewal();
+      deps.signal?.removeEventListener("abort", onShutdown);
       await releaseTripLock(lock);
     }
   }

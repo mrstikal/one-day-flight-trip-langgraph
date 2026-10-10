@@ -439,6 +439,15 @@ export async function admitResume(
       await client.query("ROLLBACK");
       return error("STALE_DECISION", "response action does not match the pending decision kind");
     }
+    // `choose_option` must select an option the decision actually offered.
+    if (
+      request.response.action === "choose_option" &&
+      Array.isArray(decision.allowedOptionIds) &&
+      !decision.allowedOptionIds.includes(request.response.optionId)
+    ) {
+      await client.query("ROLLBACK");
+      return error("STALE_DECISION", "the selected option is not offered by the pending decision");
+    }
 
     const operation = await insertOperation(client, {
       tripId,
