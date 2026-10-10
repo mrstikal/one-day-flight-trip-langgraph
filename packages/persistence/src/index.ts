@@ -16,3 +16,25 @@ export type { WorkerIdentity } from "./heartbeat.js";
 
 export { checkReadiness } from "./readiness.js";
 export type { CheckStatus, ReadinessOptions, ReadinessReport } from "./readiness.js";
+
+export {
+  DATASET_LIMITATION,
+  getCityAirports,
+  getCuratedLandmarks,
+  listRouteEvidence,
+  loadReferenceData,
+  resolveCatchment,
+  searchAirports,
+  searchCities,
+  searchCountries,
+} from "./reference/repository.js";
+export type {
+  AirportSearchInput,
+  AirportSearchResult,
+  CityAirportsResult,
+  CitySearchInput,
+  CitySearchResult,
+  CuratedLandmarksResult,
+  LoadResult,
+  RouteEvidenceQuery,
+} from "./reference/repository.js";

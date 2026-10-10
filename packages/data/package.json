@@ -20,6 +20,7 @@
     "@js-temporal/polyfill": "0.5.1",
     "@odft/contracts": "*",
     "@odft/domain": "*",
-    "geo-tz": "8.1.9"
+    "geo-tz": "8.1.9",
+    "zod": "4.6.5"
   }
 }

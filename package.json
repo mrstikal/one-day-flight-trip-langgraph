@@ -14,6 +14,8 @@
   "scripts": {
     "setup:env": "tsx scripts/setup-local-env.ts",
     "db:migrate": "tsx scripts/db-migrate.ts",
+    "reference:import": "tsx scripts/import-reference.ts",
+    "reference:load": "tsx scripts/reference-load.ts",
     "checkpointer:setup": "tsx scripts/checkpointer-setup.ts",
     "dev": "npm run build:packages && concurrently -k -n packages,web,worker -c blue,green,magenta \"npm:dev:packages\" \"npm:dev:web\" \"npm:dev:worker\"",
     "dev:packages": "tsc -b tsconfig.build.json --watch --preserveWatchOutput",

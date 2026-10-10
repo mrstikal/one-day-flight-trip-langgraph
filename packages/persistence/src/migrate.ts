@@ -28,7 +28,7 @@ const MIGRATION_LOCK_KEY = 763_100_001;
  * bundled Next.js server runtime. A unit test asserts this list matches the
  * committed migration files, so it cannot silently drift.
  */
-export const MIGRATION_VERSIONS: readonly string[] = ["0001-foundation"];
+export const MIGRATION_VERSIONS: readonly string[] = ["0001-foundation", "0002-reference"];
 
 export interface MigrationResult {
   readonly applied: string[];

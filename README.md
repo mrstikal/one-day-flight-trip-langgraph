@@ -22,10 +22,27 @@ npm run setup:env          # writes a git-ignored .env with a random SESSION_HMA
 docker compose up -d postgres
 npm run db:migrate         # applies SQL migrations (repeat-safe)
 npm run checkpointer:setup # one-time LangGraph checkpointer schema setup
+npm run reference:load     # upserts the committed offline reference assets
 ```
 
 `setup:env` never overwrites an existing `.env` and never prints the generated secret. Values in
 `.env.example` are development placeholders, not production defaults.
+
+## Offline reference data
+
+Versioned geographic reference assets live in `data/reference/*.ndjson` with manifests, checksums,
+and license texts in `data/manifests/`. They are imported once and committed; normal startup never
+downloads reference data.
+
+```bash
+npm run reference:import -- --source all      # explicit maintenance; needs network
+npm run reference:load                         # idempotent upsert into PostgreSQL
+```
+
+`reference:import` filters GeoNames/OurAirports/Wikidata to the explicit European admission manifest
+(`data/reference/country-policy.json`), resolves airport IANA zones at import time with `geo-tz`
+(reviewed overrides in `data/reference/airport-zone-overrides.json`), and writes a rejected-record
+report per source. `reference:load` is safe to run repeatedly.
 
 ## Development
 
