@@ -38,3 +38,53 @@ export type {
   LoadResult,
   RouteEvidenceQuery,
 } from "./reference/repository.js";
+
+export { createSession, getSession } from "./sessions.js";
+export type { SessionRecord } from "./sessions.js";
+
+export {
+  getTrip,
+  insertTrip,
+  lockTrip,
+  setTripWorkflowStatus,
+  toTripRecord,
+  upsertSelection,
+} from "./trips.js";
+export type { InsertTripInput, TripRow } from "./trips.js";
+
+export {
+  getActiveOperation,
+  getOperationByRequestId,
+  insertOperation,
+  loadOperationById,
+  setOperationStatus,
+} from "./operations.js";
+export type { InsertOperationInput, StoredOperation } from "./operations.js";
+
+export { readEffect, writeEffect } from "./effects.js";
+export { insertEvent } from "./events.js";
+export type { ExecutionEventInput } from "./events.js";
+
+export { getProposal, insertProposal, markProposalResolved } from "./proposals.js";
+
+export {
+  getActiveReservation,
+  getReservationByConfirmationKey,
+  getReservationByReference,
+  insertReservationWithGeneratedReference,
+  RefGenerationFailedError,
+  supersedeReservation,
+} from "./reservations.js";
+
+export { insertDecision, loadDecision, resolveDecision } from "./decisions.js";
+export type { InsertDecisionInput } from "./decisions.js";
+
+export { PostgresBookingStore } from "./booking-store.js";
+
+export { GRAPH_VERSION, admitOperation, createTrip, withEffect } from "./admission.js";
+export type {
+  AdmitOperationOptions,
+  AdmitOperationResult,
+  CreateTripOptions,
+  CreateTripResult,
+} from "./admission.js";
