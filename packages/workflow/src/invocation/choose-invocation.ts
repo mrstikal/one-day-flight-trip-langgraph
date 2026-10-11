@@ -1,8 +1,10 @@
 import {
+  chatCommandPayloadSchema,
   DECISION_ALLOWED_ACTIONS,
   decisionKindSchema,
   graphResumeEnvelopeSchema,
   resumeRequestSchema,
+  type DecisionKind,
   type GraphResumeEnvelope,
 } from "@odft/contracts";
 import { harnessDomainSchema, type HarnessDomain } from "../harness/state.js";
@@ -43,6 +45,8 @@ export type InvocationChoice =
 export interface ChooseInvocationOptions {
   /** The decision id of the trip's current pending decision, if any. */
   readonly pendingDecisionId?: string;
+  /** The kind of the trip's current pending decision, if any. */
+  readonly pendingDecisionKind?: DecisionKind;
   /**
    * Graph-specific plain start-input builder (never a resume). Defaults to the
    * Phase 05 harness shape; the production travel graph injects its own.
@@ -141,11 +145,29 @@ export function chooseInvocation(
     }
     // A command/creation that is itself the interrupted operation is a recovery of
     // a still-waiting job. A NEW command admitted while an interrupt is pending
-    // cannot run (it would be silently swallowed), so it conflicts.
+    // cannot run (it would be silently swallowed), so it conflicts — EXCEPT a chat
+    // request that follows up a clarification, which the worker turns into the
+    // internal `modify` branch of the current interrupt.
     if (state.values.operationId === operation.id) {
       return {
         kind: "waiting",
         reason: "operation is waiting at an unanswered interrupt; restore the waiting projection",
+      };
+    }
+    const chatPayload = chatCommandPayloadSchema.safeParse(operation.payload);
+    if (
+      chatPayload.success &&
+      options.pendingDecisionKind === "clarification" &&
+      options.pendingDecisionId
+    ) {
+      return {
+        kind: "resume",
+        envelope: graphResumeEnvelopeSchema.parse({
+          operationId: operation.id,
+          acceptedRevision: operation.acceptedRevision,
+          decisionId: options.pendingDecisionId,
+          response: { action: "modify", commandOperationId: operation.id },
+        }),
       };
     }
     return {

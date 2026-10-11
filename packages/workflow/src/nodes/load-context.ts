@@ -65,5 +65,14 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     pendingStage: null,
     gate: "pending",
     lastOutcome: null,
+    // Phase 08 chat/intent/clarification
+    chatMessage: null,
+    intentStatus: "pending",
+    intentInterpretation: null,
+    intentPreserve: [],
+    clarificationQuestion: null,
+    clarificationOptions: [],
+    clarificationRequestedCommands: [],
+    modificationOperationId: null,
   };
 }

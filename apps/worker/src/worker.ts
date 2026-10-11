@@ -23,6 +23,7 @@ import {
 } from "@odft/workflow";
 import { runClaimLoop } from "./claim.js";
 import { createOperationDriver, type WorkerGraph } from "./driver.js";
+import { createAiService } from "./ai/service.js";
 import { createTravelPortsFactory } from "./travel/ports.js";
 import { createShutdownController, type ShutdownController } from "./shutdown.js";
 
@@ -43,7 +44,7 @@ export interface RunWorkerOptions {
   /** Graph factory; defaults to the production travel graph. */
   readonly buildGraph?: (checkpointer: BaseCheckpointSaver) => WorkerGraph;
   /** Invocation ports factory; defaults to the travel ports. */
-  readonly portsFactory?: (ctx: OperationFencingContext) => unknown;
+  readonly portsFactory?: (ctx: OperationFencingContext, signal?: AbortSignal) => unknown;
   /** Invocation selection; defaults to the travel start-input chooser. */
   readonly chooseInvocation?: (
     state: CheckpointView | null,
@@ -103,8 +104,10 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
 
   const buildGraph: (checkpointer: BaseCheckpointSaver) => WorkerGraph =
     options.buildGraph ?? ((checkpointer) => buildTravelGraph({ checkpointer }));
-  const portsFactory =
-    options.portsFactory ?? createTravelPortsFactory(operationsPool);
+  // AI configuration is validated at startup (fixture needs nothing; openrouter
+  // requires complete profiles and fails with an actionable, secret-free error).
+  const ai = createAiService({ pool: operationsPool, config });
+  const portsFactory = options.portsFactory ?? createTravelPortsFactory(operationsPool, ai);
   const selectInvocation =
     options.chooseInvocation ??
     ((state, operation, invocationOptions) =>

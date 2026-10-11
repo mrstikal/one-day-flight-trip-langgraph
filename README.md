@@ -1,12 +1,14 @@
-# AI Travel Planner (Phase 01 foundation)
+# AI Travel Planner
 
 A hybrid graphical/conversational planner for one sightseeing day in a European city.
 
 **DEMO APPLICATION - No real reservations are made and no payments are processed.**
 
-This repository has completed the **foundation, offline reference data, and domain/booking
-persistence phases (01-03)**. The web page renders a scaffold notice; no travel-planning feature or
-wizard UI is implemented yet.
+Implemented phases: durable graph core and BFF (05), flights vertical slice (06), hotels/meals/program
+choices (07), and AI interpretation with the assistant rail (08). The graphical wizard drives PRG → a
+European city through route/schedule feasibility, a simulated flight and hotel booking, and the program
+choices; the assistant rail on every trip page accepts free-text requests that are interpreted into the
+same deterministic commands (or a bounded clarification).
 
 ## Requirements
 
@@ -80,10 +82,119 @@ for the full list. Key values:
 | `SESSION_HMAC_KEY` | Required random server secret (>= 32 chars) |
 | `AI_MODE` | `fixture` (default, no credentials) or `openrouter` |
 | `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
-| `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` | Bounded AI usage |
+| `AI_CONFIG_PATH` | Required only in OpenRouter mode; path to the role-profile JSON file (see below) |
+| `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` | Bounded AI usage (defaults 40 calls / 1.00 USD) |
 
 Secrets stay on the server. They are never placed in `NEXT_PUBLIC_*` and never sent to the browser;
 `npm run build` scans the client bundle to confirm this.
+
+## AI modes and configuration
+
+The assistant rail and the intent pipeline run in one of two server-side modes (`AI_MODE`):
+
+- **`fixture` (default, recommended for local work and CI).** Deterministic scripted interpretations,
+  rankings, and plans. No credentials, no profile file, no network egress, zero billable rows. Each
+  message still becomes one admitted operation and one conversation entry.
+- **`openrouter`.** Live calls to OpenRouter models configured per role. Requires `OPENROUTER_API_KEY`
+  and `AI_CONFIG_PATH`; startup fails closed with `AiConfigError` when either is missing or a profile is
+  invalid. There is no invented model id and no automatic free/fallback model.
+
+### What `AI_CONFIG_PATH` is
+
+Path to a JSON file holding **all four role profiles** (`intent`, `recommendation`, `planner`,
+`reviewer`) — the model, sampling settings, hard token/time limits, verified USD price ceilings, and the
+endpoint provider slugs allowed to serve the calls. Relative paths resolve from the repository root.
+Start from the committed template:
+
+```bash
+cp ai-profiles.example.json ai-profiles.json
+# edit: model id, allowedEndpointProviderIds, price ceilings
+```
+
+`ai-profiles.json` and its generated cache are git-ignored (operator-specific models and prices).
+
+Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
+
+```json
+{
+  "intent": {
+    "provider": "openrouter",
+    "model": "openai/gpt-4.1-mini",
+    "reasoningEffort": "low",
+    "temperature": 0,
+    "timeoutMs": 20000,
+    "maxInputTokens": 6000,
+    "maxOutputTokens": 1024,
+    "maxAttempts": 2,
+    "maxCallCostUsd": "0.05",
+    "inputPriceUsdPerMillion": "0.40",
+    "outputPriceUsdPerMillion": "1.60",
+    "requestPriceUsd": "0",
+    "pricingVersion": "unverified",
+    "allowedEndpointProviderIds": ["openai"]
+  },
+  "recommendation": { "...": "same shape" },
+  "planner": { "...": "same shape, e.g. timeoutMs 30000 / maxOutputTokens 2048 / maxCallCostUsd 0.20" },
+  "reviewer": { "...": "same shape" }
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `provider` | Must be `"openrouter"` |
+| `model` | Exact OpenRouter model id (`author/slug`) |
+| `reasoningEffort` | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint |
+| `temperature` | Optional, 0–2 |
+| `timeoutMs` | 1000–45000; keep below the worker operation lease (default 60 s) |
+| `maxInputTokens` | ≤ 6000 (whole role input cap, history included) |
+| `maxOutputTokens` | Role output cap (defaults: 1024; planner 2048) |
+| `maxAttempts` | 1–2 (the adapter owns at most one repair/retry; never stacked) |
+| `maxCallCostUsd` | Worst-case per-call ceiling in USD; the tool refuses a profile whose worst case exceeds it |
+| `inputPriceUsdPerMillion`, `outputPriceUsdPerMillion`, `requestPriceUsd` | **Verified upper bounds** (USD); must be ≥ every matched endpoint's published rate, otherwise the call fails closed before billing |
+| `pricingVersion` | Machine-managed pin; leave `"unverified"` and let `ai:validate-models` stamp the manifest version |
+| `allowedEndpointProviderIds` | Endpoint provider slugs (OpenRouter `tag`) allowed to serve the calls; fallback is disabled |
+
+### Setting it up (first run)
+
+```bash
+# 1. .env: AI_MODE=openrouter, OPENROUTER_API_KEY=..., AI_CONFIG_PATH=./ai-profiles.json
+# 2. create the profile file
+cp ai-profiles.example.json ai-profiles.json
+# 3. refresh capability/pricing and validate the profiles
+npm run ai:validate-models
+```
+
+`ai:validate-models` fetches `https://openrouter.ai/api/v1/models/{id}/endpoints` for each configured
+model, writes the verified manifest to `$AI_CONFIG_PATH.capabilities.json`, stamps the manifest's
+`pricingVersion` into the profiles, and asserts every role profile. Failures are actionable:
+
+- *no endpoint from the allowed providers; available: …* → put one of the listed slugs into
+  `allowedEndpointProviderIds` (slugs without "no structured outputs").
+- *configure at least X* → raise the matching price field to `X` (published worst case for the shown
+  model).
+- *HTTP 404* → the model id does not exist on OpenRouter.
+
+The worker also refreshes the manifest automatically when the cache is missing, stale (> 24 h), or does
+not cover the configured models. A model whose capability or pricing is unknown is never called.
+
+The committed example uses `openai/gpt-4.1-mini`; its endpoints publish no `reasoning` parameter, so the
+example omits `reasoningEffort` (set it only for a reasoning-capable model). The example price fields are
+the verified worst case for that model's `openai` endpoint (prompt 0.40 + cache read 0.10 = 0.50 USD/M
+input, 1.60 USD/M output, 0.01 USD per web search), giving a worst-case call of $0.0146 (intent) and
+$0.0163 (planner) — comfortably under the example ceilings.
+
+### Budgets and failure behavior
+
+- Every transport attempt reserves its worst-case cost in `llm_calls` **before** the call, under a short
+  per-trip SQL lock; retries count. `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` and the role's
+  `maxCallCostUsd` refuse further calls with a typed `AI_BUDGET_EXCEEDED`.
+- An uncertain charge (timeout/transport/abort) stays `unknown_reserved` and is never released as zero;
+  it is cleared only by explicit reconciliation.
+- AI failures are terminal for that operation: a message is never automatically re-sent through the graph
+  and no second billable call is stacked on it. The trip stays usable (the last decision/controls keep
+  working); a graceful shutdown is the exception and leaves the operation recoverable.
+- Prompts, raw model output, and reasoning are never persisted for display; only safe telemetry (role,
+  model, prompt-version label, tokens, latency, cost status) is projected.
 
 ## Database safety
 

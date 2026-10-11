@@ -1,9 +1,11 @@
 import type { Pool } from "pg";
 import { BookingService, fingerprint } from "@odft/domain";
 import {
+  appendConversationMessage,
   applyTripCommand,
   evaluateAndPersistRoute,
   getActiveReservation,
+  getOperationPayload,
   getTrip,
   loadTripProgress,
   materializeFlightSnapshot,
@@ -17,24 +19,27 @@ import {
   validateTripLogistics,
   type OperationFencingContext,
 } from "@odft/persistence";
+import { chatCommandPayloadSchema } from "@odft/contracts";
 import type { TravelPorts } from "@odft/workflow";
 import { createFencedRunEffect } from "../driver.js";
+import type { AiService } from "../ai/service.js";
 
 /**
  * Build the production travel-graph ports for one claimed operation. All access
  * to reference data, scenario generation, the two feasibility stages, the Phase
- * 07 service research/program logic, and the booking service is wired here so the
- * graph nodes stay orchestration-only.
+ * 07 service research/program logic, the Phase 08 intent runtime, and the
+ * booking service is wired here so the graph nodes stay orchestration-only.
  */
 
 const PHASE07_DOMAINS = ["hotels", "breakfast", "lunch", "dinner", "activities"] as const;
 
 export function createTravelPortsFactory(
   pool: Pool,
-): (ctx: OperationFencingContext) => TravelPorts {
+  ai: AiService,
+): (ctx: OperationFencingContext, signal?: AbortSignal) => TravelPorts {
   const booking = new BookingService(new PostgresBookingStore(pool));
   const scenarios = new ScenarioService(pool);
-  return (ctx: OperationFencingContext): TravelPorts => ({
+  return (ctx: OperationFencingContext, signal?: AbortSignal): TravelPorts => ({
     now: () => new Date(),
     runEffect: createFencedRunEffect(pool, ctx),
 
@@ -199,6 +204,33 @@ export function createTravelPortsFactory(
 
     async loadProgress(tripId) {
       return loadTripProgress(pool, tripId);
+    },
+
+    async interpretIntent(input) {
+      return ai.interpret({
+        tripId: input.tripId,
+        operationId: input.operationId,
+        message: input.message,
+        ...(signal ? { signal } : {}),
+      });
+    },
+
+    async appendAssistantMessage(input) {
+      await appendConversationMessage(pool, {
+        tripId: input.tripId,
+        role: "assistant",
+        content: input.content.slice(0, 2000),
+        interpretation: input.interpretation,
+        operationId: input.operationId,
+        // Deterministic dedupe key: a crash replay cannot append a second bubble.
+        requestId: input.operationId,
+      });
+    },
+
+    async loadChatMessage(operationId) {
+      const payload = await getOperationPayload(pool, operationId);
+      const parsed = chatCommandPayloadSchema.safeParse(payload);
+      return parsed.success ? parsed.data.message : undefined;
     },
   });
 }

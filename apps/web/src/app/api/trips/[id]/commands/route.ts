@@ -1,12 +1,21 @@
 import { commandApiRequestSchema } from "@odft/contracts";
-import { admitOperation } from "@odft/persistence";
-import { envelopeResponse, errorResponse, jsonResponse, readJsonResult, scopeErrorResponse } from "@/lib/http";
+import { admitOperation, appendConversationMessage } from "@odft/persistence";
+import {
+  envelopeResponse,
+  errorResponse,
+  jsonResponse,
+  readJsonResult,
+  scopeErrorResponse,
+} from "@/lib/http";
 import { guardMutation } from "@/lib/guard";
+import { consumeRateLimit, scopeHash } from "@/lib/rate-limit";
 import { SIGHTSEEING_DATE_WINDOW_MESSAGE, isValidSightseeingDate } from "@/lib/date-window";
 
 /**
- * POST /api/trips/[id]/commands — admit one validated command as durable work.
- * Returns 202 with the accepted operation; the worker executes it asynchronously.
+ * POST /api/trips/[id]/commands — admit one validated command or chat message as
+ * durable work. Returns 202 with the accepted operation; the worker executes it
+ * asynchronously. A chat request is stored as a user message linked to its
+ * admitted operation, and a duplicate requestId reuses that message.
  */
 
 export const runtime = "nodejs";
@@ -38,9 +47,10 @@ export async function POST(
   if (!parsed.success) {
     return envelopeResponse({ code: "VALIDATION_FAILED", message: "invalid command request", retryable: false });
   }
-  const command = parsed.data.command;
+  const command = "command" in parsed.data ? parsed.data.command : undefined;
+  const chat = "chat" in parsed.data ? parsed.data.chat : undefined;
   if (
-    command.type === "set_route" &&
+    command?.type === "set_route" &&
     command.sightseeingDate !== undefined &&
     !isValidSightseeingDate(command.sightseeingDate)
   ) {
@@ -49,6 +59,18 @@ export async function POST(
       message: SIGHTSEEING_DATE_WINDOW_MESSAGE,
       retryable: false,
     });
+  }
+  if (chat !== undefined) {
+    // Chat has its own bucket in addition to the shared command bucket.
+    const chatLimit = await consumeRateLimit(guard.deps.pool, {
+      scopeHash: scopeHash(guard.deps.config, guard.session.sessionId),
+      endpoint: "trips:chat",
+      limit: 10,
+      windowMs: 60_000,
+    });
+    if (!chatLimit.allowed) {
+      return errorResponse("RATE_LIMITED", "too many chat messages", {}, 429);
+    }
   }
 
   const { id } = await context.params;
@@ -59,6 +81,15 @@ export async function POST(
   });
   if (!("operationId" in result)) {
     return scopeErrorResponse(result);
+  }
+  if (chat !== undefined) {
+    await appendConversationMessage(guard.deps.pool, {
+      tripId: id,
+      role: "user",
+      content: chat,
+      operationId: result.operationId,
+      requestId: parsed.data.requestId,
+    });
   }
   return jsonResponse(result, 202);
 }

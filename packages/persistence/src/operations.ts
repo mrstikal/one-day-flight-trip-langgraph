@@ -127,3 +127,15 @@ export async function loadOperationById(
     ? { id: row.id, tripId: row.trip_id, status: row.status, acceptedRevision: row.accepted_revision }
     : undefined;
 }
+
+/** The admitted payload of an operation (used by the internal `modify` branch). */
+export async function getOperationPayload(
+  client: Queryable,
+  operationId: string,
+): Promise<unknown | undefined> {
+  const result = await client.query<{ payload: unknown }>(
+    `SELECT payload FROM odft_app.workflow_operations WHERE id = $1`,
+    [operationId],
+  );
+  return result.rows[0]?.payload;
+}

@@ -51,7 +51,9 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<{ oper
 
 export async function submitCommand(
   tripId: string,
-  request: { requestId: string; expectedRevision: number; command: unknown },
+  request:
+    | { requestId: string; expectedRevision: number; command: unknown }
+    | { requestId: string; expectedRevision: number; chat: string },
 ): Promise<{ operationId: string }> {
   return withCsrf((csrfToken) =>
     apiPost<{ operationId: string }>(`/api/trips/${tripId}/commands`, request, {

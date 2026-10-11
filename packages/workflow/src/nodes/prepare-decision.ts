@@ -30,6 +30,15 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
       gate: "awaiting_booking",
     };
   }
+  if (state.nextDecisionKind === "clarification") {
+    return {
+      decisionKind: "clarification",
+      proposalId: null,
+      allowedOfferIds: [],
+      allowedOptionIds: state.clarificationOptions.map((option) => option.id),
+      gate: "clarification",
+    };
+  }
   if (state.nextDecisionKind === "recovery") {
     return {
       decisionKind: "recovery",

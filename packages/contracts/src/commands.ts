@@ -139,10 +139,49 @@ export const intentResultSchema = z.discriminatedUnion("kind", [
             })
             .strict(),
         )
-        .min(1),
+        .min(2)
+        .max(4),
     })
     .strict(),
   z.object({ kind: z.literal("unsupported"), explanation: nonEmptyStringSchema }).strict(),
 ]);
 
 export type IntentResult = z.infer<typeof intentResultSchema>;
+
+/**
+ * Model-facing intent result: identical shape to `IntentResult` but restricted to
+ * the conversational command subset, so `set_simulation` cannot be smuggled into
+ * a chat result (04-domain-model.md section 6 / 10-security section 6).
+ */
+export const modelFacingIntentResultSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("commands"),
+      commands: z.array(modelFacingCommandSchema).max(4),
+      preserve: z.array(preservableKeySchema),
+      interpretation: nonEmptyStringSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("clarification"),
+      question: nonEmptyStringSchema,
+      requestedCommands: z.array(modelFacingCommandSchema).max(4),
+      preserve: z.array(preservableKeySchema),
+      options: z
+        .array(
+          z
+            .object({
+              id: nonEmptyStringSchema,
+              label: nonEmptyStringSchema,
+              commands: z.array(modelFacingCommandSchema).max(4),
+            })
+            .strict(),
+        )
+        .min(2)
+        .max(4),
+    })
+    .strict(),
+  z.object({ kind: z.literal("unsupported"), explanation: nonEmptyStringSchema }).strict(),
+]);
+export type ModelFacingIntentResult = z.infer<typeof modelFacingIntentResultSchema>;

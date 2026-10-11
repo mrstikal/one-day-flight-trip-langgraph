@@ -20,5 +20,9 @@ test-results/
 .env.*
 !.env.example
 
+# Operator AI configuration (models, price ceilings) and its verified cache
+/ai-profiles.json
+/ai-profiles*.capabilities.json
+
 # Import cache (upstream downloads; never committed)
 .cache/

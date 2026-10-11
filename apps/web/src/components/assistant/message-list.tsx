@@ -1,0 +1,38 @@
+"use client";
+
+import type { PublicConversationMessage } from "@odft/contracts";
+import { InterpretationCard } from "./interpretation-card";
+
+/** Persisted conversation transcript (user, assistant, and system notices). */
+export function MessageList({
+  messages,
+}: {
+  readonly messages: readonly PublicConversationMessage[];
+}): React.JSX.Element {
+  if (messages.length === 0) {
+    return (
+      <p role="note" className="text-sm text-ink-muted">
+        No messages yet. Describe a change in plain language and it will be queued as one operation.
+      </p>
+    );
+  }
+  return (
+    <ol data-testid="conversation-messages" className="flex max-h-80 flex-col gap-3 overflow-y-auto pr-1">
+      {messages.map((message) => (
+        <li
+          key={message.id}
+          className={
+            message.role === "user"
+              ? "self-end rounded bg-cream px-3 py-2 text-sm"
+              : "self-start rounded border border-border px-3 py-2 text-sm"
+          }
+        >
+          <p className="whitespace-pre-wrap">{message.content}</p>
+          {message.interpretation ? (
+            <InterpretationCard interpretation={message.interpretation} />
+          ) : null}
+        </li>
+      ))}
+    </ol>
+  );
+}

@@ -18,6 +18,9 @@ export function publishSummaryNode(state: TravelState): TravelUpdate {
   if (state.gate === "withdrawn") {
     return { lastOutcome: "withdrawn" };
   }
+  if (state.gate === "chat_done") {
+    return { lastOutcome: "chat_unsupported" };
+  }
   if (state.replacementStaged) {
     return { lastOutcome: "replacement_pending" };
   }

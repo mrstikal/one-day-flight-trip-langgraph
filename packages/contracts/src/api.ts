@@ -15,6 +15,10 @@ import {
   tripDisplaySchema,
 } from "./projection.js";
 import {
+  publicClarificationSchema,
+  publicConversationMessageSchema,
+} from "./ai.js";
+import {
   admissionAcceptedSchema,
   commandRequestSchema,
   creationInputSchema,
@@ -109,6 +113,10 @@ export const tripProjectionSchema = z
     proposal: publicProposalSchema.nullable(),
     reservation: publicReservationSchema.nullable(),
     reservations: z.array(publicReservationSchema),
+    /** Recent persistent conversation for the assistant rail (safe projection). */
+    conversation: z.array(publicConversationMessageSchema),
+    /** Server-side clarification question/options for the pending decision. */
+    clarification: publicClarificationSchema.nullable(),
     display: tripDisplaySchema,
   })
   .strict();

@@ -7,6 +7,7 @@ import {
   fingerprintSchema,
   geographicRefIdSchema,
   localDateSchema,
+  messageSchema,
   uuidSchema,
   userNameSchema,
 } from "./primitives.js";
@@ -39,13 +40,29 @@ export const creationInputSchema = z
   .strict();
 export type CreationInput = z.infer<typeof creationInputSchema>;
 
-export const commandRequestSchema = z
+const expectedRevisionSchema = z.number().int().min(0);
+
+/** A direct graphical control: one strict deterministic domain command. */
+export const domainCommandInputSchema = z
   .object({
     requestId: uuidSchema,
-    expectedRevision: z.number().int().min(0),
+    expectedRevision: expectedRevisionSchema,
     command: domainCommandSchema,
   })
   .strict();
+export type DomainCommandInput = z.infer<typeof domainCommandInputSchema>;
+
+/** A chat request: a bounded natural-language message interpreted by the intent role. */
+export const chatInputSchema = z
+  .object({
+    requestId: uuidSchema,
+    expectedRevision: expectedRevisionSchema,
+    chat: messageSchema,
+  })
+  .strict();
+export type ChatInput = z.infer<typeof chatInputSchema>;
+
+export const commandRequestSchema = z.union([domainCommandInputSchema, chatInputSchema]);
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export const operationRecordSchema = z

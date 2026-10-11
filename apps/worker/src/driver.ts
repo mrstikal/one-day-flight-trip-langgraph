@@ -68,7 +68,7 @@ export interface DriverDeps {
    * to the Phase 05 harness ports. The production travel graph injects richer
    * ports here.
    */
-  readonly portsFactory?: (ctx: OperationFencingContext) => unknown;
+  readonly portsFactory?: (ctx: OperationFencingContext, signal?: AbortSignal) => unknown;
   /** Graph-specific invocation selection. Defaults to the harness chooser. */
   readonly chooseInvocation?: (
     state: CheckpointView | null,
@@ -151,6 +151,21 @@ const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "FORBIDDEN",
   "NOT_FOUND",
   "REF_GENERATION_FAILED",
+  // AI failures are never automatically retried by the graph layer: the adapter
+  // already owns its single repair/retry, and a second graph-level round would
+  // stack billable calls on the same message (06-ai-agent-design.md section 9).
+  "AI_NOT_CONFIGURED",
+  "AI_CAPABILITY_UNKNOWN",
+  "AI_BUDGET_EXCEEDED",
+  "AI_PRICING_UNKNOWN",
+  "AI_AUTH_FAILED",
+  "AI_UNSUPPORTED",
+  "AI_INPUT_OVERFLOW",
+  "AI_SCHEMA_INVALID",
+  "AI_TIMEOUT",
+  "AI_TRANSPORT_FAILED",
+  // AI_ABORTED is NOT terminal: a graceful shutdown aborts in-flight work, and the
+  // operation must stay recoverable (released to `queued`) rather than failed.
 ]);
 
 /** True when a failure code is a permanent conflict a retry can never resolve. */
@@ -261,6 +276,14 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
             allowedOfferIds,
             proposalId: proposalId ?? null,
           });
+    const optionPayload =
+      descriptor.optionPayload !== null &&
+      typeof descriptor.optionPayload === "object" &&
+      !Array.isArray(descriptor.optionPayload)
+        ? descriptor.optionPayload
+        : Array.isArray(descriptor.optionPayload) && descriptor.optionPayload.length > 0
+          ? descriptor.optionPayload
+          : undefined;
     // Operation transition, pending decision, trip projection, and event commit
     // together in one fencing-token-guarded transaction.
     await finalizeWaiting(
@@ -272,13 +295,18 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         allowedOptionIds,
         allowedOfferIds,
         ...(proposalId ? { proposalId } : {}),
+        ...(optionPayload !== undefined ? { optionPayload } : {}),
         graphVersion: deps.graphVersion,
         createdRevision: claim.acceptedRevision,
       },
     );
   }
 
-  async function persistSuccess(claim: ClaimedOperation, view: CheckpointView): Promise<void> {
+  async function persistSuccess(
+    claim: ClaimedOperation,
+    view: CheckpointView,
+    answeredDecisionId?: string,
+  ): Promise<void> {
     const operation = {
       id: claim.operationId,
       tripId: claim.tripId,
@@ -289,9 +317,10 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     const reconciliation = reconcileCompleted(view, operation);
     const payload = (claim.payload ?? {}) as Record<string, unknown>;
     const resolveDecisionId =
-      claim.kind === "decision" && typeof payload.decisionId === "string"
+      answeredDecisionId ??
+      (claim.kind === "decision" && typeof payload.decisionId === "string"
         ? payload.decisionId
-        : undefined;
+        : undefined);
     const blocked =
       reconciliation.lastOutcome === "no_feasible_route" ||
       reconciliation.lastOutcome === "no_feasible_schedule";
@@ -329,7 +358,15 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     if (committed && exhausted) {
       logger({ level: "warn", component: "driver", message: "operation exhausted automatic claims", operationId: claim.operationId, code });
     } else if (committed) {
-      logger({ level: "info", component: "driver", message: "operation failed; requeued for a bounded retry", operationId: claim.operationId, code });
+      logger({
+        level: "info",
+        component: "driver",
+        message: `operation failed; requeued for a bounded retry: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        operationId: claim.operationId,
+        code,
+      });
     }
   }
 
@@ -346,7 +383,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     };
     const context = {
       operationId: claim.operationId,
-      ports: deps.portsFactory ? deps.portsFactory(ctx) : buildPorts(ctx),
+      ports: deps.portsFactory ? deps.portsFactory(ctx, abort.signal) : buildPorts(ctx),
     };
     const stream = await graph.stream(input, {
       configurable: { thread_id: claim.tripId },
@@ -425,8 +462,14 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
           acceptedRevision: claim.acceptedRevision,
           payload: claim.payload,
         },
-        pending ? { pendingDecisionId: pending.id } : {},
+        pending
+          ? { pendingDecisionId: pending.id, pendingDecisionKind: pending.kind }
+          : {},
       );
+      // A resume answers the decision it carries; on success that decision is
+      // resolved even when the resuming operation is an internal `modify`.
+      const answeredDecisionId =
+        choice.kind === "resume" ? choice.envelope.decisionId : undefined;
 
       switch (choice.kind) {
         case "conflict": {
@@ -469,7 +512,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       if (finalView && finalView.interrupts.length > 0) {
         await persistWaiting(claim, finalView);
       } else if (finalView) {
-        await persistSuccess(claim, finalView);
+        await persistSuccess(claim, finalView, answeredDecisionId);
       }
     } catch (error) {
       if (isFencingLoss(error)) {

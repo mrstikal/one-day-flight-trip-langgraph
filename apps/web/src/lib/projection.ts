@@ -1,6 +1,9 @@
 import type { Pool } from "pg";
 import { hasOverride, nightsForVariant, resolveEffectiveLevel } from "@odft/domain";
+import { listConversation } from "@odft/persistence";
 import {
+  publicClarificationSchema,
+  publicInterpretationSchema,
   routeValidationSchema,
   scheduleValidationSchema,
   snapshotContentSchema,
@@ -9,6 +12,8 @@ import {
   type FlightCombination,
   type OperationStatus,
   type PublicActivityChoice,
+  type PublicClarification,
+  type PublicConversationMessage,
   type PublicFlightCombination,
   type PublicHotelOffer,
   type PublicMealOffer,
@@ -265,11 +270,13 @@ export async function buildTripProjection(
     created_revision: number;
     allowed_offer_ids: unknown;
     allowed_option_ids: unknown;
+    option_payload: unknown;
     proposal_id: string | null;
     status: PublicPendingDecision["status"];
     checkpoint_id: string | null;
   }>(
-    `SELECT id, kind, created_revision, allowed_offer_ids, allowed_option_ids, proposal_id, status, checkpoint_id
+    `SELECT id, kind, created_revision, allowed_offer_ids, allowed_option_ids, option_payload,
+            proposal_id, status, checkpoint_id
        FROM odft_app.pending_decisions
       WHERE trip_id = $1 AND status = 'pending'
       LIMIT 1`,
@@ -533,6 +540,30 @@ export async function buildTripProjection(
     }
   }
 
+  // Phase 08: persistent conversation (safe projection) and the clarification card.
+  const conversationMessages = await listConversation(pool, tripId, 20);
+  const conversation: PublicConversationMessage[] = conversationMessages.map((message) => {
+    const parsedInterpretation =
+      message.interpretation === null
+        ? undefined
+        : publicInterpretationSchema.safeParse(message.interpretation);
+    return {
+      id: message.id,
+      sequence: message.sequence,
+      role: message.role,
+      content: message.content,
+      interpretation: parsedInterpretation?.success ? parsedInterpretation.data : null,
+      createdAt: message.createdAt,
+    };
+  });
+  const clarification: PublicClarification | null = (() => {
+    if (decisionRow?.kind !== "clarification" || !decisionRow.option_payload) {
+      return null;
+    }
+    const parsed = publicClarificationSchema.safeParse(decisionRow.option_payload);
+    return parsed.success ? parsed.data : null;
+  })();
+
   return {
     trip,
     operations,
@@ -554,6 +585,8 @@ export async function buildTripProjection(
     proposal,
     reservation,
     reservations,
+    conversation,
+    clarification,
     display,
   };
 }

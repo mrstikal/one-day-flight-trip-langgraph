@@ -69,12 +69,18 @@ export {
   routeAfterDetectProgress,
   routeAfterEnsureDomains,
   routeAfterGeneration,
+  routeAfterIntentResult,
   routeAfterLogistics,
   routeAfterResearch,
   routeAfterSchedules,
   routeAfterValidation,
 } from "./travel/graph.js";
 export type { BuildTravelGraphOptions } from "./travel/graph.js";
+export {
+  interpretIntentNode,
+  interpretModificationNode,
+  resolveClarificationNode,
+} from "./nodes/interpret-intent.js";
 export { buildTravelStartInput } from "./travel/start-input.js";
 export type {
   TravelLogisticsResult,

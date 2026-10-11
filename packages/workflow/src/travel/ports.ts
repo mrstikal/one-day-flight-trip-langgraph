@@ -1,5 +1,6 @@
 import type {
   DomainCommand,
+  IntentResult,
   MealSelections,
   RouteValidation,
   ScheduleValidation,
@@ -122,6 +123,24 @@ export interface TravelPorts {
   validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;
   /** Confirmed flight/hotel progress so a preference change resumes at the right step. */
   loadProgress(tripId: string): Promise<TravelProgress>;
+
+  /** Phase 08: interpret one chat message through the configured AI role. */
+  interpretIntent(input: {
+    tripId: string;
+    operationId: string;
+    message: string;
+    /** Admission request id, so a duplicate reuses the stored message/result. */
+    requestId?: string;
+  }): Promise<{ result: IntentResult; mode: "fixture" | "openrouter" }>;
+  /** Phase 08: persist the assistant interpretation card/outcome text. */
+  appendAssistantMessage(input: {
+    tripId: string;
+    operationId: string;
+    content: string;
+    interpretation: unknown;
+  }): Promise<void>;
+  /** Phase 08: read the admitted chat message of an internal `modify` operation. */
+  loadChatMessage(operationId: string): Promise<string | undefined>;
 }
 
 export type { ProposalStatus };

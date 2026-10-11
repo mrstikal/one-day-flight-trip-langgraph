@@ -16,6 +16,11 @@ import { stageSelectionNode } from "../nodes/stage-selection.js";
 import { stageCommandProposalNode } from "../nodes/stage-command-proposal.js";
 import { commitBookingNode } from "../nodes/commit-booking.js";
 import { applyProgramNode } from "../nodes/apply-program.js";
+import {
+  interpretIntentNode,
+  interpretModificationNode,
+  resolveClarificationNode,
+} from "../nodes/interpret-intent.js";
 import { publishSummaryNode } from "../nodes/publish-summary.js";
 
 /**
@@ -58,14 +63,37 @@ export function routeAfterSchedules(state: TravelState): string {
 }
 
 /** A `propose_selection` command skips feasibility and opens a confirmation; a
- * `set_program` command applies the program directly. Everything else first reads
- * the confirmed progress so a preference change resumes at the relevant step. */
+ * `set_program` command applies the program directly; a chat request is
+ * interpreted by the intent role first. Everything else first reads the
+ * confirmed progress so a preference change resumes at the relevant step. */
 export function routeAfterApplyCommands(state: TravelState): string {
+  if (state.commandType === "chat") {
+    return "interpret_intent";
+  }
   if (state.commandType === "propose_selection") {
     return "stage_command_proposal";
   }
   if (state.commandType === "set_program") {
     return "apply_program";
+  }
+  return "detect_progress";
+}
+
+/** Route a validated intent result: unsupported ends, clarification interrupts,
+ * program/proposal commands reuse their existing stages, and preference/search
+ * commands continue through the deterministic progress detection. */
+export function routeAfterIntentResult(state: TravelState): string {
+  if (state.intentStatus === "unsupported") {
+    return "publish_summary";
+  }
+  if (state.intentStatus === "clarification") {
+    return "prepare_decision";
+  }
+  if (state.commandType === "set_program") {
+    return "apply_program";
+  }
+  if (state.commandType === "propose_selection") {
+    return "stage_command_proposal";
   }
   return "detect_progress";
 }
@@ -85,6 +113,10 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "apply_program";
     case "reselection":
       return "prepare_decision";
+    case "clarification_apply":
+      return "resolve_clarification";
+    case "clarification_modify":
+      return "interpret_modification";
     default:
       return "publish_summary";
   }
@@ -132,6 +164,9 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
   const builder = new StateGraph(travelStateSchema)
     .addNode("load_context", loadContextNode)
     .addNode("apply_commands", applyCommandsNode)
+    .addNode("interpret_intent", interpretIntentNode)
+    .addNode("resolve_clarification", resolveClarificationNode)
+    .addNode("interpret_modification", interpretModificationNode)
     .addNode("detect_progress", detectProgressNode)
     .addNode("validate_route", validateRouteNode)
     .addNode("generate_flights", generateFlightsNode)
@@ -150,10 +185,26 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addEdge(START, "load_context")
     .addEdge("load_context", "apply_commands")
     .addConditionalEdges("apply_commands", routeAfterApplyCommands, [
+      "interpret_intent",
       "stage_command_proposal",
       "apply_program",
       "detect_progress",
     ])
+    .addConditionalEdges("interpret_intent", routeAfterIntentResult, [
+      "publish_summary",
+      "prepare_decision",
+      "apply_program",
+      "stage_command_proposal",
+      "detect_progress",
+    ])
+    .addConditionalEdges("resolve_clarification", routeAfterIntentResult, [
+      "publish_summary",
+      "prepare_decision",
+      "apply_program",
+      "stage_command_proposal",
+      "detect_progress",
+    ])
+    .addEdge("interpret_modification", "interpret_intent")
     .addConditionalEdges("detect_progress", routeAfterDetectProgress, [
       "ensure_domains",
       "validate_route",
@@ -178,6 +229,8 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "commit_booking",
       "apply_program",
       "prepare_decision",
+      "resolve_clarification",
+      "interpret_modification",
       "publish_summary",
     ])
     .addEdge("stage_command_proposal", "prepare_decision")

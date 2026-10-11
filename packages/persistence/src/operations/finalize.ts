@@ -30,6 +30,8 @@ export interface WaitingSpec {
   readonly proposalId?: string;
   /** Offer ids a `choose_offer` response may select. */
   readonly allowedOfferIds?: readonly string[];
+  /** Server-side clarification question/labels (jsonb; never raw commands to the client). */
+  readonly optionPayload?: unknown;
 }
 
 async function transitionOperation(
@@ -79,8 +81,8 @@ export async function finalizeWaiting(
     await client.query(
       `INSERT INTO odft_app.pending_decisions
          (id, trip_id, kind, thread_id, graph_version, created_revision, source_fingerprint,
-          proposal_id, allowed_offer_ids, allowed_option_ids, payload_hash, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $7, 'pending')
+          proposal_id, allowed_offer_ids, allowed_option_ids, option_payload, payload_hash, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $7, 'pending')
        ON CONFLICT DO NOTHING`,
       [
         randomUUID(),
@@ -93,9 +95,9 @@ export async function finalizeWaiting(
         spec.proposalId ?? null,
         JSON.stringify(spec.allowedOfferIds ?? []),
         JSON.stringify(spec.allowedOptionIds),
+        JSON.stringify(spec.optionPayload ?? []),
       ],
-    );
-    await client.query(
+    );    await client.query(
       `UPDATE odft_app.trips SET workflow_status = 'waiting_user', updated_at = now() WHERE id = $1`,
       [fence.tripId],
     );
@@ -252,6 +254,23 @@ export async function finalizeConflict(
       await client.query("ROLLBACK");
       return false;
     }
+    // Restore the trip projection: a rejected operation must not leave the trip
+    // stuck in `queued`. It returns to `waiting_user` when a decision is still
+    // pending (the usual pre-Phase-08 case) and to `ready` otherwise (e.g. a chat
+    // command that was admitted while the trip was decision-free).
+    await client.query(
+      `UPDATE odft_app.trips
+          SET workflow_status = CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM odft_app.pending_decisions
+                   WHERE trip_id = $1 AND status = 'pending'
+                ) THEN 'waiting_user'
+                ELSE 'ready'
+              END,
+              updated_at = now()
+        WHERE id = $1`,
+      [fence.tripId],
+    );
     await insertEvent(client, {
       tripId: fence.tripId,
       operationId: fence.operationId,

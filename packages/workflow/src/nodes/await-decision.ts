@@ -17,6 +17,18 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       allowedOfferIds: state.allowedOfferIds,
       proposalId: state.proposalId ?? undefined,
       sourceFingerprint: state.decisionFingerprint ?? undefined,
+      // Clarification option labels are persisted server-side for the projection.
+      ...(kind === "clarification"
+        ? {
+            optionPayload: {
+              question: state.clarificationQuestion,
+              options: state.clarificationOptions.map((option) => ({
+                id: option.id,
+                label: option.label,
+              })),
+            },
+          }
+        : {}),
     },
     { responseSchema: graphResumeEnvelopeSchema },
   );
@@ -88,6 +100,23 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       throw new InvalidUpdateError("recovery accepts one of the offered options");
     }
     return { ...base, lastAction: "choose_option", lastOptionId: response.optionId };
+  }
+  if (kind === "clarification") {
+    if (response.action === "choose_option") {
+      if (!state.allowedOptionIds.includes(response.optionId)) {
+        throw new InvalidUpdateError("the chosen clarification option is not offered");
+      }
+      return { ...base, lastAction: "choose_clarification", lastOptionId: response.optionId };
+    }
+    if (response.action === "modify") {
+      // Worker-constructed only: a browser cannot supply an operation identity.
+      return {
+        ...base,
+        lastAction: "modify",
+        modificationOperationId: response.commandOperationId,
+      };
+    }
+    throw new InvalidUpdateError("clarification accepts choose_option or a modify follow-up");
   }
   return { ...base, lastAction: response.action };
 }

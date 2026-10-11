@@ -17,6 +17,7 @@ import {
 import { buildHarnessGraph, buildTravelGraph, buildTravelStartInput, chooseInvocation, TRAVEL_GRAPH_VERSION } from "@odft/workflow";
 import type { OperationDriver } from "../../../apps/worker/src/driver.js";
 import { createOperationDriver } from "../../../apps/worker/src/driver.js";
+import { createAiService, type AiService } from "../../../apps/worker/src/ai/service.js";
 import { createTravelPortsFactory } from "../../../apps/worker/src/travel/ports.js";
 import { createFixtureSession } from "../../fixtures/session.js";
 import { fixtureCreationInput } from "../../fixtures/trip.js";
@@ -95,8 +96,16 @@ export function createHarnessDriver(pools: WorkerPools): OperationDriver {
   });
 }
 
+/** Fixture-mode AI runtime for the travel graph (no credentials, no network). */
+export function createTestAiService(pools: WorkerPools): AiService {
+  return createAiService({ pool: pools.operations, config: testServerConfig() });
+}
+
 /** Production travel-graph driver over the given worker pools (Phase 06). */
-export function createTravelDriver(pools: WorkerPools): OperationDriver {
+export function createTravelDriver(
+  pools: WorkerPools,
+  ai: AiService = createTestAiService(pools),
+): OperationDriver {
   return createOperationDriver({
     operationsPool: pools.operations,
     guardPool: pools.guard,
@@ -111,7 +120,7 @@ export function createTravelDriver(pools: WorkerPools): OperationDriver {
       }
     },
     buildGraph: (checkpointer) => buildTravelGraph({ checkpointer }) as never,
-    portsFactory: (ctx) => createTravelPortsFactory(pools.operations)(ctx),
+    portsFactory: (ctx) => createTravelPortsFactory(pools.operations, ai)(ctx),
     chooseInvocation: (state, operation, options) =>
       chooseInvocation(state, operation, { ...options, buildStartInput: buildTravelStartInput }),
     buildSaver: () => new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA }),

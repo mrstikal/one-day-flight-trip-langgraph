@@ -62,6 +62,7 @@ export type { InsertTripInput, TripRow } from "./trips.js";
 export {
   getActiveOperation,
   getOperationByRequestId,
+  getOperationPayload,
   insertOperation,
   loadOperationById,
   setOperationStatus,
@@ -208,3 +209,34 @@ export type {
   TripProgress,
   TripResearchResult,
 } from "./scenario/trip-services.js";
+
+/* ---- Phase 08: AI call governance and persistent conversation ---------------- */
+
+export {
+  countTripLlmCalls,
+  formatUsdAmount,
+  parseUsdAmount,
+  sumTripLlmCostUsd,
+  usdFromDb,
+} from "./usd.js";
+
+export {
+  getLlmCall,
+  listTripLlmCalls,
+  markCallUnknown,
+  reconcileUnknownBilling,
+  recordCallResult,
+  reserveCall,
+  type LlmCallRecord,
+  type RecordCallResultInput,
+  type ReserveCallInput,
+  type ReserveCallOutcome,
+} from "./llm-calls.js";
+
+export {
+  appendConversationMessage,
+  latestClarification,
+  listConversation,
+  type AppendMessageInput,
+  type ConversationMessageRecord,
+} from "./conversations.js";

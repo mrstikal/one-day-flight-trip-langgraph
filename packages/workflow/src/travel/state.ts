@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { StateSchema } from "@langchain/langgraph";
 import {
+  clarificationOptionSchema,
   decisionKindSchema,
+  domainCommandSchema,
+  preservableKeySchema,
   routeAlternativeSchema,
   routeReasonEntrySchema,
   routeValidationSchema,
@@ -31,6 +34,8 @@ export const travelGateSchema = z.enum([
   "program_ready",
   "withdrawn",
   "logistics_conflict",
+  "clarification",
+  "chat_done",
 ]);
 export type TravelGate = z.infer<typeof travelGateSchema>;
 
@@ -40,6 +45,8 @@ export const travelStageSchema = z.enum([
   "commit",
   "program",
   "reselection",
+  "clarification_apply",
+  "clarification_modify",
   "end",
 ]);
 export type TravelStage = z.infer<typeof travelStageSchema>;
@@ -52,6 +59,7 @@ export const travelDecisionKindSchema = z.enum([
   "booking_confirmation",
   "replacement_confirmation",
   "recovery",
+  "clarification",
 ]);
 export type TravelDecisionKind = z.infer<typeof travelDecisionKindSchema>;
 
@@ -160,6 +168,18 @@ export const travelStateFields = {
   pendingStage: travelStageSchema.nullable().default(null),
   gate: travelGateSchema.default("pending"),
   lastOutcome: z.string().nullable().default(null),
+
+  // Phase 08: chat intent interpretation and clarification
+  chatMessage: z.string().nullable().default(null),
+  intentStatus: z.enum(["pending", "commands", "clarification", "unsupported"]).default("pending"),
+  intentInterpretation: z.string().nullable().default(null),
+  intentPreserve: z.array(preservableKeySchema).default(() => []),
+  clarificationQuestion: z.string().nullable().default(null),
+  /** Full server-side options (opaque id, label, validated commands). */
+  clarificationOptions: z.array(clarificationOptionSchema).default(() => []),
+  clarificationRequestedCommands: z.array(domainCommandSchema).default(() => []),
+  /** Internal `modify` reference for a free-text follow-up on a clarification. */
+  modificationOperationId: z.string().nullable().default(null),
 };
 
 export const travelStateSchema = new StateSchema(travelStateFields);
@@ -216,4 +236,5 @@ export const DECISION_KIND_FOR_STAGE: Readonly<Record<TravelDecisionKind, Decisi
   booking_confirmation: "booking_confirmation",
   replacement_confirmation: "replacement_confirmation",
   recovery: "recovery",
+  clarification: "clarification",
 };

@@ -9,6 +9,10 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "commit" };
     case "submit_program":
       return { pendingStage: "program" };
+    case "choose_clarification":
+      return { pendingStage: "clarification_apply" };
+    case "modify":
+      return { pendingStage: "clarification_modify" };
     case "choose_option": {
       // Recovery decision: re-open the affected choice step without editing data.
       const kind = state.lastOptionId === "change_meals" ? "program_choices" : "hotel_choice";

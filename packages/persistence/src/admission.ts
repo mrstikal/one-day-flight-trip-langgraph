@@ -222,12 +222,14 @@ export async function admitOperation(
   options: AdmitOperationOptions,
 ): Promise<AdmitOperationResult | ErrorEnvelope> {
   const { tripId, sessionId, request } = options;
-  const payloadHash = contentHash(request.command);
+  const command = "command" in request ? request.command : undefined;
+  const payload = "command" in request ? request.command : { kind: "chat" as const, message: request.chat };
+  const payloadHash = contentHash(request);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    if (isNoOpSetRoute(request.command)) {
+    if (command && isNoOpSetRoute(command)) {
       await client.query("ROLLBACK");
       return error("VALIDATION_FAILED", "set_route must change at least one route field");
     }
@@ -310,7 +312,7 @@ export async function admitOperation(
       payloadHash,
       acceptedRevision: newRevision,
       kind: "command",
-      payload: request.command,
+      payload,
     });
     await client.query(
       `UPDATE odft_app.trips SET revision = $2, workflow_status = 'queued', updated_at = now() WHERE id = $1`,
