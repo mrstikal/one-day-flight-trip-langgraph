@@ -5,7 +5,10 @@ import { applyDecisionNode } from "../../packages/workflow/src/nodes/apply-decis
 import { publishSummaryNode } from "../../packages/workflow/src/nodes/publish-summary.js";
 import { prepareDecisionNode } from "../../packages/workflow/src/nodes/prepare-decision.js";
 import {
+  routeAfterApplyCommands,
   routeAfterApplyDecision,
+  routeAfterCommit,
+  routeAfterLogistics,
   routeAfterSchedules,
   routeAfterValidation,
 } from "../../packages/workflow/src/travel/graph.js";
@@ -51,6 +54,13 @@ describe("load_context reset (P1-3)", () => {
     expect(update.snapshotId).toBeNull();
     expect(update.gate).toBe("pending");
     expect(update.tripLoaded).toBe(true);
+    // Phase 07 reset
+    expect(update.bookingService).toBeNull();
+    expect(update.domainsEnsured).toBe(false);
+    expect(update.researchStatus).toBe("pending");
+    expect(update.hotelOfferIds).toEqual([]);
+    expect(update.activityIds).toEqual([]);
+    expect(update.programApplied).toBe(false);
   });
 });
 
@@ -69,6 +79,43 @@ describe("reject_proposal -> reselection (P2-6)", () => {
     expect(applyDecisionNode(state({ lastAction: "confirm_booking" })).pendingStage).toBe("commit");
     expect(applyDecisionNode(state({ lastAction: "choose_offer" })).pendingStage).toBe("stage");
   });
+
+  it("submit_program applies the program; rejecting a hotel returns to hotel choice (Phase 07)", () => {
+    expect(applyDecisionNode(state({ lastAction: "submit_program" })).pendingStage).toBe("program");
+    const rejected = applyDecisionNode(
+      state({ lastAction: "reject_proposal", bookingService: "hotel" }),
+    );
+    expect(rejected.pendingStage).toBe("reselection");
+    expect(rejected.nextDecisionKind).toBe("hotel_choice");
+    expect(rejected.proposalId).toBeNull();
+
+    // An optional meal reservation is standalone: rejecting it ends the run.
+    const mealRejected = applyDecisionNode(
+      state({ lastAction: "reject_proposal", bookingService: "dinner" }),
+    );
+    expect(mealRejected.pendingStage).toBe("end");
+  });
+});
+
+describe("prepare_decision phase 07 kinds", () => {
+  it("offers hotel ids for hotel_choice and meal ids/activities for program_choices", () => {
+    const hotel = prepareDecisionNode(
+      state({ nextDecisionKind: "hotel_choice", hotelOfferIds: ["h1", "h2"] }),
+    );
+    expect(hotel.decisionKind).toBe("hotel_choice");
+    expect(hotel.allowedOfferIds).toEqual(["h1", "h2"]);
+
+    const program = prepareDecisionNode(
+      state({
+        nextDecisionKind: "program_choices",
+        mealOfferIds: { breakfast: ["b1"], lunch: ["l1"], dinner: ["d1"] },
+        activityIds: ["a1", "a2"],
+      }),
+    );
+    expect(program.decisionKind).toBe("program_choices");
+    expect(program.allowedOfferIds).toEqual(["b1", "l1", "d1"]);
+    expect(program.allowedOptionIds).toEqual(["a1", "a2"]);
+  });
 });
 
 describe("publish_summary structured outcomes (P2-9)", () => {
@@ -81,6 +128,15 @@ describe("publish_summary structured outcomes (P2-9)", () => {
     );
     expect(publishSummaryNode(state({ gate: "booked" })).lastOutcome).toBe("success");
   });
+
+  it("maps a logistics conflict and a staged replacement (Phase 07)", () => {
+    expect(publishSummaryNode(state({ gate: "logistics_conflict" })).lastOutcome).toBe(
+      "logistics_conflict",
+    );
+    expect(
+      publishSummaryNode(state({ gate: "program_ready", replacementStaged: true })).lastOutcome,
+    ).toBe("replacement_pending");
+  });
 });
 
 describe("routers", () => {
@@ -88,6 +144,37 @@ describe("routers", () => {
     expect(routeAfterValidation(state({ routeStatus: "INFEASIBLE" }))).toBe("publish_summary");
     expect(routeAfterValidation(state({ routeStatus: "FEASIBLE" }))).toBe("generate_flights");
     expect(routeAfterSchedules(state({ scheduleStatus: "NO_VALID_OFFERS" }))).toBe(
+      "publish_summary",
+    );
+  });
+
+  it("revalidates schedules before research after a domain extension (Phase 07)", () => {
+    expect(
+      routeAfterSchedules(
+        state({ scheduleStatus: "VALID", domainsEnsured: true, researchStatus: "pending" }),
+      ),
+    ).toBe("research_services");
+    expect(routeAfterSchedules(state({ scheduleStatus: "VALID" }))).toBe("prepare_decision");
+  });
+
+  it("routes a propose_selection command to a staged confirmation (Phase 07)", () => {
+    expect(routeAfterApplyCommands(state({ commandType: "propose_selection" }))).toBe(
+      "stage_command_proposal",
+    );
+    expect(routeAfterApplyCommands(state({ commandType: "set_route" }))).toBe("validate_route");
+  });
+
+  it("routes confirmed bookings by service and program actions to logistics (Phase 07)", () => {
+    expect(routeAfterCommit(state({ bookingService: "flights" }))).toBe("ensure_domains");
+    expect(routeAfterCommit(state({ bookingService: "hotel" }))).toBe(
+      "validate_selected_logistics",
+    );
+    expect(routeAfterApplyDecision(state({ pendingStage: "program" }))).toBe("apply_program");
+    expect(
+      routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: "program_choices" })),
+    ).toBe("prepare_decision");
+    expect(routeAfterLogistics(state({ logisticsStatus: "conflict" }))).toBe("publish_summary");
+    expect(routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: null }))).toBe(
       "publish_summary",
     );
   });

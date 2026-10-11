@@ -1,12 +1,18 @@
 import type { Pool } from "pg";
-import { BookingService } from "@odft/domain";
+import { BookingService, fingerprint } from "@odft/domain";
 import {
   applyTripCommand,
   evaluateAndPersistRoute,
   getTrip,
   materializeFlightSnapshot,
+  planProgramSelections,
   PostgresBookingStore,
+  recordPreferredActivities,
+  researchTripServices,
+  ScenarioService,
+  upsertProgramSelections,
   validateAndPersistSchedules,
+  validateTripLogistics,
   type OperationFencingContext,
 } from "@odft/persistence";
 import type { TravelPorts } from "@odft/workflow";
@@ -14,13 +20,18 @@ import { createFencedRunEffect } from "../driver.js";
 
 /**
  * Build the production travel-graph ports for one claimed operation. All access
- * to reference data, scenario generation, the two feasibility stages, and the
- * booking service is wired here so the graph node stays orchestration-only.
+ * to reference data, scenario generation, the two feasibility stages, the Phase
+ * 07 service research/program logic, and the booking service is wired here so the
+ * graph nodes stay orchestration-only.
  */
+
+const PHASE07_DOMAINS = ["hotels", "breakfast", "lunch", "dinner", "activities"] as const;
+
 export function createTravelPortsFactory(
   pool: Pool,
 ): (ctx: OperationFencingContext) => TravelPorts {
   const booking = new BookingService(new PostgresBookingStore(pool));
+  const scenarios = new ScenarioService(pool);
   return (ctx: OperationFencingContext): TravelPorts => ({
     now: () => new Date(),
     runEffect: createFencedRunEffect(pool, ctx),
@@ -95,6 +106,53 @@ export function createTravelPortsFactory(
         acceptedDemoDisclaimer: true,
         fencingToken: ctx.fencingToken,
       });
+    },
+
+    async ensureDomains(tripId) {
+      const manifest = await scenarios.ensureDomains(tripId, [...PHASE07_DOMAINS]);
+      return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
+    },
+
+    async researchServices(tripId) {
+      return researchTripServices(pool, tripId);
+    },
+
+    async applyProgram(input) {
+      const plan = await planProgramSelections(pool, {
+        tripId: input.tripId,
+        mealSelections: input.mealSelections,
+      });
+      for (const replacement of plan.replacements) {
+        const trip = await getTrip(pool, input.tripId);
+        if (!trip) {
+          throw new Error(`trip ${input.tripId} not found while staging a meal replacement`);
+        }
+        await booking.propose({
+          tripId: input.tripId,
+          sessionId: trip.sessionId,
+          service: replacement.serviceKey,
+          offerId: replacement.offerId,
+          operationId: input.operationId,
+          sourceFingerprint: fingerprint({
+            kind: "replacement_confirmation",
+            tripId: input.tripId,
+            operationId: input.operationId,
+            service: replacement.serviceKey,
+            offerId: replacement.offerId,
+          }),
+          fencingToken: ctx.fencingToken,
+        });
+      }
+      await upsertProgramSelections(pool, input.tripId, plan.selections);
+      await recordPreferredActivities(pool, {
+        tripId: input.tripId,
+        preferredActivityIds: input.preferredActivityIds,
+      });
+      return { applied: true, replacementStaged: plan.replacements.length > 0 };
+    },
+
+    async validateSelectedLogistics(input) {
+      return validateTripLogistics(pool, input.tripId);
     },
   });
 }

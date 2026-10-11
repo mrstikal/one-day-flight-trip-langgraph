@@ -31,7 +31,8 @@ export default async function SummaryPage({
     notFound();
   }
 
-  const { trip, reservation } = projection;
+  const { trip, reservations } = projection;
+  const activeReservations = reservations.filter((row) => row.status === "confirmed");
 
   return (
     <div className="flex flex-col gap-8">
@@ -44,17 +45,27 @@ export default async function SummaryPage({
         </p>
       </header>
 
-      {reservation ? (
-        <section className="flex flex-col gap-3 rounded border border-teal bg-paper p-6">
-          <h2 className="text-xl text-teal">Flights</h2>
-          <dl className="grid grid-cols-2 gap-2 text-sm">
-            <dt className="text-ink-muted">Reference</dt>
-            <dd className="font-mono font-semibold">{reservation.demoReference}</dd>
-            <dt className="text-ink-muted">Status</dt>
-            <dd>{reservation.status}</dd>
-            <dt className="text-ink-muted">Party total</dt>
-            <dd>{formatEuroMinor(reservation.partyTotalMinor)}</dd>
-          </dl>
+      {activeReservations.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-xl text-teal">Confirmed simulated reservations</h2>
+          <ul className="flex flex-col gap-3">
+            {activeReservations.map((reservation) => (
+              <li
+                key={reservation.id}
+                className="flex flex-col gap-2 rounded border border-teal bg-paper p-4"
+              >
+                <h3 className="text-base capitalize">{reservation.serviceKey}</h3>
+                <dl className="grid grid-cols-2 gap-2 text-sm">
+                  <dt className="text-ink-muted">Reference</dt>
+                  <dd className="font-mono font-semibold">{reservation.demoReference}</dd>
+                  <dt className="text-ink-muted">Status</dt>
+                  <dd>{reservation.status}</dd>
+                  <dt className="text-ink-muted">Party total</dt>
+                  <dd>{formatEuroMinor(reservation.partyTotalMinor)}</dd>
+                </dl>
+              </li>
+            ))}
+          </ul>
           <p role="note" className="text-sm text-clay">
             {CONFIRMATION_DISCLAIMER}
           </p>

@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { admitResume, applyTripCommand, createTrip, getPendingDecisionForTrip, TripCommandError } from "@odft/persistence";
+import {
+  admitResume,
+  applyTripCommand,
+  createTrip,
+  getPendingDecisionForTrip,
+  TripCommandError,
+} from "@odft/persistence";
 import { createFixtureSession } from "../../fixtures/session.js";
 import { fixtureCreationInput } from "../../fixtures/trip.js";
 import {
@@ -100,9 +106,11 @@ describe("travel graph (real PostgreSQL)", () => {
       `SELECT workflow_status FROM odft_app.trips WHERE id = $1`,
       [tripId],
     );
-    expect(trip.rows[0]?.workflow_status).toBe("ready");
+    // Phase 07: a confirmed flight no longer ends the run; it continues into
+    // hotel research and the hotel-choice decision.
+    expect(trip.rows[0]?.workflow_status).toBe("waiting_user");
     state = await readTravelState(pools, tripId);
-    expect(state.values.gate).toBe("booked");
+    expect(state.values.gate).toBe("hotels_ready");
     expect(String(state.values.demoReference)).toMatch(/^DEMO-FLT-[0-9A-F]{20}$/);
 
     const reservations = await pool.query<{ count: string; demo_reference: string }>(
@@ -112,6 +120,10 @@ describe("travel graph (real PostgreSQL)", () => {
     );
     expect(reservations.rows[0]?.count).toBe("1");
     expect(reservations.rows[0]?.demo_reference).toBe(state.values.demoReference);
+
+    const hotelChoice = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(hotelChoice?.kind).toBe("hotel_choice");
+    expect((hotelChoice?.allowedOfferIds ?? []).length).toBeGreaterThanOrEqual(1);
 
     // P1-2: changing the route after a confirmed reservation is refused, not
     // silently applied (which would desync the summary from the booking).

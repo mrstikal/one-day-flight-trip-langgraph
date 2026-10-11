@@ -3,9 +3,13 @@ import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
 
 /**
- * Commit the booked flight reservation exactly once. The domain service is
- * keyed by `(operation, proposal)` and returns the existing reservation on a
- * replay, so no duplicate `DEMO-FLT-` reference can be created.
+ * Commit the confirmed reservation exactly once (flights, hotel, or a meal). The
+ * domain service is keyed by `(operation, proposal)` and returns the existing
+ * reservation on a replay, so no duplicate `DEMO-*` reference can be created.
+ *
+ * The booked service determines the next decision: after flights the run
+ * continues into hotel research, after the hotel it opens program choices, and an
+ * optional meal reservation ends the run.
  */
 export async function commitBookingNode(
   state: TravelState,
@@ -15,6 +19,7 @@ export async function commitBookingNode(
   if (!proposalId || !state.lastDecisionId) {
     throw new InvalidUpdateError("commit_booking requires a proposal and a decision");
   }
+  const service = state.bookingService ?? "flights";
   const ports = travelPorts(runtime);
   const result = await ports.confirm({
     tripId: state.tripId,
@@ -22,11 +27,15 @@ export async function commitBookingNode(
     proposalId,
     decisionId: state.lastDecisionId,
     acceptedRevision: state.acceptedRevision,
-    confirmationKey: `confirm:${state.operationId}:${proposalId}`,
+    confirmationKey: `confirm:${service}:${state.operationId}:${proposalId}`,
   });
+  const nextDecisionKind =
+    service === "flights" ? "hotel_choice" : service === "hotel" ? "program_choices" : null;
   return {
     reservationId: result.reservationId,
     demoReference: result.demoReference,
     gate: "booked",
+    bookingService: service,
+    ...(nextDecisionKind ? { nextDecisionKind } : { nextDecisionKind: null }),
   };
 }

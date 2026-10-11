@@ -5,23 +5,32 @@ import { applyCommandsNode } from "../nodes/apply-commands.js";
 import { validateRouteNode } from "../nodes/validate-route.js";
 import { generateFlightsNode } from "../nodes/generate-flights.js";
 import { validateSchedulesNode } from "../nodes/validate-schedules.js";
+import { ensureDomainsNode } from "../nodes/ensure-domains.js";
+import { researchServicesNode } from "../nodes/research-services.js";
+import { validateSelectedLogisticsNode } from "../nodes/validate-selected-logistics.js";
 import { prepareDecisionNode } from "../nodes/prepare-decision.js";
 import { awaitDecisionNode } from "../nodes/await-decision.js";
 import { applyDecisionNode } from "../nodes/apply-decision.js";
 import { stageSelectionNode } from "../nodes/stage-selection.js";
+import { stageCommandProposalNode } from "../nodes/stage-command-proposal.js";
 import { commitBookingNode } from "../nodes/commit-booking.js";
+import { applyProgramNode } from "../nodes/apply-program.js";
 import { publishSummaryNode } from "../nodes/publish-summary.js";
 
 /**
- * Production travel graph (Phase 06 section 6).
+ * Production travel graph (Phase 06-07).
  *
- * START -> load_context -> apply_commands -> validate_route ->
- *   (FEASIBLE) generate_flights -> validate_schedules ->
- *     (VALID) prepare_decision -> await_decision -> apply_decision ->
- *       choose_offer -> stage_selection -> prepare_decision -> await_decision
- *       confirm_booking -> commit_booking -> publish_summary -> END
- *       otherwise -> publish_summary -> END
- *   (rejected / no schedule) -> publish_summary -> END
+ * START -> load_context -> apply_commands ->
+ *   propose_selection -> stage_command_proposal -> prepare_decision
+ *   else -> validate_route -> (FEASIBLE) generate_flights -> validate_schedules
+ *     -> (VALID) prepare_decision -> await_decision -> apply_decision ->
+ *          choose_offer -> stage_selection -> prepare_decision ...
+ *          confirm_booking -> commit_booking ->
+ *              flights -> ensure_domains -> research_services -> prepare_decision ...
+ *              else -> validate_selected_logistics -> ...
+ *          submit_program -> apply_program -> validate_selected_logistics ->
+ *              publish_summary -> END
+ *     (rejected / no schedule) -> publish_summary -> END
  *
  * Stage A/B validation is independent and deterministic; the graph never calls
  * an LLM. Domain truth is read and written through the invocation ports.
@@ -36,7 +45,20 @@ export function routeAfterGeneration(state: TravelState): string {
 }
 
 export function routeAfterSchedules(state: TravelState): string {
-  return state.scheduleStatus === "VALID" ? "prepare_decision" : "publish_summary";
+  if (state.scheduleStatus !== "VALID") {
+    return "publish_summary";
+  }
+  // After a Phase 07 domain extension the snapshot version changes, so the
+  // schedule validation must be rebound before any non-flight confirmation.
+  if (state.domainsEnsured && state.researchStatus === "pending") {
+    return "research_services";
+  }
+  return "prepare_decision";
+}
+
+/** A `propose_selection` command skips feasibility and opens a confirmation. */
+export function routeAfterApplyCommands(state: TravelState): string {
+  return state.commandType === "propose_selection" ? "stage_command_proposal" : "validate_route";
 }
 
 export function routeAfterApplyDecision(state: TravelState): string {
@@ -45,11 +67,40 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "stage_selection";
     case "commit":
       return "commit_booking";
+    case "program":
+      return "apply_program";
     case "reselection":
       return "prepare_decision";
     default:
       return "publish_summary";
   }
+}
+
+/** After a confirmed booking: flights continue to hotel research, others to logistics. */
+export function routeAfterCommit(state: TravelState): string {
+  return state.bookingService === "flights" ? "ensure_domains" : "validate_selected_logistics";
+}
+
+/** After materialization, revalidate Stage B against the extended snapshot. */
+export function routeAfterEnsureDomains(): string {
+  return "validate_schedules";
+}
+
+/** After research, offer the hotel choice. */
+export function routeAfterResearch(): string {
+  return "prepare_decision";
+}
+
+/** Program application always runs the deterministic logistics check next. */
+export function routeAfterApplyProgram(): string {
+  return "validate_selected_logistics";
+}
+
+export function routeAfterLogistics(state: TravelState): string {
+  if (state.logisticsStatus === "conflict") {
+    return "publish_summary";
+  }
+  return state.nextDecisionKind === "program_choices" ? "prepare_decision" : "publish_summary";
 }
 
 export interface BuildTravelGraphOptions {
@@ -63,15 +114,23 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addNode("validate_route", validateRouteNode)
     .addNode("generate_flights", generateFlightsNode)
     .addNode("validate_schedules", validateSchedulesNode)
+    .addNode("ensure_domains", ensureDomainsNode)
+    .addNode("research_services", researchServicesNode)
+    .addNode("validate_selected_logistics", validateSelectedLogisticsNode)
     .addNode("prepare_decision", prepareDecisionNode)
     .addNode("await_decision", awaitDecisionNode)
     .addNode("apply_decision", applyDecisionNode)
+    .addNode("stage_command_proposal", stageCommandProposalNode)
     .addNode("stage_selection", stageSelectionNode)
     .addNode("commit_booking", commitBookingNode)
+    .addNode("apply_program", applyProgramNode)
     .addNode("publish_summary", publishSummaryNode)
     .addEdge(START, "load_context")
     .addEdge("load_context", "apply_commands")
-    .addEdge("apply_commands", "validate_route")
+    .addConditionalEdges("apply_commands", routeAfterApplyCommands, [
+      "stage_command_proposal",
+      "validate_route",
+    ])
     .addConditionalEdges("validate_route", routeAfterValidation, [
       "generate_flights",
       "publish_summary",
@@ -82,6 +141,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     ])
     .addConditionalEdges("validate_schedules", routeAfterSchedules, [
       "prepare_decision",
+      "research_services",
       "publish_summary",
     ])
     .addEdge("prepare_decision", "await_decision")
@@ -89,11 +149,23 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addConditionalEdges("apply_decision", routeAfterApplyDecision, [
       "stage_selection",
       "commit_booking",
+      "apply_program",
       "prepare_decision",
       "publish_summary",
     ])
+    .addEdge("stage_command_proposal", "prepare_decision")
     .addEdge("stage_selection", "prepare_decision")
-    .addEdge("commit_booking", "publish_summary")
+    .addConditionalEdges("commit_booking", routeAfterCommit, [
+      "ensure_domains",
+      "validate_selected_logistics",
+    ])
+    .addConditionalEdges("ensure_domains", routeAfterEnsureDomains, ["validate_schedules"])
+    .addConditionalEdges("research_services", routeAfterResearch, ["prepare_decision"])
+    .addConditionalEdges("apply_program", routeAfterApplyProgram, ["validate_selected_logistics"])
+    .addConditionalEdges("validate_selected_logistics", routeAfterLogistics, [
+      "prepare_decision",
+      "publish_summary",
+    ])
     .addEdge("publish_summary", END);
 
   return builder.compile({ checkpointer: options.checkpointer });

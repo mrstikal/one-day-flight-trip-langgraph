@@ -12,8 +12,14 @@ export function publishSummaryNode(state: TravelState): TravelUpdate {
   if (state.gate === "no_schedule") {
     return { lastOutcome: "no_feasible_schedule" };
   }
+  if (state.gate === "logistics_conflict") {
+    return { lastOutcome: "logistics_conflict" };
+  }
   if (state.gate === "withdrawn") {
     return { lastOutcome: "withdrawn" };
+  }
+  if (state.replacementStaged) {
+    return { lastOutcome: "replacement_pending" };
   }
   return { lastOutcome: "success" };
 }

@@ -1,5 +1,6 @@
 import type {
   DomainCommand,
+  MealSelections,
   RouteValidation,
   ScheduleValidation,
   ReservationResult,
@@ -25,6 +26,35 @@ export interface TravelMaterializedFlights {
   readonly snapshotId: string;
 }
 
+/** Deterministic, serial Phase 07 service research result (no LLM at this stage). */
+export interface TravelResearchResult {
+  readonly status: "ok" | "partial";
+  readonly hotelOfferIds: string[];
+  readonly mealOfferIds: {
+    readonly breakfast: string[];
+    readonly lunch: string[];
+    readonly dinner: string[];
+  };
+  readonly activityIds: string[];
+  /** Deterministic default meal offer per meal (null dinner = deterministic no-slot). */
+  readonly mealDefaults: {
+    readonly breakfast: string | null;
+    readonly lunch: string | null;
+    readonly dinner: string | null;
+  };
+  readonly dinnerNotIncludedReason: string | null;
+}
+
+export interface TravelProgramResult {
+  readonly applied: boolean;
+  readonly replacementStaged: boolean;
+}
+
+export interface TravelLogisticsResult {
+  readonly status: "valid" | "conflict";
+  readonly reason: string | null;
+}
+
 export interface TravelPorts {
   now(): Date;
   /**
@@ -42,10 +72,7 @@ export interface TravelPorts {
   }): Promise<{ routeChanged: boolean }>;
   evaluateRoute(tripId: string): Promise<RouteValidation>;
   materializeFlights(tripId: string): Promise<TravelMaterializedFlights | undefined>;
-  validateSchedules(input: {
-    tripId: string;
-    snapshotId: string;
-  }): Promise<ScheduleValidation>;
+  validateSchedules(input: { tripId: string; snapshotId: string }): Promise<ScheduleValidation>;
   propose(input: {
     tripId: string;
     operationId: string;
@@ -61,6 +88,20 @@ export interface TravelPorts {
     acceptedRevision: number;
     confirmationKey: string;
   }): Promise<ReservationResult>;
+
+  /** Phase 07: idempotently materialize hotels/breakfast/lunch/dinner/activities. */
+  ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;
+  /** Phase 07: deterministic serial provider research over the active snapshot. */
+  researchServices(tripId: string): Promise<TravelResearchResult>;
+  /** Phase 07: apply a `submit_program` selection without moving bookings. */
+  applyProgram(input: {
+    tripId: string;
+    operationId: string;
+    mealSelections: MealSelections;
+    preferredActivityIds: string[];
+  }): Promise<TravelProgramResult>;
+  /** Phase 07: deterministic hotel/airport transfer and confirmed-meal window check. */
+  validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;
 }
 
 export type { ProposalStatus };

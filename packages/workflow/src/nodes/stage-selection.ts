@@ -1,12 +1,16 @@
 import { InvalidUpdateError } from "@langchain/langgraph";
 import { fingerprint } from "@odft/domain";
+import type { BookableKey } from "@odft/contracts";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
 
 /**
- * Stage the flight selection as a review-only proposal and bind the upcoming
- * booking confirmation to it. The proposal's source fingerprint is derived
- * deterministically so the pending decision row and the proposal agree.
+ * Stage the chosen offer as a review-only proposal and bind the upcoming booking
+ * confirmation to it. The proposal's source fingerprint is derived
+ * deterministically so the pending-decision row and the proposal agree.
+ *
+ * The service comes from `bookingService` (flights/hotel/meal), so the same node
+ * serves flight, hotel, and per-meal selections without duplicating guards.
  */
 export async function stageSelectionNode(
   state: TravelState,
@@ -16,13 +20,15 @@ export async function stageSelectionNode(
   if (!offerId) {
     throw new InvalidUpdateError("stage_selection requires a chosen offer");
   }
-  if (!state.validCombinationIds.includes(offerId)) {
-    throw new InvalidUpdateError("chosen offer is not among the validated combinations");
+  if (!state.allowedOfferIds.includes(offerId)) {
+    throw new InvalidUpdateError("the chosen offer is not among the offered ids");
   }
+  const service: BookableKey = state.bookingService ?? "flights";
   const sourceFingerprint = fingerprint({
     kind: "booking_confirmation",
     tripId: state.tripId,
     operationId: state.operationId,
+    service,
     offerId,
     snapshotId: state.snapshotId,
   });
@@ -32,7 +38,7 @@ export async function stageSelectionNode(
   const proposal = await ports.propose({
     tripId: state.tripId,
     operationId: state.operationId,
-    service: "flights",
+    service,
     offerId,
     sourceFingerprint,
   });
@@ -41,5 +47,6 @@ export async function stageSelectionNode(
     selectedOfferId: offerId,
     decisionFingerprint: sourceFingerprint,
     nextDecisionKind: "booking_confirmation",
+    bookingService: service,
   };
 }

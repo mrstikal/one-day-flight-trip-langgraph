@@ -1,14 +1,20 @@
 import { z } from "zod";
 import {
+  activityCategorySchema,
+  activityTagSchema,
   bookableKeySchema,
+  mealSchema,
   proposalStatusSchema,
   reservationStatusSchema,
   scheduleReasonSchema,
+  serviceLevelSchema,
   travelVariantSchema,
 } from "./enums.js";
 import { routeAlternativeSchema, routeReasonEntrySchema } from "./feasibility.js";
 import {
+  coordinatesSchema,
   instantSchema,
+  localDateSchema,
   moneyMinorSchema,
   nonEmptyStringSchema,
   timeZoneSchema,
@@ -124,3 +130,107 @@ export const tripDisplaySchema = z
   })
   .strict();
 export type TripDisplay = z.infer<typeof tripDisplaySchema>;
+
+/* ---- Phase 07 hotel/meal/program projections -------------------------------- */
+
+export const publicHotelOfferSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    level: serviceLevelSchema,
+    name: nonEmptyStringSchema,
+    date: localDateSchema,
+    nights: z.number().int().min(1).max(7),
+    adults: z.number().int().min(1).max(6),
+    rooms: z.number().int().min(1).max(6),
+    perNightMinor: moneyMinorSchema,
+    partyTotalMinor: moneyMinorSchema,
+    rating: z.number().min(0).max(5),
+    anchor: coordinatesSchema,
+    centerDistanceKm: z.number().nonnegative(),
+    luggageStorage: z.boolean(),
+    checkInWindow: nonEmptyStringSchema,
+    checkOutWindow: nonEmptyStringSchema,
+    synthetic: z.literal(true),
+    demoLabels: z.array(nonEmptyStringSchema),
+  })
+  .strict();
+export type PublicHotelOffer = z.infer<typeof publicHotelOfferSchema>;
+
+export const publicMealOfferSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    meal: mealSchema,
+    level: serviceLevelSchema,
+    name: nonEmptyStringSchema,
+    cuisine: nonEmptyStringSchema,
+    perAdultMinor: moneyMinorSchema,
+    partyTotalMinor: moneyMinorSchema,
+    durationMinutes: z.number().int().min(15).max(240),
+    windowStart: nonEmptyStringSchema,
+    windowEnd: nonEmptyStringSchema,
+    anchor: coordinatesSchema,
+    centerDistanceKm: z.number().nonnegative(),
+    synthetic: z.literal(true),
+    demoLabels: z.array(nonEmptyStringSchema),
+  })
+  .strict();
+export type PublicMealOffer = z.infer<typeof publicMealOfferSchema>;
+
+export const publicActivityChoiceSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    kind: z.enum(["landmark", "generic"]),
+    name: nonEmptyStringSchema,
+    cityId: nonEmptyStringSchema,
+    category: activityCategorySchema,
+    tags: z.array(activityTagSchema),
+    durationMinutes: z.number().int().min(10).max(240),
+    ticketMinorPerAdult: moneyMinorSchema,
+    reference: z.boolean(),
+    demoLabels: z.array(nonEmptyStringSchema),
+  })
+  .strict();
+export type PublicActivityChoice = z.infer<typeof publicActivityChoiceSchema>;
+
+/** Effective service level plus whether it comes from an explicit override. */
+export const publicServiceLevelStateSchema = z
+  .object({
+    level: serviceLevelSchema,
+    inherited: z.boolean(),
+  })
+  .strict();
+export type PublicServiceLevelState = z.infer<typeof publicServiceLevelStateSchema>;
+
+export const publicProgramChoicesSchema = z
+  .object({
+    mealDefaults: z
+      .object({
+        breakfast: nonEmptyStringSchema,
+        lunch: nonEmptyStringSchema,
+        dinner: nonEmptyStringSchema.nullable(),
+      })
+      .strict(),
+    /** Persisted program meal choices (null when not selected yet). */
+    selectedMeals: z
+      .object({
+        breakfast: nonEmptyStringSchema.nullable(),
+        lunch: nonEmptyStringSchema.nullable(),
+        dinner: nonEmptyStringSchema.nullable(),
+      })
+      .strict(),
+    /** Deterministic reason dinner is optional (null), or null when a slot exists. */
+    dinnerNotIncludedReason: nonEmptyStringSchema.nullable(),
+    activities: z.array(publicActivityChoiceSchema),
+  })
+  .strict();
+export type PublicProgramChoices = z.infer<typeof publicProgramChoicesSchema>;
+
+export const publicServiceLevelsSchema = z
+  .object({
+    hotel: publicServiceLevelStateSchema,
+    breakfast: publicServiceLevelStateSchema,
+    lunch: publicServiceLevelStateSchema,
+    dinner: publicServiceLevelStateSchema,
+  })
+  .strict();
+export type PublicServiceLevels = z.infer<typeof publicServiceLevelsSchema>;

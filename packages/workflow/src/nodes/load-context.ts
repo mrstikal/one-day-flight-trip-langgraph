@@ -8,10 +8,7 @@ import { travelPorts } from "../travel/runtime.js";
  * command would inherit the previous decision/proposal/reservation and could open
  * a stale `booking_confirmation` instead of a fresh `flight_choice`.
  */
-export async function loadContextNode(
-  state: TravelState,
-  runtime: unknown,
-): Promise<TravelUpdate> {
+export async function loadContextNode(state: TravelState, runtime: unknown): Promise<TravelUpdate> {
   const ports = travelPorts(runtime);
   const context = await ports.loadTrip(state.tripId);
   if (!context) {
@@ -36,6 +33,8 @@ export async function loadContextNode(
     decisionFingerprint: null,
     proposalId: null,
     allowedOfferIds: [],
+    allowedOptionIds: [],
+    bookingService: null,
     // Decision results
     selectedOfferId: null,
     lastAction: null,
@@ -45,6 +44,20 @@ export async function loadContextNode(
     // Booking
     reservationId: null,
     demoReference: null,
+    // Phase 07 research/program state
+    domainsEnsured: false,
+    researchStatus: "pending",
+    hotelOfferIds: [],
+    mealOfferIds: { breakfast: [], lunch: [], dinner: [] },
+    activityIds: [],
+    programDefaults: { breakfast: null, lunch: null, dinner: null },
+    dinnerNotIncludedReason: null,
+    submittedMealSelections: null,
+    submittedActivityIds: [],
+    programApplied: false,
+    replacementStaged: false,
+    logisticsStatus: "pending",
+    logisticsReason: null,
     pendingStage: null,
     gate: "pending",
     lastOutcome: null,

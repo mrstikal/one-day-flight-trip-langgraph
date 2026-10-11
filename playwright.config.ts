@@ -10,6 +10,9 @@ const BASE_URL = "http://127.0.0.1:3000";
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
+  // Each spec spawns its own worker process; serializing specs avoids CPU/DB
+  // contention between concurrent worker processes (flaky under parallelism).
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: [["list"]],

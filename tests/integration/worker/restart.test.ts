@@ -154,22 +154,17 @@ describe("worker restart across processes (travel graph)", () => {
       });
       expect("operationId" in confirmed).toBe(true);
 
-      // Third process: commit the booking to completion.
+      // Third process: commit the booking and continue into Phase 07 hotel
+      // research, stopping at the hotel-choice interrupt.
       const third = spawnWorker();
       try {
-        await waitFor(async () => {
-          const result = await pools.operations.query<{ workflow_status: string }>(
-            `SELECT workflow_status FROM odft_app.trips WHERE id = $1`,
-            [tripId],
-          );
-          return result.rows[0]?.workflow_status === "ready" ? result.rows[0] : undefined;
-        });
+        await waitForDecisionKind(pools, tripId, "hotel_choice");
       } finally {
         await killWorker(third);
       }
 
       const finalState = await readTravelState(pools, tripId);
-      expect(finalState.values.gate).toBe("booked");
+      expect(finalState.values.gate).toBe("hotels_ready");
 
       const reservations = await pools.operations.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM odft_app.reservations

@@ -17,8 +17,8 @@ import {
  * PostgreSQL and is read through the invocation ports.
  */
 
-export const TRAVEL_SCHEMA_VERSION = "travel-state-v1";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v1";
+export const TRAVEL_SCHEMA_VERSION = "travel-state-v2";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v2";
 
 export const travelGateSchema = z.enum([
   "pending",
@@ -27,12 +27,40 @@ export const travelGateSchema = z.enum([
   "flights_ready",
   "awaiting_booking",
   "booked",
+  "hotels_ready",
+  "program_ready",
   "withdrawn",
+  "logistics_conflict",
 ]);
 export type TravelGate = z.infer<typeof travelGateSchema>;
 
-export const travelStageSchema = z.enum(["flight_decision", "stage", "commit", "reselection", "end"]);
+export const travelStageSchema = z.enum([
+  "flight_decision",
+  "stage",
+  "commit",
+  "program",
+  "reselection",
+  "end",
+]);
 export type TravelStage = z.infer<typeof travelStageSchema>;
+
+/** Decision kinds the production travel graph can present to the user. */
+export const travelDecisionKindSchema = z.enum([
+  "flight_choice",
+  "hotel_choice",
+  "program_choices",
+  "booking_confirmation",
+]);
+export type TravelDecisionKind = z.infer<typeof travelDecisionKindSchema>;
+
+export const travelBookingServiceSchema = z.enum([
+  "flights",
+  "hotel",
+  "breakfast",
+  "lunch",
+  "dinner",
+]);
+export type TravelBookingService = z.infer<typeof travelBookingServiceSchema>;
 
 /** The admitted command payload (creation input or a domain command). */
 export const travelCommandSchema = z.unknown().default(null);
@@ -68,10 +96,13 @@ export const travelStateFields = {
 
   // Pending decision descriptor
   decisionKind: decisionKindSchema.nullable().default(null),
-  nextDecisionKind: z.enum(["flight_choice", "booking_confirmation"]).default("flight_choice"),
+  nextDecisionKind: travelDecisionKindSchema.nullable().default("flight_choice"),
   decisionFingerprint: z.string().nullable().default(null),
   proposalId: z.string().nullable().default(null),
   allowedOfferIds: z.array(z.string().min(1)).default(() => []),
+  allowedOptionIds: z.array(z.string().min(1)).default(() => []),
+  /** Service a staged proposal / upcoming confirmation belongs to. */
+  bookingService: travelBookingServiceSchema.nullable().default(null),
 
   // Decision results
   selectedOfferId: z.string().nullable().default(null),
@@ -83,6 +114,40 @@ export const travelStateFields = {
   // Booking
   reservationId: z.string().nullable().default(null),
   demoReference: z.string().nullable().default(null),
+
+  // Phase 07: hotel/meal/program research + program choices
+  domainsEnsured: z.boolean().default(false),
+  researchStatus: z.enum(["pending", "ok", "partial"]).default("pending"),
+  hotelOfferIds: z.array(z.string().min(1)).default(() => []),
+  mealOfferIds: z
+    .object({
+      breakfast: z.array(z.string().min(1)).default(() => []),
+      lunch: z.array(z.string().min(1)).default(() => []),
+      dinner: z.array(z.string().min(1)).default(() => []),
+    })
+    .default(() => ({ breakfast: [], lunch: [], dinner: [] })),
+  activityIds: z.array(z.string().min(1)).default(() => []),
+  programDefaults: z
+    .object({
+      breakfast: z.string().nullable().default(null),
+      lunch: z.string().nullable().default(null),
+      dinner: z.string().nullable().default(null),
+    })
+    .default(() => ({ breakfast: null, lunch: null, dinner: null })),
+  dinnerNotIncludedReason: z.string().nullable().default(null),
+  submittedMealSelections: z
+    .object({
+      breakfast: z.string().min(1),
+      lunch: z.string().min(1),
+      dinner: z.string().min(1).nullable(),
+    })
+    .nullable()
+    .default(null),
+  submittedActivityIds: z.array(z.string().min(1)).default(() => []),
+  programApplied: z.boolean().default(false),
+  replacementStaged: z.boolean().default(false),
+  logisticsStatus: z.enum(["pending", "valid", "conflict"]).default("pending"),
+  logisticsReason: z.string().nullable().default(null),
 
   pendingStage: travelStageSchema.nullable().default(null),
   gate: travelGateSchema.default("pending"),
@@ -136,9 +201,9 @@ export function scheduleValidationToState(result: z.infer<typeof scheduleValidat
   };
 }
 
-export const DECISION_KIND_FOR_STAGE: Readonly<
-  Record<"flight_choice" | "booking_confirmation", DecisionKind>
-> = {
+export const DECISION_KIND_FOR_STAGE: Readonly<Record<TravelDecisionKind, DecisionKind>> = {
   flight_choice: "flight_choice",
+  hotel_choice: "hotel_choice",
+  program_choices: "program_choices",
   booking_confirmation: "booking_confirmation",
 };

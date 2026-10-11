@@ -6,11 +6,19 @@ import { uuidSchema } from "./primitives.js";
 import { tripSummarySchema } from "./operations.js";
 import {
   flightGatingSchema,
+  publicHotelOfferSchema,
+  publicMealOfferSchema,
+  publicProgramChoicesSchema,
   publicProposalSchema,
   publicReservationSchema,
+  publicServiceLevelsSchema,
   tripDisplaySchema,
 } from "./projection.js";
-import { admissionAcceptedSchema, commandRequestSchema, creationInputSchema } from "./operations.js";
+import {
+  admissionAcceptedSchema,
+  commandRequestSchema,
+  creationInputSchema,
+} from "./operations.js";
 
 /** API request/response envelopes shared by the BFF and future handlers. */
 
@@ -94,10 +102,14 @@ export const tripProjectionSchema = z
     operations: z.array(operationStatusResponseSchema),
     pendingDecision: publicPendingDecisionSchema.nullable(),
     flights: flightGatingSchema,
+    hotel: z.array(publicHotelOfferSchema),
+    meals: z.array(publicMealOfferSchema),
+    program: publicProgramChoicesSchema.nullable(),
+    serviceLevels: publicServiceLevelsSchema,
     proposal: publicProposalSchema.nullable(),
     reservation: publicReservationSchema.nullable(),
+    reservations: z.array(publicReservationSchema),
     display: tripDisplaySchema,
   })
   .strict();
 export type TripProjection = z.infer<typeof tripProjectionSchema>;
-

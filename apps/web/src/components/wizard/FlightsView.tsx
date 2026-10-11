@@ -81,7 +81,11 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
   );
 
   const submitResponse = useCallback(
-    async (decisionId: string, revision: number, response: PublicDecisionResponse): Promise<void> => {
+    async (
+      decisionId: string,
+      revision: number,
+      response: PublicDecisionResponse,
+    ): Promise<void> => {
       setBusy(true);
       setActionError(undefined);
       try {
@@ -143,7 +147,10 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     return <StatusPanel message="Loading your trip…" />;
   }
 
-  const { flights, pendingDecision, proposal, reservation } = projection;
+  const { flights, pendingDecision, proposal, reservations } = projection;
+  const confirmedFlight = reservations.find(
+    (row) => row.serviceKey === "flights" && row.status === "confirmed",
+  );
 
   const failedOperation = [...projection.operations]
     .reverse()
@@ -203,7 +210,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     );
   }
 
-  if (pendingDecision?.kind === "booking_confirmation") {
+  if (pendingDecision?.kind === "booking_confirmation" && proposal?.serviceKey === "flights") {
     const proposalUsable = proposal !== null && proposal.status === "proposed" && !proposal.expired;
     if (!proposalUsable) {
       return wrap(
@@ -326,11 +333,16 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     );
   }
 
-  if (reservation && !pendingDecision) {
+  if (confirmedFlight) {
     return (
       <div className="flex flex-col gap-6">
         {stalenessBanner}
-        <SuccessPanel demoReference={reservation.demoReference} tripId={tripId} />
+        <SuccessPanel demoReference={confirmedFlight.demoReference} tripId={tripId} />
+        <p className="text-sm">
+          <Link href={`/trips/${tripId}/hotel`} className="underline">
+            Continue to hotel selection
+          </Link>
+        </p>
         <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
           {DEMO_DISCLAIMER}
         </p>

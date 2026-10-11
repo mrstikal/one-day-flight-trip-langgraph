@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { hasOverride, nightsForVariant, resolveEffectiveLevel } from "@odft/domain";
 import {
   routeValidationSchema,
   scheduleValidationSchema,
@@ -7,13 +8,21 @@ import {
   workflowStatusSchema,
   type FlightCombination,
   type OperationStatus,
+  type PublicActivityChoice,
   type PublicFlightCombination,
+  type PublicHotelOffer,
+  type PublicMealOffer,
   type PublicPendingDecision,
+  type PublicProgramChoices,
   type PublicProposal,
   type PublicReservation,
+  type PublicServiceLevels,
   type OperationStatusResponse,
+  type ServiceKey,
+  type SnapshotContent,
   type TripDisplay,
   type TripProjection,
+  type TripPreferences,
   type TripSummary,
 } from "@odft/contracts";
 
@@ -108,6 +117,94 @@ function toPublicFlight(flight: FlightCombination): PublicFlightCombination {
     inboundTravelMinutes: directionMinutes(flight.inbound),
     totalTravelMinutes: totalMinutes(flight),
     demoLabels: flight.demoLabels,
+  };
+}
+
+function toPublicHotel(hotel: SnapshotContent["hotels"][number]): PublicHotelOffer {
+  return {
+    id: hotel.id,
+    level: hotel.level,
+    name: hotel.name,
+    date: hotel.date,
+    nights: hotel.nights,
+    adults: hotel.adults,
+    rooms: hotel.rooms,
+    perNightMinor: hotel.perNightMinor,
+    partyTotalMinor: hotel.partyTotalMinor,
+    rating: hotel.rating,
+    anchor: {
+      lat: hotel.anchor.lat,
+      lon: hotel.anchor.lon,
+      ...(hotel.anchor.precisionMeters !== undefined
+        ? { precisionMeters: hotel.anchor.precisionMeters }
+        : {}),
+    },
+    centerDistanceKm: hotel.centerDistanceKm,
+    luggageStorage: hotel.luggageStorage,
+    checkInWindow: hotel.checkInWindow,
+    checkOutWindow: hotel.checkOutWindow,
+    synthetic: true,
+    demoLabels: hotel.demoLabels,
+  };
+}
+
+function toPublicMeal(offer: SnapshotContent["restaurants"][number]): PublicMealOffer {
+  return {
+    id: offer.id,
+    meal: offer.meal,
+    level: offer.level,
+    name: offer.name,
+    cuisine: offer.cuisine,
+    perAdultMinor: offer.perAdultMinor,
+    partyTotalMinor: offer.partyTotalMinor,
+    durationMinutes: offer.durationMinutes,
+    windowStart: offer.windowStart,
+    windowEnd: offer.windowEnd,
+    anchor: {
+      lat: offer.anchor.lat,
+      lon: offer.anchor.lon,
+      ...(offer.anchor.precisionMeters !== undefined
+        ? { precisionMeters: offer.anchor.precisionMeters }
+        : {}),
+    },
+    centerDistanceKm: offer.centerDistanceKm,
+    synthetic: true,
+    demoLabels: offer.demoLabels,
+  };
+}
+
+function toPublicActivity(activity: SnapshotContent["activities"][number]): PublicActivityChoice {
+  return {
+    id: activity.id,
+    kind: activity.kind,
+    name: activity.name,
+    cityId: activity.cityId,
+    category: activity.category,
+    tags: activity.tags,
+    durationMinutes: activity.durationMinutes,
+    ticketMinorPerAdult: activity.ticketMinorPerAdult,
+    reference: activity.reference,
+    demoLabels: activity.demoLabels,
+  };
+}
+
+function pickDefaultId(offers: readonly PublicMealOffer[]): string | null {
+  if (offers.length === 0) {
+    return null;
+  }
+  return (
+    [...offers].sort((a, b) => a.partyTotalMinor - b.partyTotalMinor || a.id.localeCompare(b.id))[0]
+      ?.id ?? null
+  );
+}
+
+function levelState(
+  preferences: TripPreferences,
+  service: ServiceKey,
+): PublicServiceLevels["hotel"] {
+  return {
+    level: resolveEffectiveLevel(preferences, service),
+    inherited: !hasOverride(preferences, service),
   };
 }
 
@@ -251,9 +348,7 @@ export async function buildTripProjection(
     const parsed = inventory ? snapshotContentSchema.safeParse(inventory) : undefined;
     if (parsed?.success) {
       const valid = new Set(validCombinationIds);
-      offers = parsed.data.flights
-        .filter((flight) => valid.has(flight.id))
-        .map(toPublicFlight);
+      offers = parsed.data.flights.filter((flight) => valid.has(flight.id)).map(toPublicFlight);
     }
   }
 
@@ -314,6 +409,103 @@ export async function buildTripProjection(
       }
     : null;
 
+  const allReservationsResult = await pool.query<{
+    id: string;
+    service_key: PublicReservation["serviceKey"];
+    offer_id: string;
+    status: PublicReservation["status"];
+    demo_reference: string;
+    party_total_minor: number;
+    created_at: string;
+  }>(
+    `SELECT id, service_key, offer_id, status, demo_reference, party_total_minor, created_at::text AS created_at
+       FROM odft_app.reservations
+      WHERE trip_id = $1
+      ORDER BY created_at ASC`,
+    [tripId],
+  );
+  const reservations: PublicReservation[] = allReservationsResult.rows.map((row) => ({
+    id: row.id,
+    serviceKey: row.service_key,
+    offerId: row.offer_id,
+    status: row.status,
+    demoReference: row.demo_reference,
+    partyTotalMinor: row.party_total_minor,
+    createdAt: new Date(row.created_at).toISOString(),
+  }));
+
+  // Persisted program meal selections (safe ids only).
+  const selectionResult = await pool.query<{ service_key: string; offer_id: string }>(
+    `SELECT service_key, offer_id FROM odft_app.trip_selections
+      WHERE trip_id = $1 AND service_key IN ('breakfast','lunch','dinner')`,
+    [tripId],
+  );
+  const selectedByMeal = new Map<string, string>(
+    selectionResult.rows.map((row) => [row.service_key, row.offer_id]),
+  );
+
+  // Phase 07: hotel/meal offers, effective levels, and program choices.
+  const serviceLevels: PublicServiceLevels = {
+    hotel: levelState(trip.preferences, "hotel"),
+    breakfast: levelState(trip.preferences, "breakfast"),
+    lunch: levelState(trip.preferences, "lunch"),
+    dinner: levelState(trip.preferences, "dinner"),
+  };
+  let hotel: PublicHotelOffer[] = [];
+  let meals: PublicMealOffer[] = [];
+  let program: PublicProgramChoices | null = null;
+  if (row.active_scenario_snapshot_id) {
+    const snapshotResult = await pool.query<{ inventory: unknown }>(
+      `SELECT inventory FROM odft_app.scenario_snapshots WHERE id = $1`,
+      [row.active_scenario_snapshot_id],
+    );
+    const inventory = snapshotResult.rows[0]?.inventory;
+    const parsed = inventory ? snapshotContentSchema.safeParse(inventory) : undefined;
+    if (parsed?.success) {
+      const content = parsed.data;
+      const nights = nightsForVariant(trip.travelVariant);
+      hotel = content.hotels
+        .filter(
+          (offer) =>
+            offer.level === serviceLevels.hotel.level &&
+            offer.adults === trip.adults &&
+            offer.nights === nights,
+        )
+        .map(toPublicHotel);
+      meals = content.restaurants
+        .filter(
+          (offer) =>
+            offer.level === serviceLevels[offer.meal].level &&
+            content.context.adults === trip.adults,
+        )
+        .map(toPublicMeal);
+      const activities = content.activities
+        .filter((activity) => activity.cityId === trip.destinationCityId)
+        .map(toPublicActivity);
+      const breakfastOffers = meals.filter((offer) => offer.meal === "breakfast");
+      const lunchOffers = meals.filter((offer) => offer.meal === "lunch");
+      const dinnerOffers = meals.filter((offer) => offer.meal === "dinner");
+      const defaultBreakfast = pickDefaultId(breakfastOffers);
+      const defaultLunch = pickDefaultId(lunchOffers);
+      if (activities.length > 0 && defaultBreakfast && defaultLunch) {
+        program = {
+          mealDefaults: {
+            breakfast: defaultBreakfast,
+            lunch: defaultLunch,
+            dinner: pickDefaultId(dinnerOffers),
+          },
+          selectedMeals: {
+            breakfast: selectedByMeal.get("breakfast") ?? null,
+            lunch: selectedByMeal.get("lunch") ?? null,
+            dinner: selectedByMeal.get("dinner") ?? null,
+          },
+          dinnerNotIncludedReason: null,
+          activities,
+        };
+      }
+    }
+  }
+
   return {
     trip,
     operations,
@@ -328,8 +520,13 @@ export async function buildTripProjection(
       offers,
       oneNightAvailable: scheduleStatus === "VALID" && trip.travelVariant === "one_night",
     },
+    hotel,
+    meals,
+    program,
+    serviceLevels,
     proposal,
     reservation,
+    reservations,
     display,
   };
 }

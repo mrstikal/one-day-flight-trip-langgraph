@@ -165,3 +165,20 @@ export type { UpsertFaultInput } from "./scenario/faults.js";
 
 export { applyTripCommand, TripCommandError } from "./trip-commands.js";
 export type { ApplyTripCommandResult } from "./trip-commands.js";
+
+export {
+  dinnerSlotAvailable,
+  planProgramSelections,
+  recordPreferredActivities,
+  researchTripServices,
+  ServiceSelectionError,
+  upsertProgramSelections,
+  validateTripLogistics,
+} from "./scenario/trip-services.js";
+export type {
+  ProgramPlan,
+  ProgramSelection,
+  ResearchMeal,
+  TripLogisticsResult,
+  TripResearchResult,
+} from "./scenario/trip-services.js";

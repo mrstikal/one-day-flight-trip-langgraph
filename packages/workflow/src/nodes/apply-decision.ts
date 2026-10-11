@@ -7,15 +7,31 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "stage" };
     case "confirm_booking":
       return { pendingStage: "commit" };
-    case "reject_proposal":
-      // Return to flight selection with the same validated combinations.
+    case "submit_program":
+      return { pendingStage: "program" };
+    case "reject_proposal": {
+      // An optional meal reservation is a standalone review: rejecting it ends the
+      // run. Flight/hotel rejections return to that service's choice step.
+      const service = state.bookingService;
+      if (service === "breakfast" || service === "lunch" || service === "dinner") {
+        return {
+          pendingStage: "end",
+          bookingService: null,
+          proposalId: null,
+          selectedOfferId: null,
+          decisionFingerprint: null,
+        };
+      }
+      const kind = service === "hotel" ? "hotel_choice" : "flight_choice";
       return {
         pendingStage: "reselection",
-        nextDecisionKind: "flight_choice",
+        nextDecisionKind: kind,
         proposalId: null,
         selectedOfferId: null,
         decisionFingerprint: null,
+        bookingService: null,
       };
+    }
     default:
       return { pendingStage: "end" };
   }
