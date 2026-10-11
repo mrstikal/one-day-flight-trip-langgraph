@@ -12,21 +12,46 @@ import {
  * Deterministic semantic validation of model intent output
  * (04-domain-model.md section 6 / 10-security section 6).
  *
- * A model result is a proposal: membership, duplicate/conflicting writes, and
- * `preserve` conflicts are checked here before any command executes. A conflict
- * converts the whole request into the clarification form before partial execution.
+ * A model result is a proposal: membership, duplicate/conflicting writes,
+ * `preserve` conflicts, and the sightseeing-date window are checked here before
+ * any command executes. A conflict converts the whole request into the
+ * clarification form before partial execution; inside a clarification option a
+ * conflicting variant is dropped (the option list must stay executable).
  */
 
 export interface AuthorizedIntentContext {
   readonly knownCityIds: readonly string[];
   readonly knownAirportIds: readonly string[];
   readonly knownOfferIds: readonly string[];
+  /** Activity ids that exist in the trip's active snapshot. */
+  readonly knownActivityIds: readonly string[];
+  /** Restaurant offer ids that exist in the trip's active snapshot. */
+  readonly knownRestaurantIds: readonly string[];
+  /** Server clock date, so a model cannot set a past/too-distant sightseeing date. */
+  readonly todayIsoDate: string;
   readonly currentActivityCounts: Partial<Record<ActivityTag, number>>;
 }
 
 /** Re-parse model output into the canonical persisted union (structural subset). */
 export function toCanonicalIntentResult(result: ModelFacingIntentResult): IntentResult {
   return intentResultSchema.parse(result);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function addDays(isoDate: string, days: number): string {
+  const parsed = Date.parse(`${isoDate}T00:00:00.000Z`);
+  return new Date(parsed + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** Mirrors the BFF sightseeing-date window (today +2 .. today +365). */
+export function isWithinSightseeingWindow(sightseeingDate: string, todayIsoDate: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sightseeingDate)) {
+    return false;
+  }
+  return (
+    sightseeingDate >= addDays(todayIsoDate, 2) && sightseeingDate <= addDays(todayIsoDate, 365)
+  );
 }
 
 function writesKeys(command: DomainCommand): PreservableKey[] {
@@ -39,6 +64,11 @@ function writesKeys(command: DomainCommand): PreservableKey[] {
       return [command.service];
     case "propose_selection":
       return [command.service];
+    case "set_program":
+      // A program stages meal selections/replacements for the meals it carries.
+      return (["breakfast", "lunch", "dinner"] as const).filter(
+        (meal) => command.mealOfferIds[meal] !== undefined,
+      );
     default:
       return [];
   }
@@ -82,9 +112,57 @@ function membershipIssue(
     if (command.destinationCityId && !context.knownCityIds.includes(command.destinationCityId)) {
       return `destination city ${command.destinationCityId} is not an admitted reference`;
     }
+    if (
+      command.sightseeingDate &&
+      !isWithinSightseeingWindow(command.sightseeingDate, context.todayIsoDate)
+    ) {
+      return `sightseeing date ${command.sightseeingDate} is outside the allowed window`;
+    }
   }
   if (command.type === "propose_selection" && !context.knownOfferIds.includes(command.offerId)) {
     return `offer ${command.offerId} is not an authorized offer for this trip`;
+  }
+  if (command.type === "set_program") {
+    for (const meal of ["breakfast", "lunch", "dinner"] as const) {
+      const offerId = command.mealOfferIds[meal];
+      // `null` is the explicit "meal not included" choice, not a reference.
+      if (offerId !== undefined && offerId !== null && !context.knownRestaurantIds.includes(offerId)) {
+        return `meal offer ${offerId} is not an admitted restaurant for this trip`;
+      }
+    }
+    for (const activityId of command.preferredActivityIds) {
+      if (!context.knownActivityIds.includes(activityId)) {
+        return `activity ${activityId} is not an admitted activity for this trip`;
+      }
+    }
+  }
+  return undefined;
+}
+
+type Conflict =
+  | { readonly kind: "duplicate"; readonly group: readonly DomainCommand[] }
+  | { readonly kind: "preserve"; readonly keys: readonly PreservableKey[]; readonly command: DomainCommand };
+
+/** Duplicate writes to the same field, or a write to a `preserve`d service. */
+function detectConflict(
+  commands: readonly DomainCommand[],
+  preserve: readonly PreservableKey[],
+): Conflict | undefined {
+  const byField = new Map<string, DomainCommand[]>();
+  for (const command of commands) {
+    const key = fieldKey(command);
+    byField.set(key, [...(byField.get(key) ?? []), command]);
+  }
+  for (const group of byField.values()) {
+    if (group.length > 1) {
+      return { kind: "duplicate", group };
+    }
+  }
+  for (const command of commands) {
+    const offending = writesKeys(command).filter((key) => preserve.includes(key));
+    if (offending.length > 0) {
+      return { kind: "preserve", keys: offending, command };
+    }
   }
   return undefined;
 }
@@ -92,20 +170,56 @@ function membershipIssue(
 function conflictToClarification(
   commands: DomainCommand[],
   preserve: PreservableKey[],
-  question: string,
-  options: ClarificationOption[],
+  conflict: Conflict,
 ): IntentResult {
+  if (conflict.kind === "duplicate") {
+    const first = conflict.group[0];
+    const last = conflict.group[conflict.group.length - 1];
+    if (!first || !last) {
+      return unsupported("The request could not be turned into supported choices.");
+    }
+    return intentResultSchema.parse({
+      kind: "clarification",
+      question: "The request sets the same preference twice. Which value should be kept?",
+      requestedCommands: commands,
+      preserve,
+      options: [
+        { id: "keep_first", label: "Keep the first value", commands: [first] },
+        { id: "keep_last", label: "Keep the last value", commands: [last] },
+      ],
+    });
+  }
+  const kept = commands.filter((candidate) => candidate !== conflict.command);
+  const alternatives: DomainCommand[] =
+    conflict.command.type === "propose_selection" && conflict.command.service !== "flights"
+      ? [
+          ...kept,
+          {
+            type: "find_alternatives",
+            target: conflict.command.service,
+            objective: "match_preferences",
+          },
+        ]
+      : kept;
+  const searchable = alternatives !== kept;
   return intentResultSchema.parse({
     kind: "clarification",
-    question,
+    question: `This request changes ${conflict.keys.join(" and ")}, which you asked to keep. What should happen?`,
     requestedCommands: commands,
     preserve,
-    options: options.slice(0, 4),
+    options: [
+      { id: "keep_preserved", label: `Keep ${conflict.keys.join(" and ")} unchanged`, commands: kept },
+      {
+        id: "apply_change",
+        label: searchable ? "Review supported alternatives" : "Use the graphical controls instead",
+        commands: alternatives,
+      },
+    ],
   });
 }
 
-function optionLabelList(options: readonly string[]): string {
-  return options.join(" and ");
+function unsupported(explanation: string): IntentResult {
+  return intentResultSchema.parse({ kind: "unsupported", explanation });
 }
 
 /**
@@ -128,112 +242,45 @@ export function validateIntentSemantics(
 
   const commands = result.commands;
   if (commands.length === 0) {
-    return intentResultSchema.parse({
-      kind: "unsupported",
-      explanation: "No supported change was recognized; use the graphical controls.",
-    });
+    return unsupported("No supported change was recognized; use the graphical controls.");
   }
 
-  // Membership: foreign references are rejected before domain execution.
+  // Membership: foreign or out-of-window references are rejected before execution.
   for (const command of commands) {
     const issue = membershipIssue(command, context);
     if (issue) {
       const kept = commands.filter((candidate) => candidate !== command);
-      // Offer a real search when the offending command names a service; a route
-      // conflict can only be resolved through the graphical controls.
       const alternatives: DomainCommand[] =
         command.type === "propose_selection" && command.service !== "flights"
           ? [
               ...kept,
-              {
-                type: "find_alternatives",
-                target: command.service,
-                objective: "match_preferences",
-              },
+              { type: "find_alternatives", target: command.service, objective: "match_preferences" },
             ]
           : kept;
-      return conflictToClarification(
-        commands,
-        result.preserve,
-        `${issue}. Keep the current choice, or review supported alternatives?`,
-        [
-          {
-            id: "keep_current",
-            label: "Keep the current choice",
-            commands: kept,
-          },
+      return intentResultSchema.parse({
+        kind: "clarification",
+        question: `${issue}. Keep the current choice, or review supported alternatives?`,
+        requestedCommands: commands,
+        preserve: result.preserve,
+        options: [
+          { id: "keep_current", label: "Keep the current choice", commands: kept },
           {
             id: "search_alternatives",
             label:
-              command.type === "propose_selection" && command.service !== "flights"
+              alternatives !== kept
                 ? "Review supported alternatives"
                 : "Use the graphical controls instead",
             commands: alternatives,
           },
         ],
-      );
+      });
     }
   }
 
-  // Duplicate/conflicting writes to the same field.
-  const byField = new Map<string, DomainCommand[]>();
-  for (const command of commands) {
-    const key = fieldKey(command);
-    byField.set(key, [...(byField.get(key) ?? []), command]);
+  const conflict = detectConflict(commands, result.preserve);
+  if (conflict) {
+    return conflictToClarification(commands, result.preserve, conflict);
   }
-  for (const [, group] of byField) {
-    if (group.length > 1) {
-      const first = group[0];
-      const last = group[group.length - 1];
-      if (!first || !last) {
-        continue;
-      }
-      return conflictToClarification(
-        commands,
-        result.preserve,
-        "The request sets the same preference twice. Which value should be kept?",
-        [
-          {
-            id: "keep_first",
-            label: "Keep the first value",
-            commands: [first],
-          },
-          {
-            id: "keep_last",
-            label: "Keep the last value",
-            commands: [last],
-          },
-        ],
-      );
-    }
-  }
-
-  // `preserve` conflicts: a command must not silently change a preserved service.
-  for (const command of commands) {
-    const written = writesKeys(command);
-    const offending = written.filter((key) => result.preserve.includes(key));
-    if (offending.length > 0) {
-      const kept = commands.filter((candidate) => candidate !== command);
-      return conflictToClarification(
-        commands,
-        result.preserve,
-        `This request changes ${optionLabelList(offending)}, which you asked to keep. What should happen?`,
-        [
-          {
-            id: "keep_preserved",
-            label: `Keep ${optionLabelList(offending)} unchanged`,
-            commands: kept,
-          },
-          {
-            id: "apply_change",
-            label: `Change ${optionLabelList(offending)} as requested`,
-            commands: commands,
-          },
-        ],
-      );
-    }
-  }
-
   return result;
 }
 
@@ -246,7 +293,10 @@ function validateClarification(
     const valid = option.commands.every(
       (command) => membershipIssue(command, context) === undefined,
     );
-    if (!valid) {
+    // A variant with conflicting writes would apply "last value wins" silently, so
+    // it is dropped here exactly like the direct commands branch would clarify it.
+    const conflicting = detectConflict(option.commands, result.preserve) !== undefined;
+    if (!valid || conflicting) {
       continue;
     }
     sanitized.push({
@@ -257,11 +307,9 @@ function validateClarification(
     });
   }
   if (sanitized.length < 2 || sanitized.length > 4) {
-    return intentResultSchema.parse({
-      kind: "unsupported",
-      explanation:
-        "The request could not be turned into two or more supported choices; use the graphical controls.",
-    });
+    return unsupported(
+      "The request could not be turned into two or more supported choices; use the graphical controls.",
+    );
   }
   return intentResultSchema.parse({
     kind: "clarification",

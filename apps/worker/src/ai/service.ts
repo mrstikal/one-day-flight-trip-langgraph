@@ -2,12 +2,15 @@ import type { Pool } from "pg";
 import {
   AdapterError,
   buildCompactContext,
+  CAPABILITY_CACHE_TTL_MS,
+  DEFAULT_CONTEXT_BUDGET,
   FixtureAdapter,
   formatUsd,
   intentRole,
   loadCapabilityManifest,
   loadRoleProfiles,
   OpenRouterAdapter,
+  resolveAiConfigPath,
   validateIntentSemantics,
   worstCaseCostUsd,
   type AuthorizedIntentContext,
@@ -17,11 +20,15 @@ import {
   type LLMAdapter,
 } from "@odft/ai";
 import {
+  domainCommandSchema,
   intentResultSchema,
   modelFacingIntentResultSchema,
+  preservableKeySchema,
   snapshotContentSchema,
   tripPreferencesSchema,
+  type DomainCommand,
   type IntentResult,
+  type PreservableKey,
   type RoleProfile,
   type RoleProfiles,
   type TripRecord,
@@ -31,10 +38,10 @@ import {
   getTrip,
   listConversation,
   markCallUnknown,
-  readEffect,
+  readEffectFenced,
   recordCallResult,
   reserveCall,
-  writeEffect,
+  writeEffectFenced,
   type ServerConfig,
 } from "@odft/persistence";
 
@@ -51,6 +58,8 @@ export interface AiService {
   interpret(input: {
     readonly tripId: string;
     readonly operationId: string;
+    /** Fencing token of the claiming worker; every write verifies it. */
+    readonly fencingToken: string;
     readonly message: string;
     /** Driver abort signal (shutdown/lease loss), forwarded to the transport. */
     readonly signal?: AbortSignal;
@@ -68,8 +77,14 @@ function usdString(value: number): string {
   return formatUsd(BigInt(Math.ceil(value * 1e9)));
 }
 
+/** Resolve the config (cwd, then repo root) so worker and root scripts agree. */
+function resolvedConfigPath(config: ServerConfig): string | undefined {
+  return config.aiConfigPath ? resolveAiConfigPath(config.aiConfigPath) : undefined;
+}
+
 function capabilityCachePath(config: ServerConfig): string {
-  return config.aiConfigPath ? `${config.aiConfigPath}.capabilities.json` : ".ai/capabilities.json";
+  const resolved = resolvedConfigPath(config);
+  return resolved ? `${resolved}.capabilities.json` : ".ai/capabilities.json";
 }
 
 interface InterpretDeps {
@@ -92,11 +107,24 @@ async function loadIntentSource(
       WHERE city_id = $1 ORDER BY airport_id LIMIT 50`,
     [trip.destinationCityId],
   );
-  const selections = await pool.query<{ service_key: string; offer_id: string }>(
-    `SELECT service_key, offer_id FROM odft_app.trip_selections
-      WHERE trip_id = $1 AND service_key NOT IN ('activities','events')`,
+  const selections = await pool.query<{
+    service_key: string;
+    offer_id: string;
+    confirmed: boolean;
+  }>(
+    `SELECT s.service_key, s.offer_id,
+            EXISTS (
+              SELECT 1 FROM odft_app.reservations r
+               WHERE r.trip_id = s.trip_id AND r.service_key = s.service_key AND r.status = 'confirmed'
+            ) AS confirmed
+       FROM odft_app.trip_selections s
+      WHERE s.trip_id = $1 AND s.service_key NOT IN ('activities','events')`,
     [trip.id],
   );
+  // Authoritative id sets for set_program membership (snapshot-wide, uncapped).
+  const snapshotContent = await loadSnapshotContent(pool, trip.id);
+  const knownActivityIds = snapshotContent?.activities.map((activity) => activity.id) ?? [];
+  const knownRestaurantIds = snapshotContent?.restaurants.map((restaurant) => restaurant.id) ?? [];
   const validCombinations = trip.currentScheduleValidationId
     ? await pool.query<{ result: unknown }>(
         `SELECT result FROM odft_app.schedule_validations WHERE id = $1`,
@@ -131,16 +159,41 @@ async function loadIntentSource(
     ...validIds,
   ].slice(0, 50);
 
+  const offerPrices = new Map<string, number>();
+  const offerLevels = new Map<string, "budget" | "standard" | "luxury">();
+  if (snapshotContent) {
+    for (const offer of [...snapshotContent.hotels, ...snapshotContent.restaurants]) {
+      offerPrices.set(offer.id, offer.partyTotalMinor);
+      offerLevels.set(offer.id, offer.level);
+    }
+  }
+
   return {
     message,
     userName: userNameResult.rows[0]?.user_name ?? "Traveler",
+    today: new Date().toISOString().slice(0, 10),
+    route: {
+      originAirportId: trip.originAirportId,
+      destinationCityId: trip.destinationCityId,
+      destinationCountryKey: trip.destinationCountryKey,
+      sightseeingDate: trip.sightseeingDate,
+      travelVariant: trip.travelVariant,
+    },
     preferences: tripPreferencesSchema.parse(trip.preferences),
+    ...(pending?.kind === "clarification"
+      ? {
+          pendingClarification: await loadPendingClarification(pool, pending),
+        }
+      : {}),
     selectedServices: selections.rows
       .filter((row) => row.service_key !== "activities" && row.service_key !== "events")
       .slice(0, 7)
       .map((row) => ({
         service: row.service_key as CompactContextSource["selectedServices"][number]["service"],
         offerId: row.offer_id,
+        confirmed: row.confirmed,
+        ...(offerPrices.has(row.offer_id) ? { partyTotalMinor: offerPrices.get(row.offer_id) } : {}),
+        ...(offerLevels.has(row.offer_id) ? { level: offerLevels.get(row.offer_id) } : {}),
       })),
     currentActivityCounts: await loadActivityCounts(pool, trip.id),
     pendingDecisionKind: pending?.kind ?? null,
@@ -158,7 +211,67 @@ async function loadIntentSource(
     knownCityIds: cities.rows.map((row) => row.id),
     knownAirportIds,
     knownOfferIds,
+    knownActivityIds,
+    knownRestaurantIds,
   };
+}
+
+/** Active-snapshot content (activities/restaurants) for membership and prices. */
+async function loadSnapshotContent(
+  pool: Pool,
+  tripId: string,
+): Promise<ReturnType<typeof snapshotContentSchema.parse> | undefined> {
+  const result = await pool.query<{ inventory: unknown }>(
+    `SELECT s.inventory FROM odft_app.scenario_snapshots s
+       JOIN odft_app.trips t ON t.active_scenario_snapshot_id = s.id
+      WHERE t.id = $1`,
+    [tripId],
+  );
+  if (!result.rows[0]?.inventory) {
+    return undefined;
+  }
+  const parsed = snapshotContentSchema.safeParse(result.rows[0].inventory);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** The typed pending clarification, so a follow-up can refer to its options. */
+async function loadPendingClarification(
+  pool: Pool,
+  pending: { id: string },
+): Promise<CompactContextSource["pendingClarification"]> {
+  const result = await pool.query<{ option_payload: unknown }>(
+    `SELECT option_payload FROM odft_app.pending_decisions WHERE id = $1`,
+    [pending.id],
+  );
+  const payload = result.rows[0]?.option_payload as
+    | { question?: unknown; options?: unknown; requestedCommands?: unknown; preserve?: unknown }
+    | undefined;
+  if (!payload || typeof payload.question !== "string" || !Array.isArray(payload.options)) {
+    return null;
+  }
+  const options = payload.options
+    .map((option) => {
+      const record = option as { id?: unknown; label?: unknown };
+      return typeof record.id === "string" && typeof record.label === "string"
+        ? { id: record.id, label: record.label }
+        : undefined;
+    })
+    .filter((option): option is { id: string; label: string } => option !== undefined)
+    .slice(0, 4);
+  const requestedCommands = Array.isArray(payload.requestedCommands)
+    ? payload.requestedCommands
+        .map((command) => domainCommandSchema.safeParse(command))
+        .filter((parsed): parsed is { success: true; data: DomainCommand } => parsed.success)
+        .map((parsed) => parsed.data)
+        .slice(0, 4)
+    : [];
+  const preserve = Array.isArray(payload.preserve)
+    ? payload.preserve
+        .map((key) => preservableKeySchema.safeParse(key))
+        .filter((parsed): parsed is { success: true; data: PreservableKey } => parsed.success)
+        .map((parsed) => parsed.data)
+    : [];
+  return { question: payload.question, requestedCommands, preserve, options };
 }
 
 /** Current per-tag activity counts from the persisted preferred activities. */
@@ -214,6 +327,9 @@ async function loadAuthorizedContext(pool: Pool, trip: TripRecord): Promise<Auth
     knownCityIds: source.knownCityIds,
     knownAirportIds: source.knownAirportIds,
     knownOfferIds: source.knownOfferIds,
+    knownActivityIds: source.knownActivityIds ?? [],
+    knownRestaurantIds: source.knownRestaurantIds ?? [],
+    todayIsoDate: source.today,
     currentActivityCounts: source.currentActivityCounts,
   };
 }
@@ -224,6 +340,7 @@ function createGovernor(
   input: {
     readonly tripId: string;
     readonly operationId: string;
+    readonly fencingToken: string;
     readonly role: "intent";
     readonly profile: RoleProfile;
     readonly effectScope: string;
@@ -238,6 +355,7 @@ function createGovernor(
       const outcome = await reserveCall(pool, {
         tripId: input.tripId,
         operationId: input.operationId,
+        fencingToken: input.fencingToken,
         role: input.role,
         model: input.profile.model,
         provider: input.profile.provider,
@@ -250,6 +368,7 @@ function createGovernor(
         maxCallCostUsd: input.profile.maxCallCostUsd,
         maxCallsPerTrip: config.maxLlmCallsPerTrip,
         maxCostUsdPerTrip: usdString(config.maxLlmCostUsdPerTrip),
+        maxAttemptsPerScope: 2,
       });
       if (!outcome.ok) {
         throw new AdapterError(
@@ -288,37 +407,51 @@ export function createAiService(deps: InterpretDeps): AiService {
       ? loadRoleProfiles({ mode: "openrouter", configPath: config.aiConfigPath })
       : ({ mode: "fixture" } as const);
   let manifest: CapabilityManifest | undefined;
+  let manifestFetchedAtMs = 0;
 
   async function resolveAdapter(
     operationId: string,
     tripId: string,
+    fencingToken: string,
     effectScope: string,
   ): Promise<LLMAdapter> {
     if (loaded.mode === "fixture" || !loaded.profiles) {
       return FIXTURE_ADAPTER;
     }
     const configuredModels = Object.values(loaded.profiles).map((profile) => profile.model);
-    manifest ??= await loadCapabilityManifest({
-      cachePath: capabilityCachePath(config),
-      models: configuredModels,
-      fetchImpl: (url, init) =>
-        fetch(url, {
-          ...init,
-          headers: {
-            ...init?.headers,
-            ...(config.openrouterApiKey ? { authorization: `Bearer ${config.openrouterApiKey}` } : {}),
-          },
-        }),
-      ...(config.openrouterApiKey ? { apiKey: config.openrouterApiKey } : {}),
-    });
+    // The 24-hour capability TTL must also apply to a long-lived process: reload
+    // the manifest when it is stale (or was never loaded) so reservations never
+    // use prices older than the cache policy allows.
+    const stale = manifest === undefined || Date.now() - manifestFetchedAtMs >= CAPABILITY_CACHE_TTL_MS;
+    const activeManifest =
+      stale || manifest === undefined
+        ? await loadCapabilityManifest({
+          cachePath: capabilityCachePath(config),
+          models: configuredModels,
+          fetchImpl: (url, init) =>
+            fetch(url, {
+              ...init,
+              headers: {
+                ...init?.headers,
+                ...(config.openrouterApiKey
+                  ? { authorization: `Bearer ${config.openrouterApiKey}` }
+                  : {}),
+              },
+            }),
+            ...(config.openrouterApiKey ? { apiKey: config.openrouterApiKey } : {}),
+          })
+        : manifest;
+    manifest = activeManifest;
+    manifestFetchedAtMs = Date.now();
     const profile = loaded.profiles.intent;
     return new OpenRouterAdapter({
       apiKey: config.openrouterApiKey ?? "",
-      manifest,
+      manifest: activeManifest,
       profiles: loaded.profiles,
       governor: createGovernor(pool, config, {
         tripId,
         operationId,
+        fencingToken,
         role: "intent",
         profile,
         effectScope,
@@ -332,13 +465,19 @@ export function createAiService(deps: InterpretDeps): AiService {
       : {}),
     async interpret(input) {
       const effectScope = "intent";
+      const fence = {
+        operationId: input.operationId,
+        tripId: input.tripId,
+        fencingToken: input.fencingToken,
+      };
       const effectKey = {
         operationId: input.operationId,
         nodeName: "interpret_intent",
         effectScope,
       };
-      // Replay: a stored validated result performs no second billable call.
-      const cached = await readEffect(pool, effectKey);
+      // Replay (fenced): a stored validated result performs no second billable call,
+      // and a worker that lost its lease reads/writes nothing.
+      const cached = await readEffectFenced(pool, fence, effectKey);
       if (cached !== undefined) {
         return { result: intentResultSchema.parse(cached), mode: loaded.mode };
       }
@@ -347,8 +486,27 @@ export function createAiService(deps: InterpretDeps): AiService {
         throw new AdapterError("AI_TRANSPORT_FAILED", `trip ${input.tripId} not found`, false);
       }
       const source = await loadIntentSource(pool, trip, input.message);
-      const context = buildCompactContext(source);
-      const adapter = await resolveAdapter(input.operationId, input.tripId, effectScope);
+      const intentProfile = loaded.mode === "openrouter" ? loaded.profiles?.intent : undefined;
+      // Bound the context by the profile's own input cap (minus the system prompt)
+      // so the reservation always covers what is actually sent.
+      const context = buildCompactContext(
+        source,
+        intentProfile
+          ? {
+              maxInputTokens: Math.max(512, intentProfile.maxInputTokens - 512),
+              maxHistoryTokens: Math.min(
+                DEFAULT_CONTEXT_BUDGET.maxHistoryTokens,
+                Math.max(256, intentProfile.maxInputTokens - 512),
+              ),
+            }
+          : undefined,
+      );
+      const adapter = await resolveAdapter(
+        input.operationId,
+        input.tripId,
+        input.fencingToken,
+        effectScope,
+      );
       const response = await adapter.generateObject({
         role: "intent",
         promptVersion: intentRole.promptVersion,
@@ -361,7 +519,7 @@ export function createAiService(deps: InterpretDeps): AiService {
       });
       const authorized = await loadAuthorizedContext(pool, trip);
       const result = validateIntentSemantics(response.value, authorized);
-      await writeEffect(pool, effectKey, result);
+      await writeEffectFenced(pool, fence, effectKey, result);
       return { result, mode: loaded.mode };
     },
   };

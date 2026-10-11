@@ -74,11 +74,12 @@ export interface TravelPorts {
   runEffect<T>(nodeName: string, effectScope: string, fn: () => Promise<T>): Promise<T>;
 
   loadTrip(tripId: string): Promise<TravelTripContext | undefined>;
-  applyCommand(input: {
+  /** Apply a whole admitted command batch atomically (idempotent under the effect ledger). */
+  applyCommands(input: {
     tripId: string;
     operationId: string;
-    command: DomainCommand;
-  }): Promise<{ routeChanged: boolean }>;
+    commands: readonly DomainCommand[];
+  }): Promise<{ routeChanged: boolean; appliedCount: number }>;
   evaluateRoute(tripId: string): Promise<RouteValidation>;
   materializeFlights(tripId: string): Promise<TravelMaterializedFlights | undefined>;
   validateSchedules(input: { tripId: string; snapshotId: string }): Promise<ScheduleValidation>;
@@ -132,13 +133,6 @@ export interface TravelPorts {
     /** Admission request id, so a duplicate reuses the stored message/result. */
     requestId?: string;
   }): Promise<{ result: IntentResult; mode: "fixture" | "openrouter" }>;
-  /** Phase 08: persist the assistant interpretation card/outcome text. */
-  appendAssistantMessage(input: {
-    tripId: string;
-    operationId: string;
-    content: string;
-    interpretation: unknown;
-  }): Promise<void>;
   /** Phase 08: read the admitted chat message of an internal `modify` operation. */
   loadChatMessage(operationId: string): Promise<string | undefined>;
 }

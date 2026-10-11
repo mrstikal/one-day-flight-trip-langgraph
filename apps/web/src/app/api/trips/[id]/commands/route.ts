@@ -1,5 +1,5 @@
 import { commandApiRequestSchema } from "@odft/contracts";
-import { admitOperation, appendConversationMessage } from "@odft/persistence";
+import { admitOperation } from "@odft/persistence";
 import {
   envelopeResponse,
   errorResponse,
@@ -78,18 +78,12 @@ export async function POST(
     tripId: id,
     sessionId: guard.session.sessionId,
     request: parsed.data,
+    // The user message is stored inside the admission transaction: the worker can
+    // never process a chat before its message exists, and a crash cannot split them.
+    ...(chat !== undefined ? { userMessage: chat } : {}),
   });
   if (!("operationId" in result)) {
     return scopeErrorResponse(result);
-  }
-  if (chat !== undefined) {
-    await appendConversationMessage(guard.deps.pool, {
-      tripId: id,
-      role: "user",
-      content: chat,
-      operationId: result.operationId,
-      requestId: parsed.data.requestId,
-    });
   }
   return jsonResponse(result, 202);
 }

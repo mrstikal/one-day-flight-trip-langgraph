@@ -7,6 +7,14 @@ import { DEFAULT_TRIP_PREFERENCES, modelFacingIntentResultSchema } from "@odft/c
 function context(message: string): IntentContext {
   return intentContextSchema.parse({
     role: "intent",
+    today: "2026-10-11",
+    route: {
+      originAirportId: "ourairports:1",
+      destinationCityId: "geonames:3169070",
+      destinationCountryKey: "IT",
+      sightseeingDate: "2026-12-01",
+      travelVariant: "two_nights",
+    },
     message,
     userName: "Ada",
     preferences: DEFAULT_TRIP_PREFERENCES,
@@ -62,6 +70,33 @@ describe("fixture adapter", () => {
         { type: "set_activity_pace", pace: "relaxed" },
         { type: "set_activity_requirement", tag: "museum", minimumCount: 4 },
       ]);
+    }
+  });
+
+  it("resolves a relative count against the current plan (P2-4)", () => {
+    const withOneMuseum = intentContextSchema.parse({
+      ...context("Add two more museums"),
+      currentActivityCounts: { museum: 1 },
+    });
+    const result = fixtureIntent("Add two more museums", withOneMuseum);
+    expect(result.kind).toBe("commands");
+    if (result.kind === "commands") {
+      expect(result.commands).toEqual([
+        { type: "set_activity_requirement", tag: "museum", minimumCount: 3 },
+      ]);
+    }
+  });
+
+  it("asks instead of clamping when a relative count exceeds the cap (P2-4)", () => {
+    const full = intentContextSchema.parse({
+      ...context("Add two more museums"),
+      currentActivityCounts: { museum: 7 },
+    });
+    const result = fixtureIntent("Add two more museums", full);
+    expect(result.kind).toBe("clarification");
+    if (result.kind === "clarification") {
+      expect(result.question).toContain("7");
+      expect(result.options.length).toBeGreaterThanOrEqual(2);
     }
   });
 

@@ -10,6 +10,7 @@ import {
   type StructuredResponse,
 } from "./adapter.js";
 import { assertModelCapable, type CapabilityManifest } from "./capabilities.js";
+import { estimateTokens } from "./context/compact-context.js";
 import { formatUsd, parseUsd, worstCaseCostUsd } from "./costs.js";
 
 /**
@@ -52,34 +53,201 @@ interface ChatResponse {
   error?: { code?: number | string; message?: string; metadata?: { transient?: boolean } };
 }
 
-/** Recursively force `additionalProperties: false` so unknown keys are rejected. */
-export function strictifySchema(node: unknown): unknown {
-  if (Array.isArray(node)) {
-    return node.map(strictifySchema);
+/**
+ * Optional, non-nullable transport fields per discriminated-union branch.
+ *
+ * OpenAI `strict: true` requires every property in `required`; an optional field
+ * is therefore sent as a required nullable field and MUST be stripped back to
+ * `undefined` before Zod validation (otherwise a canonical command would carry a
+ * `null` that its `.optional()` member rejects, while genuinely nullable fields
+ * such as `set_service_override.level` must keep their `null`).
+ */
+export const OPTIONAL_TRANSPORT_FIELDS: Readonly<Record<string, ReadonlyMap<string, ReadonlySet<string>>>> = {
+  intent: new Map([
+    ["set_route", new Set(["originAirportId", "destinationCityId", "sightseeingDate", "travelVariant"])],
+    ["find_alternatives", new Set(["level"])],
+  ]),
+  recommendation: new Map(),
+  planner: new Map(),
+  reviewer: new Map(),
+};
+
+function isNullableNode(node: unknown): boolean {
+  if (!node || typeof node !== "object") {
+    return false;
   }
-  if (node && typeof node === "object") {
-    const record = node as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(record)) {
-      result[key] = strictifySchema(value);
+  const record = node as Record<string, unknown>;
+  if (Array.isArray(record.type) && record.type.includes("null")) {
+    return true;
+  }
+  const branches = Array.isArray(record.anyOf)
+    ? record.anyOf
+    : Array.isArray(record.oneOf)
+      ? record.oneOf
+      : [];
+  return branches.some(
+    (branch) =>
+      branch !== null &&
+      typeof branch === "object" &&
+      (branch as Record<string, unknown>).type === "null",
+  );
+}
+
+function makeNullable(node: unknown): unknown {
+  return isNullableNode(node) ? node : { anyOf: [node, { type: "null" }] };
+}
+
+function branchDiscriminator(node: Record<string, unknown>): string | undefined {
+  const properties = node.properties as Record<string, unknown> | undefined;
+  const typeNode = properties?.type as Record<string, unknown> | undefined;
+  if (typeNode && typeof typeNode.const === "string") {
+    return typeNode.const;
+  }
+  if (typeNode && Array.isArray(typeNode.enum) && typeNode.enum.length === 1) {
+    return typeof typeNode.enum[0] === "string" ? typeNode.enum[0] : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Rewrite a JSON schema for strict structured outputs:
+ * - every object gets `additionalProperties: false` and `required = all keys`;
+ * - originally optional properties become nullable (`anyOf: [T, null]`);
+ * - `oneOf` becomes `anyOf` (strict-mode friendly; branches stay disjoint by their
+ *   `type` const).
+ *
+ * `collected` records per discriminator branch which properties were optional and
+ * not already nullable, so the caller can strip their transport `null` back to
+ * `undefined` after parsing.
+ */
+function strictifySchema(
+  node: unknown,
+  collected?: Map<string, Set<string>>,
+): unknown {
+  if (Array.isArray(node)) {
+    return node.map((item) => strictifySchema(item, collected));
+  }
+  if (!node || typeof node !== "object") {
+    return node;
+  }
+  const record = node as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    result[key] = strictifySchema(value, collected);
+  }
+  if (Array.isArray(result.oneOf) && result.anyOf === undefined) {
+    result.anyOf = result.oneOf;
+    delete result.oneOf;
+  }
+  if (result.type === "object" && result.properties && typeof result.properties === "object") {
+    const properties = result.properties as Record<string, unknown>;
+    const originallyRequired = new Set(
+      Array.isArray(result.required) ? result.required.filter((k): k is string => typeof k === "string") : [],
+    );
+    const discriminator = branchDiscriminator(record);
+    const strictProperties: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(properties)) {
+      if (originallyRequired.has(key)) {
+        strictProperties[key] = value;
+        continue;
+      }
+      strictProperties[key] = makeNullable(value);
+      if (collected && !isNullableNode(value) && discriminator) {
+        const set = collected.get(discriminator) ?? new Set<string>();
+        set.add(key);
+        collected.set(discriminator, set);
+      }
     }
-    if (result.type === "object" && result.additionalProperties === undefined) {
+    result.properties = strictProperties;
+    result.required = Object.keys(strictProperties);
+    if (result.additionalProperties === undefined) {
       result.additionalProperties = false;
     }
-    return result;
   }
-  return node;
+  return result;
+}
+
+export interface TransportSchema {
+  /** The strict JSON schema sent to the provider. */
+  readonly schema: unknown;
+  /** Per disciminator branch, the optional fields sent as nullable. */
+  readonly optionalFields: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** Wrap the role schema in an object root with a required `result` property. */
-export function buildTransportSchema(outputSchema: z.ZodType<unknown>): unknown {
-  const jsonSchema = strictifySchema(z.toJSONSchema(outputSchema));
+export function buildTransportSchema(outputSchema: z.ZodType<unknown>): TransportSchema {
+  const optionalFields = new Map<string, Set<string>>();
+  const jsonSchema = strictifySchema(z.toJSONSchema(outputSchema), optionalFields);
   return {
-    type: "object",
-    properties: { result: jsonSchema },
-    required: ["result"],
-    additionalProperties: false,
+    schema: {
+      type: "object",
+      properties: { result: jsonSchema },
+      required: ["result"],
+      additionalProperties: false,
+    },
+    optionalFields,
   };
+}
+
+/**
+ * Strip transport `null` values that stand for "absent optional field" back to
+ * `undefined`. Genuinely nullable contract fields (e.g. `set_service_override.level`,
+ * `set_activity_requirement.minimumCount`) keep their `null`.
+ */
+export function stripOptionalTransportNulls(
+  value: unknown,
+  optionalFields: ReadonlyMap<string, ReadonlySet<string>>,
+): unknown {
+  const visitCommands = (commands: unknown): void => {
+    if (!Array.isArray(commands)) {
+      return;
+    }
+    for (const command of commands) {
+      if (!command || typeof command !== "object") {
+        continue;
+      }
+      const record = command as Record<string, unknown>;
+      const keys = typeof record.type === "string" ? optionalFields.get(record.type) : undefined;
+      if (!keys) {
+        continue;
+      }
+      for (const key of keys) {
+        if (record[key] === null) {
+          delete record[key];
+        }
+      }
+    }
+  };
+  if (value && typeof value === "object") {
+    const result = value as Record<string, unknown>;
+    visitCommands(result.commands);
+    visitCommands(result.requestedCommands);
+    if (Array.isArray(result.options)) {
+      for (const option of result.options) {
+        if (option && typeof option === "object") {
+          visitCommands((option as Record<string, unknown>).commands);
+        }
+      }
+    }
+  }
+  return value;
+}
+
+function mergeOptionalFields(
+  fromSchema: ReadonlyMap<string, ReadonlySet<string>>,
+  fromRole: ReadonlyMap<string, ReadonlySet<string>>,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const merged = new Map<string, Set<string>>();
+  for (const source of [fromRole, fromSchema]) {
+    for (const [branch, keys] of source) {
+      const target = merged.get(branch) ?? new Set<string>();
+      for (const key of keys) {
+        target.add(key);
+      }
+      merged.set(branch, target);
+    }
+  }
+  return merged;
 }
 
 function combineSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal {
@@ -133,11 +301,16 @@ export class OpenRouterAdapter implements LLMAdapter {
     this.options = options;
   }
 
+  /**
+   * One transport attempt. The profile deadline covers the FULL response: the body
+   * is read inside the timeout window (fetch resolves at headers, so clearing the
+   * timer there would let a stalled body hold the operation and the trip lock).
+   */
   private async transport(
     body: Record<string, unknown>,
     signal: AbortSignal,
     profile: RoleProfile,
-  ): Promise<{ response: Response; latencyMs: number }> {
+  ): Promise<{ status: number; ok: boolean; text: string; latencyMs: number }> {
     const fetchImpl = this.options.fetchImpl ?? globalThis.fetch;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error("ai timeout")), profile.timeoutMs);
@@ -152,12 +325,18 @@ export class OpenRouterAdapter implements LLMAdapter {
         body: JSON.stringify(body),
         signal: combineSignals([signal, timeout.signal]),
       });
-      return { response, latencyMs: Date.now() - started };
+      const text = await response.text();
+      return { status: response.status, ok: response.ok, text, latencyMs: Date.now() - started };
     } catch (error) {
+      // Classify by which signal fired, not by the error name: an abort reason may
+      // surface as a plain Error (e.g. the driver's shutdown abort).
+      if (signal.aborted) {
+        throw new AdapterError("AI_ABORTED", "the AI request was aborted", false);
+      }
+      if (timeout.signal.aborted) {
+        throw new AdapterError("AI_TIMEOUT", "the AI request timed out", true);
+      }
       if (error instanceof Error && error.name === "AbortError") {
-        if (timeout.signal.aborted) {
-          throw new AdapterError("AI_TIMEOUT", "the AI request timed out", true);
-        }
         throw new AdapterError("AI_ABORTED", "the AI request was aborted", false);
       }
       throw new AdapterError(
@@ -176,9 +355,14 @@ export class OpenRouterAdapter implements LLMAdapter {
     // Fail closed BEFORE any billable call: unknown capability/pricing is refused.
     assertModelCapable(profile, this.options.manifest);
 
-    const transportSchema = buildTransportSchema(request.outputSchema);
+    const transport = buildTransportSchema(request.outputSchema);
+    const optionalFields = mergeOptionalFields(
+      transport.optionalFields,
+      OPTIONAL_TRANSPORT_FIELDS[request.role] ?? new Map(),
+    );
     const userContent = JSON.stringify(request.context);
     const maxAttempts = Math.min(profile.maxAttempts, 2);
+    const systemTokens = estimateTokens(request.systemPrompt);
     let repairNote: string | undefined;
     let lastError: AdapterError | undefined;
     let attempts = 0;
@@ -208,15 +392,23 @@ export class OpenRouterAdapter implements LLMAdapter {
       if (request.signal.aborted) {
         throw new AdapterError("AI_ABORTED", "the AI request was aborted", false);
       }
+      const attemptContent = repairNote ? `${userContent}\n\nSchema errors: ${repairNote}` : userContent;
+      // The reservation must cover what is actually sent: system prompt, context,
+      // and any repair note must fit the profile's input cap (fail closed).
+      const attemptTokens = systemTokens + estimateTokens(attemptContent);
+      if (attemptTokens > profile.maxInputTokens) {
+        throw new AdapterError(
+          "AI_INPUT_OVERFLOW",
+          `the role input (${attemptTokens} tokens) exceeds the profile cap (${profile.maxInputTokens})`,
+          false,
+        );
+      }
       const reservation = await this.options.governor?.reserve(attempt);
       const body = {
         model: profile.model,
         messages: [
           { role: "system", content: request.systemPrompt },
-          {
-            role: "user",
-            content: repairNote ? `${userContent}\n\nSchema errors: ${repairNote}` : userContent,
-          },
+          { role: "user", content: attemptContent },
         ],
         max_tokens: profile.maxOutputTokens,
         ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
@@ -228,7 +420,7 @@ export class OpenRouterAdapter implements LLMAdapter {
           json_schema: {
             name: `${request.role}_${request.promptVersion.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
             strict: true,
-            schema: transportSchema,
+            schema: transport.schema,
           },
         },
         provider: {
@@ -244,11 +436,16 @@ export class OpenRouterAdapter implements LLMAdapter {
       };
 
       try {
-        const { response, latencyMs } = await this.transport(body, request.signal, profile);
+        const { ok, status, text, latencyMs } = await this.transport(body, request.signal, profile);
         totalLatency += latencyMs;
-        const parsedBody = (await response.json().catch(() => ({}))) as ChatResponse;
-        if (!response.ok) {
-          const failure = classifyHttpFailure(response.status, parsedBody);
+        let parsedBody: ChatResponse = {};
+        try {
+          parsedBody = text ? (JSON.parse(text) as ChatResponse) : {};
+        } catch {
+          parsedBody = {};
+        }
+        if (!ok) {
+          const failure = classifyHttpFailure(status, parsedBody);
           if (reservation) {
             if (failure.retryable) {
               await markUnknownOnce(reservation.callId, failure.code);
@@ -333,7 +530,10 @@ export class OpenRouterAdapter implements LLMAdapter {
           continue;
         }
 
-        const inner = (parsedJson as { result?: unknown }).result;
+        const inner = stripOptionalTransportNulls(
+          (parsedJson as { result?: unknown }).result,
+          optionalFields,
+        );
         const validated = request.outputSchema.safeParse(inner);
         if (!validated.success) {
           const message = validated.error.issues

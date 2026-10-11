@@ -183,6 +183,21 @@ the verified worst case for that model's `openai` endpoint (prompt 0.40 + cache 
 input, 1.60 USD/M output, 0.01 USD per web search), giving a worst-case call of $0.0146 (intent) and
 $0.0163 (planner) — comfortably under the example ceilings.
 
+### What the assistant can do
+
+- Interpret a free-text request into the **same deterministic commands** the graphical controls use
+  (route/date, service levels, pace, interests, activity counts, budget, program submission) and apply
+  the whole batch **atomically**: a command that cannot be honored leaves none of the batch applied.
+- Ask a **bounded clarification** (2–4 labelled options) when a request is ambiguous, conflicts with a
+  `preserve`d service, repeats the same preference, or would change the route after a confirmed booking.
+  Options are server-side bound: only the opaque option id is submitted.
+- **Never** confirm, cancel, or book anything, and never claim unconfirmed success. Prompt-injection text
+  in a message or in persisted content cannot become an executable booking operation.
+- Report a **search request** ("find a cheaper hotel") honestly: the intent is recorded, but the
+  alternative search itself ships in a later phase, so the assistant says so instead of pretending it ran.
+- Fail **visibly**: an AI failure is terminal for that message (no silent retry, no stacked billable
+  call); the conversation shows the failure and the graphical controls keep working.
+
 ### Budgets and failure behavior
 
 - Every transport attempt reserves its worst-case cost in `llm_calls` **before** the call, under a short

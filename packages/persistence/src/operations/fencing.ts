@@ -102,3 +102,24 @@ export function assertFencingCurrent(
     throw new StaleFencingError(ctx.operationId);
   }
 }
+
+/**
+ * Lock the ownership row for the duration of the caller's transaction and throw
+ * unless the writer still owns the exact fencing token. `FOR SHARE` also blocks a
+ * concurrent token rotation until the transaction commits, so a fenced write
+ * cannot interleave with a lease handover.
+ */
+export async function lockOperationFence(
+  client: Pick<PoolClient, "query">,
+  ctx: OperationFencingContext,
+): Promise<void> {
+  const owned = await client.query(
+    `SELECT 1 FROM odft_app.workflow_operations
+      WHERE id = $1 AND trip_id = $2 AND fencing_token = $3::bigint
+      FOR SHARE`,
+    [ctx.operationId, ctx.tripId, ctx.fencingToken],
+  );
+  if (owned.rowCount !== 1) {
+    throw new StaleFencingError(ctx.operationId);
+  }
+}

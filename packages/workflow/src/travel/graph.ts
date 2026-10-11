@@ -83,7 +83,7 @@ export function routeAfterApplyCommands(state: TravelState): string {
  * program/proposal commands reuse their existing stages, and preference/search
  * commands continue through the deterministic progress detection. */
 export function routeAfterIntentResult(state: TravelState): string {
-  if (state.intentStatus === "unsupported") {
+  if (state.intentStatus === "unsupported" || state.intentStatus === "search_pending") {
     return "publish_summary";
   }
   if (state.intentStatus === "clarification") {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { snapshotContentSchema } from "@odft/contracts";
-import { admitOperation, admitResume, appendConversationMessage, getPendingDecisionForTrip } from "@odft/persistence";
+import { admitOperation, admitResume, getPendingDecisionForTrip } from "@odft/persistence";
 import {
   claimNextOrFail,
   createGraphTestPool,
@@ -155,17 +155,12 @@ export async function sendChat(
       expectedRevision: await tripRevision(pool, tripId),
       chat: message,
     },
+    // Mirrors the BFF: the message is stored inside the admission transaction.
+    userMessage: message,
   });
   if (!("status" in admitted) || admitted.status !== "accepted") {
     throw new Error(`chat admission refused: ${JSON.stringify(admitted)}`);
   }
-  await appendConversationMessage(pool, {
-    tripId,
-    role: "user",
-    content: message,
-    operationId: admitted.operationId,
-    requestId,
-  });
   const driver = createTravelDriver(pools);
   await driver.runOperation(await claimNextOrFail(pools));
   return { operationId: admitted.operationId };

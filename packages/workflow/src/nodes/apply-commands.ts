@@ -28,10 +28,10 @@ export async function applyCommandsNode(
   }
   const ports = travelPorts(runtime);
   await ports.runEffect("apply_commands", parsed.data.type, () =>
-    ports.applyCommand({
+    ports.applyCommands({
       tripId: state.tripId,
       operationId: state.operationId,
-      command: parsed.data,
+      commands: [parsed.data],
     }),
   );
   if (parsed.data.type === "set_program") {

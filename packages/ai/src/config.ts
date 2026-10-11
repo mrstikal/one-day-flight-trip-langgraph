@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { roleProfilesSchema, type AIRole, type RoleProfile, type RoleProfiles } from "@odft/contracts";
 import { assertProfileWithinCeiling } from "./costs.js";
 import { INTENT_LIMITS } from "./roles/intent.js";
@@ -54,6 +56,37 @@ export function stampPricingVersion(
   return { profiles: stamped as RoleProfiles, changed };
 }
 
+/** Repository root derived from this module (`src/` and `dist/` are both 3 deep). */
+export function aiConfigRepoRoot(): string {
+  return fileURLToPath(new URL("../../../", import.meta.url));
+}
+
+/**
+ * Resolve `AI_CONFIG_PATH`. A relative path is resolved against the current
+ * working directory first and then against the repository root, so the documented
+ * `./ai-profiles.json` works both for a root script and for the worker started via
+ * its workspace (`npm run dev` runs it from `apps/worker`).
+ */
+export function resolveAiConfigPath(
+  configPath: string,
+  exists: (candidate: string) => boolean = existsSync,
+): string {
+  if (isAbsolute(configPath)) {
+    return configPath;
+  }
+  const fromCwd = resolve(process.cwd(), configPath);
+  if (exists(fromCwd)) {
+    return fromCwd;
+  }
+  const fromRoot = resolve(aiConfigRepoRoot(), configPath);
+  if (exists(fromRoot)) {
+    return fromRoot;
+  }
+  throw new AiConfigError([
+    `AI_CONFIG_PATH ${configPath} was not found (tried ${fromCwd} and ${fromRoot})`,
+  ]);
+}
+
 export interface LoadRoleProfilesOptions {
   readonly mode: "fixture" | "openrouter";
   readonly configPath?: string | undefined;
@@ -99,8 +132,11 @@ export function loadRoleProfiles(options: LoadRoleProfilesOptions): LoadedAiConf
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(options.configPath, "utf8"));
+    raw = JSON.parse(readFileSync(resolveAiConfigPath(options.configPath), "utf8"));
   } catch (error) {
+    if (error instanceof AiConfigError) {
+      throw error;
+    }
     throw new AiConfigError([
       `AI_CONFIG_PATH could not be read as JSON: ${error instanceof Error ? error.message : String(error)}`,
     ]);

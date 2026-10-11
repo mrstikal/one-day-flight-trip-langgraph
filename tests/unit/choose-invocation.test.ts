@@ -140,11 +140,25 @@ describe("chooseInvocation", () => {
   });
 
   it("INV-04/07: unfinished tasks recover with a null input (rerun only unfinished work)", () => {
-    const choice = chooseInvocation(unfinishedView(randomUUID()), commandOp());
+    const operation = commandOp();
+    const choice = chooseInvocation(unfinishedView(operation.id), operation);
     expect(choice.kind).toBe("recover");
     if (choice.kind === "recover") {
       expect(choice.input).toBeNull();
     }
+  });
+
+  it("a DIFFERENT operation never recovers another operation's unfinished checkpoint", () => {
+    // Recovering would replay the stale chatMessage/operationId (and could trigger a
+    // paid call for the previous message), so the new operation must start fresh.
+    const choice = chooseInvocation(unfinishedView(randomUUID()), commandOp());
+    expect(choice.kind).toBe("start");
+    if (choice.kind === "start") {
+      expect(choice.input).not.toBeNull();
+    }
+    // A decision operation cannot start fresh: it conflicts instead.
+    const decision = chooseInvocation(unfinishedView(randomUUID()), decisionOp());
+    expect(decision.kind).toBe("conflict");
   });
 
   it("INV-08: the completed operation's own decision checkpoint reconciles without re-execution", () => {

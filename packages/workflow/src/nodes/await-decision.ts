@@ -26,6 +26,10 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
                 id: option.id,
                 label: option.label,
               })),
+              // Server-side only (never rendered): the typed request the model
+              // asked about, so a follow-up has the full authoritative context.
+              requestedCommands: state.clarificationRequestedCommands,
+              preserve: state.intentPreserve,
             },
           }
         : {}),

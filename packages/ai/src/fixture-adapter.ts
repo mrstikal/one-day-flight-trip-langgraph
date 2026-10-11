@@ -55,12 +55,47 @@ function museumCount(context: IntentContext): number {
  */
 export function fixtureIntent(message: string, context: IntentContext): ModelFacingIntentResult {
   const text = message.toLowerCase();
-  const currentMuseums = museumCount(context);
 
   const wantsRelaxed = /(less exhausting|less tiring|relaxed|slow(er)? pace|calm(er)?)/.test(text);
   const wantsIntensive = /(more intensive|intensive|packed|busy day|pack more)/.test(text);
   const museumsRequest = /museum/.test(text);
-  const requestedMuseums = museumsRequest ? parseCount(text) : undefined;
+  const explicitCount = museumsRequest ? parseCount(text) : undefined;
+  const relativeCount = /(more|another|additional|extra)/.test(text);
+  // A relative count ("two more museums") is resolved against the CURRENT count, so
+  // the numeric request keeps its meaning instead of collapsing to the bare number.
+  const requestedMuseums =
+    museumsRequest && relativeCount
+      ? museumCount(context) + (explicitCount ?? 1)
+      : explicitCount;
+
+  // Above the seven-activity cap the request cannot be honored: ask, never clamp
+  // silently (the numeric meaning must survive).
+  if (museumsRequest && requestedMuseums !== undefined && requestedMuseums > 7) {
+    const current = museumCount(context);
+    return {
+      kind: "clarification",
+      question: `At most 7 museums fit the day; you asked for ${requestedMuseums}. What should I do?`,
+      requestedCommands: [
+        { type: "set_activity_requirement", tag: "museum", minimumCount: 7 },
+      ],
+      preserve: [],
+      options: [
+        {
+          id: "keep_current",
+          label: `Keep the current ${current} museum${current === 1 ? "" : "s"}`,
+          commands:
+            current > 0
+              ? [{ type: "set_activity_requirement", tag: "museum", minimumCount: current }]
+              : [{ type: "set_activity_requirement", tag: "museum", minimumCount: null }],
+        },
+        {
+          id: "maximum_seven",
+          label: "Use the maximum of 7 museums",
+          commands: [{ type: "set_activity_requirement", tag: "museum", minimumCount: 7 }],
+        },
+      ],
+    };
+  }
 
   // Contradictory pace + museum count: ask a bounded clarification (P10 owns the
   // deterministic pace/count feasibility; the intent role must not silently drop it).
@@ -221,16 +256,6 @@ export function fixtureIntent(message: string, context: IntentContext): ModelFac
 
   if (museumsRequest && requestedMuseums !== undefined) {
     const absolute = Math.min(7, Math.max(1, requestedMuseums));
-    return {
-      kind: "commands",
-      commands: [{ type: "set_activity_requirement", tag: "museum", minimumCount: absolute }],
-      preserve: ["flights", "breakfast", "lunch", "dinner"],
-      interpretation: `Require at least ${absolute} museums in the plan.`,
-    };
-  }
-
-  if (museumsRequest && /(more|another|additional|extra)/.test(text)) {
-    const absolute = Math.min(7, Math.max(1, currentMuseums + 1));
     return {
       kind: "commands",
       commands: [{ type: "set_activity_requirement", tag: "museum", minimumCount: absolute }],

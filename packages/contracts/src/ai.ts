@@ -116,13 +116,15 @@ export const publicInterpretationSchema = z
   .strict();
 export type PublicInterpretation = z.infer<typeof publicInterpretationSchema>;
 
-/** The pending clarification card: question plus labelled opaque options. */
-export const publicClarificationSchema = z
-  .object({
-    question: nonEmptyStringSchema,
-    options: z.array(publicClarificationOptionSchema).min(1),
-  })
-  .strict();
+/**
+ * The pending clarification card: question plus labelled opaque options.
+ * Not `.strict()`: the server-side payload also carries `requestedCommands` and
+ * `preserve`, which are stripped from the public projection.
+ */
+export const publicClarificationSchema = z.object({
+  question: nonEmptyStringSchema,
+  options: z.array(publicClarificationOptionSchema).min(1),
+});
 export type PublicClarification = z.infer<typeof publicClarificationSchema>;
 
 export const publicConversationMessageSchema = z

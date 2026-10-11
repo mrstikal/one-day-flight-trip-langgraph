@@ -13,6 +13,7 @@ import {
   plannerContextSchema,
   recommendationContextSchema,
   reviewerContextSchema,
+  stripOptionalTransportNulls,
 } from "@odft/ai";
 
 /**
@@ -102,22 +103,63 @@ describe("AI result schemas (T-UT-AI-01)", () => {
     }
   });
 
-  it("wraps the transport schema in a strict object root", () => {
-    const schema = buildTransportSchema(modelFacingIntentResultSchema) as Record<string, unknown>;
-    expect(schema.type).toBe("object");
-    expect(schema.required).toEqual(["result"]);
-    expect(schema.additionalProperties).toBe(false);
-    const result = (schema.properties as Record<string, unknown>).result as Record<string, unknown>;
-    // A discriminated union maps to oneOf/anyOf; every object branch must be strict.
-    const branches = (Array.isArray(result.oneOf)
-      ? result.oneOf
-      : Array.isArray(result.anyOf)
-        ? result.anyOf
+  it("wraps the transport schema in a strict object root with nullable optionals", () => {
+    const { schema, optionalFields } = buildTransportSchema(modelFacingIntentResultSchema);
+    const root = schema as Record<string, unknown>;
+    expect(root.type).toBe("object");
+    expect(root.required).toEqual(["result"]);
+    expect(root.additionalProperties).toBe(false);
+    const result = (root.properties as Record<string, unknown>).result as Record<string, unknown>;
+    // A discriminated union maps to anyOf (strict-mode friendly); every object
+    // branch must be strict AND list every property in `required`.
+    const branches = (Array.isArray(result.anyOf)
+      ? result.anyOf
+      : Array.isArray(result.oneOf)
+        ? result.oneOf
         : []) as Record<string, unknown>[];
     expect(branches.length).toBeGreaterThanOrEqual(3);
     for (const branch of branches) {
       expect(branch.additionalProperties).toBe(false);
+      const properties = branch.properties as Record<string, unknown>;
+      expect(new Set(branch.required as string[])).toEqual(new Set(Object.keys(properties)));
     }
+    // set_route's optional fields are sent as required nullable fields.
+    expect(optionalFields.get("set_route")).toEqual(
+      new Set(["originAirportId", "destinationCityId", "sightseeingDate", "travelVariant"]),
+    );
+    expect(optionalFields.get("find_alternatives")).toEqual(new Set(["level"]));
+  });
+
+  it("strips transport nulls only for optional fields and keeps real nulls", () => {
+    const { optionalFields } = buildTransportSchema(modelFacingIntentResultSchema);
+    const payload = {
+      kind: "commands",
+      commands: [
+        {
+          type: "set_route",
+          originAirportId: null,
+          destinationCityId: "geonames:3169070",
+          sightseeingDate: null,
+          travelVariant: null,
+        },
+        { type: "set_service_override", service: "dinner", level: null },
+        { type: "set_activity_requirement", tag: "museum", minimumCount: null },
+        { type: "find_alternatives", target: "hotel", objective: "cheaper", level: null },
+      ],
+      preserve: [],
+      interpretation: "test",
+    };
+    const stripped = stripOptionalTransportNulls(payload, optionalFields) as typeof payload;
+    expect(stripped.commands[0]).toEqual({ type: "set_route", destinationCityId: "geonames:3169070" });
+    // Genuinely nullable contract fields keep their null.
+    expect(stripped.commands[1]).toEqual({ type: "set_service_override", service: "dinner", level: null });
+    expect(stripped.commands[2]).toEqual({
+      type: "set_activity_requirement",
+      tag: "museum",
+      minimumCount: null,
+    });
+    expect(stripped.commands[3]).toEqual({ type: "find_alternatives", target: "hotel", objective: "cheaper" });
+    expect(modelFacingIntentResultSchema.safeParse(stripped).success).toBe(true);
   });
 
   it("parses a role context with the role's strict schema, rejecting unknown keys", () => {

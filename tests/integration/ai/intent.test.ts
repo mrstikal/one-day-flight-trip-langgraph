@@ -1,7 +1,14 @@
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { tripPreferencesSchema } from "@odft/contracts";
-import { getPendingDecisionForTrip, listConversation } from "@odft/persistence";
+import {
+  admitOperation,
+  applyTripCommands,
+  getPendingDecisionForTrip,
+  listConversation,
+  TripCommandError,
+} from "@odft/persistence";
 import {
   createGraphTestPool,
   createHarnessTrip,
@@ -12,6 +19,7 @@ import {
   resetGraphDatabase,
   resolveProgramChoices,
   sendChat,
+  tripRevision,
   type WorkerPools,
 } from "./_setup.js";
 
@@ -94,7 +102,9 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
 
     await sendChat(pool, pools, tripId, sessionId, "Add two more museums");
     let prefs = await preferences(tripId);
-    expect(prefs.minimumActivityCounts.museum).toBe(2);
+    // Relative counts resolve against the CURRENT plan: the deterministic harness
+    // program contains one museum-tagged activity, so "two more" means 3.
+    expect(prefs.minimumActivityCounts.museum).toBe(3);
     expect(prefs.activityPace).toBe("moderate");
 
     // The chat re-derived a program decision; resolve it before the next chat.
@@ -102,7 +112,7 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     await sendChat(pool, pools, tripId, sessionId, "Make the day less exhausting");
     prefs = await preferences(tripId);
     // AC-08-5: the absolute requirement survives the pace change.
-    expect(prefs.minimumActivityCounts.museum).toBe(2);
+    expect(prefs.minimumActivityCounts.museum).toBe(3);
     expect(prefs.activityPace).toBe("relaxed");
   }, 120_000);
 
@@ -149,6 +159,72 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     ).toBe(true);
   }, 90_000);
 
+  it("stores the user message inside the admission transaction (P2-5)", async () => {
+    const { tripId, sessionId } = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, tripId, sessionId);
+    const message = "Make the day less exhausting";
+    const admitted = await admitOperation(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: await tripRevision(pool, tripId),
+        chat: message,
+      },
+      userMessage: message,
+    });
+    expect("status" in admitted && admitted.status === "accepted").toBe(true);
+    // The message exists BEFORE the worker ever claims the operation.
+    const conversation = await listConversation(pool, tripId, 10);
+    expect(conversation.some((entry) => entry.role === "user" && entry.content === message)).toBe(true);
+  }, 90_000);
+
+  it("applies a command batch atomically and refuses the whole batch on a route change with a booking (P2-1)", async () => {
+    const { tripId, sessionId } = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, tripId, sessionId);
+    const before = await preferences(tripId);
+    const confirmed = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM odft_app.reservations
+        WHERE trip_id = $1 AND status = 'confirmed'`,
+      [tripId],
+    );
+    expect(Number(confirmed.rows[0]?.count ?? "0")).toBeGreaterThan(0);
+
+    await expect(
+      applyTripCommands(pool, {
+        tripId,
+        commands: [
+          { type: "set_budget", maxBudgetMinor: 123_400 },
+          { type: "set_route", sightseeingDate: "2026-12-05" },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(TripCommandError);
+
+    // The first command must NOT survive the refused batch.
+    const after = await preferences(tripId);
+    expect(after.maxBudgetMinor).toBe(before.maxBudgetMinor);
+  }, 90_000);
+
+  it("reports a search-only request without re-deriving decisions (P2-2)", async () => {
+    const { tripId, sessionId } = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, tripId, sessionId);
+
+    await sendChat(pool, pools, tripId, sessionId, "Find a cheaper hotel");
+
+    // Nothing changed and no new decision was opened: the result is reported as a
+    // demo-step limitation instead of pretending the search ran.
+    const trip = await pool.query<{ workflow_status: string }>(
+      `SELECT workflow_status FROM odft_app.trips WHERE id = $1`,
+      [tripId],
+    );
+    expect(trip.rows[0]?.workflow_status).toBe("ready");
+    const decision = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(decision).toBeUndefined();
+    const conversation = await listConversation(pool, tripId, 20);
+    const assistant = conversation.find((entry) => entry.role === "assistant");
+    expect(assistant?.content).toContain("not available");
+  }, 90_000);
+
   it("reuses the validated interpretation effect on replay (no second call)", async () => {
     const { tripId, sessionId } = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, tripId, sessionId);
@@ -161,15 +237,22 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     );
 
     const ai = createTestAiService(pools);
+    const token = await pool.query<{ fencing_token: string }>(
+      `SELECT fencing_token FROM odft_app.workflow_operations WHERE id = $1`,
+      [operationId],
+    );
+    const fencingToken = token.rows[0]?.fencing_token ?? "1";
     const before = ai.fixtureCounters?.().calls ?? 0;
     const first = await ai.interpret({
       tripId,
       operationId,
+      fencingToken,
       message: "Make the day less exhausting",
     });
     const second = await ai.interpret({
       tripId,
       operationId,
+      fencingToken,
       message: "Make the day less exhausting",
     });
     const after = ai.fixtureCounters?.().calls ?? 0;

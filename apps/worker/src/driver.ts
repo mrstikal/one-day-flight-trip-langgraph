@@ -7,6 +7,7 @@ import {
 } from "@langchain/langgraph";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
+  appendConversationMessage,
   contentHash,
   finalizeConflict,
   finalizeFailure,
@@ -286,7 +287,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
           : undefined;
     // Operation transition, pending decision, trip projection, and event commit
     // together in one fencing-token-guarded transaction.
-    await finalizeWaiting(
+    const committed = await finalizeWaiting(
       deps.operationsPool,
       { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
       {
@@ -300,6 +301,77 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         createdRevision: claim.acceptedRevision,
       },
     );
+    // A chat request that applied its commands and then opened a decision still
+    // needs its outcome message — written only after the waiting state committed.
+    if (committed && isChatOperation(claim)) {
+      const content = chatOutcomeMessage(view.values as Record<string, unknown>);
+      if (content) {
+        await appendChatMessage(claim, content, {
+          kind: view.values.intentStatus ?? "commands",
+          interpretation: view.values.intentInterpretation ?? undefined,
+        });
+      }
+    }
+  }
+
+  /**
+   * Assistant outcome text for a chat operation, derived from the committed graph
+   * state (never a fabricated success). Written only AFTER finalizeSuccess, so a
+   * failed operation can never leave an "applied" message behind.
+   */
+  function chatOutcomeMessage(values: Record<string, unknown>): string | undefined {
+    const status = values.intentStatus;
+    const interpretation =
+      typeof values.intentInterpretation === "string" ? values.intentInterpretation : undefined;
+    if (status === "commands") {
+      return `Applied: ${interpretation ?? "your request"}. No confirmed reservation was changed.`;
+    }
+    if (status === "unsupported") {
+      return interpretation ?? "I could not interpret that request; the graphical controls remain available.";
+    }
+    if (status === "search_pending") {
+      return `${interpretation ?? "Your search request was recorded."} Alternative search is not available in this demo step yet; nothing was changed.`;
+    }
+    return undefined;
+  }
+
+  /** The admitted payload of a chat request (as opposed to a graphical control). */
+  function isChatOperation(claim: ClaimedOperation): boolean {
+    const payload = claim.payload as { kind?: unknown } | null;
+    return claim.kind === "command" && payload?.kind === "chat";
+  }
+
+  async function appendChatMessage(
+    claim: ClaimedOperation,
+    content: string,
+    interpretation: unknown,
+  ): Promise<void> {
+    try {
+      await appendConversationMessage(deps.operationsPool, {
+        tripId: claim.tripId,
+        role: "assistant",
+        content: content.slice(0, 2000),
+        interpretation,
+        operationId: claim.operationId,
+        // Deterministic dedupe key: a crash replay cannot append a second bubble.
+        requestId: claim.operationId,
+        fence: {
+          operationId: claim.operationId,
+          tripId: claim.tripId,
+          fencingToken: claim.fencingToken,
+        },
+      });
+    } catch (error) {
+      // A stale fence or a concurrent write must not fail the operation result.
+      logger({
+        level: "warn",
+        component: "driver",
+        message: `assistant message was not persisted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        operationId: claim.operationId,
+      });
+    }
   }
 
   async function persistSuccess(
@@ -324,7 +396,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     const blocked =
       reconciliation.lastOutcome === "no_feasible_route" ||
       reconciliation.lastOutcome === "no_feasible_schedule";
-    await finalizeSuccess(
+    const committed = await finalizeSuccess(
       deps.operationsPool,
       { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
       {
@@ -334,6 +406,15 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         ...(resolveDecisionId ? { resolveDecisionId } : {}),
       },
     );
+    if (committed && isChatOperation(claim)) {
+      const content = chatOutcomeMessage(view.values as Record<string, unknown>);
+      if (content) {
+        await appendChatMessage(claim, content, {
+          kind: view.values.intentStatus ?? "commands",
+          interpretation: view.values.intentInterpretation ?? undefined,
+        });
+      }
+    }
   }
 
   async function fail(claim: ClaimedOperation, error: unknown): Promise<void> {
@@ -342,11 +423,19 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     // permanent conflict the client must resolve by refreshing; retrying can never
     // succeed and would only exhaust the claim budget into `recovery_required`.
     if (isTerminalConflictCode(code)) {
-      await finalizeConflict(
+      const committed = await finalizeConflict(
         deps.operationsPool,
         { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
         { code, message: error instanceof Error ? error.message : code },
       );
+      // A failed chat request must not stay silent in the conversation.
+      if (committed && isChatOperation(claim)) {
+        await appendChatMessage(
+          claim,
+          `I could not complete that request (${code}). No confirmed reservation was changed.`,
+          { kind: "unsupported", interpretation: `request failed: ${code}` },
+        );
+      }
       return;
     }
     const exhausted = claim.autoClaims >= MAX_AUTO_CLAIMS_PER_ROUND;

@@ -40,8 +40,29 @@ const selectedServiceSchema = z
   .object({
     service: preservableKeySchema,
     offerId: nonEmptyStringSchema,
-    level: serviceLevelSchema.optional(),
+    level: serviceLevelSchema.nullable().optional(),
     partyTotalMinor: moneyMinorSchema.optional(),
+    /** True when a confirmed demo reservation exists for this service. */
+    confirmed: z.boolean().optional(),
+  })
+  .strict();
+
+const routeContextSchema = z
+  .object({
+    originAirportId: nonEmptyStringSchema,
+    destinationCityId: nonEmptyStringSchema,
+    destinationCountryKey: nonEmptyStringSchema,
+    sightseeingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    travelVariant: z.enum(["one_night", "two_nights"]),
+  })
+  .strict();
+
+const pendingClarificationSchema = z
+  .object({
+    question: nonEmptyStringSchema,
+    requestedCommands: z.array(z.unknown()).max(4),
+    preserve: z.array(preservableKeySchema),
+    options: z.array(z.object({ id: nonEmptyStringSchema, label: nonEmptyStringSchema }).strict()).max(4),
   })
   .strict();
 
@@ -58,7 +79,11 @@ export const intentContextSchema = z
     role: z.literal("intent"),
     message: messageSchema,
     userName: z.string().trim().min(1).max(60),
+    /** Server clock date, so relative date requests have an authoritative anchor. */
+    today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    route: routeContextSchema,
     preferences: tripPreferencesSchema,
+    pendingClarification: pendingClarificationSchema.nullable().optional(),
     selectedServices: z.array(selectedServiceSchema).max(7),
     currentActivityCounts: activityCountsSchema,
     pendingDecisionKind: decisionKindSchema.nullable(),
@@ -77,7 +102,10 @@ export const compactContextSourceSchema = z
   .object({
     message: messageSchema,
     userName: z.string().trim().min(1).max(60),
+    today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    route: routeContextSchema,
     preferences: tripPreferencesSchema,
+    pendingClarification: pendingClarificationSchema.nullable().optional(),
     selectedServices: z.array(selectedServiceSchema),
     currentActivityCounts: activityCountsSchema,
     pendingDecisionKind: decisionKindSchema.nullable(),
@@ -87,6 +115,9 @@ export const compactContextSourceSchema = z
     knownCityIds: z.array(nonEmptyStringSchema),
     knownAirportIds: z.array(nonEmptyStringSchema),
     knownOfferIds: z.array(nonEmptyStringSchema),
+    /** Server-side membership sets (never sent to the model). */
+    knownActivityIds: z.array(nonEmptyStringSchema).optional(),
+    knownRestaurantIds: z.array(nonEmptyStringSchema).optional(),
   })
   .strict();
 export type CompactContextSource = z.infer<typeof compactContextSourceSchema>;
@@ -145,7 +176,12 @@ export function buildCompactContext(
       role: "intent",
       message: parsed.message,
       userName: parsed.userName,
+      today: parsed.today,
+      route: parsed.route,
       preferences: parsed.preferences,
+      ...(parsed.pendingClarification !== undefined
+        ? { pendingClarification: parsed.pendingClarification }
+        : {}),
       selectedServices: parsed.selectedServices,
       currentActivityCounts: parsed.currentActivityCounts,
       pendingDecisionKind: parsed.pendingDecisionKind,

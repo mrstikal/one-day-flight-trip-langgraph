@@ -81,6 +81,14 @@ function completion(content: unknown, extra: Record<string, unknown> = {}): unkn
 function intentContext(): IntentContext {
   return intentContextSchema.parse({
     role: "intent",
+    today: "2026-10-11",
+    route: {
+      originAirportId: "ourairports:1",
+      destinationCityId: "geonames:3169070",
+      destinationCountryKey: "IT",
+      sightseeingDate: "2026-12-01",
+      travelVariant: "two_nights",
+    },
     message: "Make the day less exhausting",
     userName: "Ada",
     preferences: DEFAULT_TRIP_PREFERENCES,
@@ -228,6 +236,24 @@ describe("OpenRouter adapter transport", () => {
       adapter.generateObject(request()),
     ).rejects.toMatchObject({ code: "AI_AUTH_FAILED", retryable: false });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a shutdown abort as AI_ABORTED even when the error is not an AbortError (P2-13)", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => {
+      controller.abort(new Error("worker shutdown"));
+      // Node fetch may reject with the abort reason, not a named AbortError.
+      throw new Error("worker shutdown");
+    });
+    const adapter = new OpenRouterAdapter({
+      apiKey: "secret",
+      manifest: manifest(),
+      profiles: profiles(),
+      fetchImpl: fetchImpl as never,
+    });
+    await expect(
+      adapter.generateObject({ ...request(), signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "AI_ABORTED", retryable: false });
   });
 
   it("discards reasoning fields from the response", async () => {

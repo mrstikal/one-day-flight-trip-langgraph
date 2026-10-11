@@ -1,8 +1,7 @@
 import type { Pool } from "pg";
 import { BookingService, fingerprint } from "@odft/domain";
 import {
-  appendConversationMessage,
-  applyTripCommand,
+  applyTripCommands,
   evaluateAndPersistRoute,
   getActiveReservation,
   getOperationPayload,
@@ -48,12 +47,8 @@ export function createTravelPortsFactory(
       return trip ? { trip } : undefined;
     },
 
-    async applyCommand(input) {
-      const result = await applyTripCommand(pool, {
-        tripId: input.tripId,
-        command: input.command,
-      });
-      return { routeChanged: result.routeChanged };
+    async applyCommands(input) {
+      return applyTripCommands(pool, { tripId: input.tripId, commands: input.commands });
     },
 
     async evaluateRoute(tripId) {
@@ -210,20 +205,9 @@ export function createTravelPortsFactory(
       return ai.interpret({
         tripId: input.tripId,
         operationId: input.operationId,
+        fencingToken: ctx.fencingToken,
         message: input.message,
         ...(signal ? { signal } : {}),
-      });
-    },
-
-    async appendAssistantMessage(input) {
-      await appendConversationMessage(pool, {
-        tripId: input.tripId,
-        role: "assistant",
-        content: input.content.slice(0, 2000),
-        interpretation: input.interpretation,
-        operationId: input.operationId,
-        // Deterministic dedupe key: a crash replay cannot append a second bubble.
-        requestId: input.operationId,
       });
     },
 

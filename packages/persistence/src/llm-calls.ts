@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { AIRole, CostStatus, LlmCallStatus } from "@odft/contracts";
+import { assertOperationFence } from "./effects.js";
 import { countTripLlmCalls, formatUsdAmount, parseUsdAmount, sumTripLlmCostUsd, usdFromDb } from "./usd.js";
 
 /**
@@ -15,6 +16,8 @@ import { countTripLlmCalls, formatUsdAmount, parseUsdAmount, sumTripLlmCostUsd, 
 export interface ReserveCallInput {
   readonly tripId: string;
   readonly operationId: string;
+  /** Fencing token of the claiming worker; verified inside the reserve transaction. */
+  readonly fencingToken?: string;
   readonly role: AIRole;
   readonly model: string;
   readonly provider: string;
@@ -29,6 +32,8 @@ export interface ReserveCallInput {
   readonly maxCallCostUsd: string;
   readonly maxCallsPerTrip: number;
   readonly maxCostUsdPerTrip: string;
+  /** Hard cap of attempts for this operation+effect scope (durable across restarts). */
+  readonly maxAttemptsPerScope: number;
 }
 
 export type ReserveCallOutcome =
@@ -150,6 +155,15 @@ export async function reserveCall(
     await client.query("BEGIN");
     // Short per-trip lock serializes concurrent budget checks.
     await client.query(`SELECT id FROM odft_app.trips WHERE id = $1 FOR UPDATE`, [input.tripId]);
+    // A worker that lost its lease must not reserve (or later write) under the
+    // operation it no longer owns.
+    if (input.fencingToken) {
+      await assertOperationFence(client, {
+        operationId: input.operationId,
+        tripId: input.tripId,
+        fencingToken: input.fencingToken,
+      });
+    }
 
     let reserved: bigint;
     try {
@@ -165,6 +179,21 @@ export async function reserveCall(
         ok: false,
         code: "AI_BUDGET_EXCEEDED",
         message: "the worst-case cost of this call exceeds the role per-call ceiling",
+      };
+    }
+    // The two-attempt bound is durable: a restarted worker cannot restart the
+    // adapter's local loop from zero for the same interpretation.
+    const scopeAttempts = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM odft_app.llm_calls
+        WHERE operation_id = $1 AND effect_scope = $2`,
+      [input.operationId, input.effectScope],
+    );
+    if (Number.parseInt(scopeAttempts.rows[0]?.count ?? "0", 10) + 1 > input.maxAttemptsPerScope) {
+      await client.query("ROLLBACK");
+      return {
+        ok: false,
+        code: "AI_BUDGET_EXCEEDED",
+        message: "the per-interpretation AI attempt limit is exhausted",
       };
     }
     const attempted = await countTripLlmCalls(client, input.tripId);

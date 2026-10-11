@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  appendConversationMessage,
   getLlmCall,
   listTripLlmCalls,
   markCallUnknown,
   reconcileUnknownBilling,
   recordCallResult,
   reserveCall,
+  StaleFencingError,
 } from "@odft/persistence";
 import { assertTelemetrySafe, toPublicLlmCall } from "@odft/ai";
 import { createGraphTestPool, resetGraphDatabase } from "../graph/_setup.js";
@@ -65,6 +67,7 @@ describe("LLM call ledger (real PostgreSQL)", () => {
       maxCallCostUsd: "0.05",
       maxCallsPerTrip: 10,
       maxCostUsdPerTrip: "1",
+      maxAttemptsPerScope: 2,
       ...overrides,
     };
   }
@@ -126,6 +129,52 @@ describe("LLM call ledger (real PostgreSQL)", () => {
       reservation({ reservedCostUsd: "0.06", maxCallCostUsd: "0.05" }),
     );
     expect(refused).toMatchObject({ ok: false, code: "AI_BUDGET_EXCEEDED" });
+  });
+
+  it("enforces the per-interpretation attempt cap across restarts (P1-5)", async () => {
+    const operationId = randomUUID();
+    const first = await reserveCall(pool, reservation({ operationId }));
+    const second = await reserveCall(pool, reservation({ operationId }));
+    expect(first.ok && second.ok).toBe(true);
+    // A restarted worker cannot restart the adapter's two-attempt loop from zero.
+    const third = await reserveCall(pool, reservation({ operationId }));
+    expect(third).toMatchObject({ ok: false, code: "AI_BUDGET_EXCEEDED" });
+    if (!third.ok) {
+      expect(third.message).toMatch(/per-interpretation/);
+    }
+    // A different interpretation (operation) still has its own budget.
+    const other = await reserveCall(pool, reservation({ operationId: randomUUID() }));
+    expect(other.ok).toBe(true);
+  });
+
+  it("refuses a reservation or a conversation write with a stale fencing token (P1-3)", async () => {
+    // Reuse the trip's existing operation and pin its token to a known value.
+    const existing = await pool.query<{ id: string }>(
+      `SELECT id FROM odft_app.workflow_operations WHERE trip_id = $1 ORDER BY created_at LIMIT 1`,
+      [tripId],
+    );
+    const operationId = existing.rows[0]?.id;
+    if (!operationId) {
+      throw new Error("fixture trip has no operation");
+    }
+    await pool.query(`UPDATE odft_app.workflow_operations SET fencing_token = 7 WHERE id = $1`, [
+      operationId,
+    ]);
+    await expect(
+      reserveCall(pool, reservation({ operationId, fencingToken: "6" })),
+    ).rejects.toBeInstanceOf(StaleFencingError);
+    const accepted = await reserveCall(pool, reservation({ operationId, fencingToken: "7" }));
+    expect(accepted.ok).toBe(true);
+    await expect(
+      appendConversationMessage(pool, {
+        tripId,
+        role: "assistant",
+        content: "stale worker write",
+        operationId,
+        requestId: operationId,
+        fence: { operationId, tripId, fencingToken: "6" },
+      }),
+    ).rejects.toBeInstanceOf(StaleFencingError);
   });
 
   it("projects only safe telemetry fields", async () => {

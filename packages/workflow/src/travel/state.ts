@@ -171,7 +171,9 @@ export const travelStateFields = {
 
   // Phase 08: chat intent interpretation and clarification
   chatMessage: z.string().nullable().default(null),
-  intentStatus: z.enum(["pending", "commands", "clarification", "unsupported"]).default("pending"),
+  intentStatus: z
+    .enum(["pending", "commands", "clarification", "unsupported", "search_pending"])
+    .default("pending"),
   intentInterpretation: z.string().nullable().default(null),
   intentPreserve: z.array(preservableKeySchema).default(() => []),
   clarificationQuestion: z.string().nullable().default(null),

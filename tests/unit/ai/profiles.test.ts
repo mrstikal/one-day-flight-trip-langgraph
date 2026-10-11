@@ -100,6 +100,55 @@ describe("model capability and pricing (T-UT-AI-02)", () => {
     ).toThrow(/configure at least 1/);
   });
 
+  it("covers provider variants of an allowed base slug (P2-10)", () => {
+    const variantManifest: CapabilityManifest = {
+      fetchedAt: new Date().toISOString(),
+      pricingVersion: "v1",
+      models: {
+        "openai/gpt-demo": {
+          model: "openai/gpt-demo",
+          endpoints: [
+            {
+              providerId: "openai",
+              supportsStructuredOutputs: true,
+              supportsReasoning: true,
+              inputPriceUsdPerMillion: "1",
+              outputPriceUsdPerMillion: "2",
+              requestPriceUsd: "0",
+              pricingVersion: "v1",
+            },
+            {
+              // Routing may pick this variant of the allowed base slug, so its
+              // rates must be included in the verified worst case.
+              providerId: "openai/turbo",
+              supportsStructuredOutputs: true,
+              supportsReasoning: true,
+              inputPriceUsdPerMillion: "3",
+              outputPriceUsdPerMillion: "4",
+              requestPriceUsd: "0",
+              pricingVersion: "v1",
+            },
+          ],
+        },
+      },
+    };
+    const check = assertModelCapable(
+      profile({
+        allowedEndpointProviderIds: ["openai"],
+        inputPriceUsdPerMillion: "3",
+        outputPriceUsdPerMillion: "4",
+      }),
+      variantManifest,
+    );
+    expect(check.endpoints.map((endpoint) => endpoint.providerId)).toEqual(["openai", "openai/turbo"]);
+    expect(check.worstInputPriceUsdPerMillion).toBe("3");
+    expect(check.worstOutputPriceUsdPerMillion).toBe("4");
+    // A profile that only covers the base rate is refused (would under-reserve).
+    expect(() =>
+      assertModelCapable(profile({ allowedEndpointProviderIds: ["openai"] }), variantManifest),
+    ).toThrow(/configure at least 3/);
+  });
+
   it("names the available provider slugs when the allowlist does not match", () => {
     expect(() =>
       assertModelCapable(profile({ allowedEndpointProviderIds: ["nonexistent"] }), manifest()),

@@ -17,6 +17,7 @@ import {
 import { contentHash } from "./hash.js";
 import { insertEvent } from "./events.js";
 import { readEffect, writeEffect } from "./effects.js";
+import { insertConversationMessage } from "./conversations.js";
 import { loadDecision } from "./decisions.js";
 import {
   getActiveOperation,
@@ -48,6 +49,11 @@ export interface AdmitOperationOptions {
   readonly tripId: string;
   readonly sessionId: string;
   readonly request: CommandRequest;
+  /**
+   * Chat text stored as the user conversation message inside the admission
+   * transaction (never as a separate write that could race the worker).
+   */
+  readonly userMessage?: string;
 }
 
 export interface AdmitOperationResult {
@@ -250,6 +256,16 @@ export async function admitOperation(
         await client.query("ROLLBACK");
         return error("CONFLICT", "the request id was reused with a different payload");
       }
+      // A deduped chat request reuses the stored message (same request id).
+      if (options.userMessage !== undefined) {
+        await insertConversationMessage(client, {
+          tripId,
+          role: "user",
+          content: options.userMessage,
+          operationId: existing.record.id,
+          requestId: request.requestId,
+        });
+      }
       await client.query("COMMIT");
       return {
         status: "accepted",
@@ -324,6 +340,18 @@ export async function admitOperation(
       type: "operation.admitted",
       payload: { revision: newRevision },
     });
+    // The user message is stored in the SAME transaction as the operation, so a
+    // crash cannot admit work without its conversation entry and the worker can
+    // never process a chat before the message exists.
+    if (options.userMessage !== undefined) {
+      await insertConversationMessage(client, {
+        tripId,
+        role: "user",
+        content: options.userMessage,
+        operationId: operation.id,
+        requestId: request.requestId,
+      });
+    }
     await client.query("COMMIT");
     return { status: "accepted", operationId: operation.id, revision: newRevision, deduped: false };
   } catch (err) {

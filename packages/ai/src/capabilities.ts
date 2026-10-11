@@ -309,6 +309,16 @@ export async function loadCapabilityManifest(
   });
 }
 
+/**
+ * `provider.only` accepts a base provider slug and OpenRouter may then route to any
+ * of its variants (`deepinfra/turbo`, `azure/swedencentral`), so capability and
+ * pricing verification must cover those variants too — otherwise a call could be
+ * routed to an endpoint whose rates were never included in the reserved ceiling.
+ */
+function providerMatches(endpointProviderId: string, allowed: string): boolean {
+  return endpointProviderId === allowed || endpointProviderId.startsWith(`${allowed}/`);
+}
+
 export interface CapabilityCheck {
   readonly model: string;
   readonly endpoints: CapabilityEndpoint[];
@@ -334,7 +344,9 @@ export function assertModelCapable(
     );
   }
   const matched = entry.endpoints.filter((endpoint) =>
-    profile.allowedEndpointProviderIds.includes(endpoint.providerId),
+    profile.allowedEndpointProviderIds.some((allowed) =>
+      providerMatches(endpoint.providerId, allowed),
+    ),
   );
   if (matched.length === 0) {
     // Name the provider slugs that actually serve this model so the operator can

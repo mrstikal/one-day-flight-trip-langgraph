@@ -1,8 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { parseServerConfig } from "@odft/persistence";
+import { loadLocalEnv } from "./_load-env.js";
 import {
   assertModelCapable,
   loadRoleProfiles,
+  resolveAiConfigPath,
   refreshCapabilityManifest,
   stampPricingVersion,
   type CapabilityFetch,
@@ -19,6 +21,9 @@ import {
  */
 
 async function main(): Promise<void> {
+  // Load .env/.env.local exactly like the other operational scripts, so the
+  // documented "set the values in .env and run the command" flow works.
+  loadLocalEnv();
   const config = parseServerConfig(process.env);
   if (config.aiMode !== "openrouter") {
     throw new Error(
@@ -37,11 +42,13 @@ async function main(): Promise<void> {
       "AI_CONFIG_PATH is required to validate model capabilities (see README: AI modes and configuration)",
     );
   }
-  const loaded = loadRoleProfiles({ mode: "openrouter", configPath });
+  // Resolve like the worker (cwd, then repo root) so both use the same file/cache.
+  const resolvedConfigPath = resolveAiConfigPath(configPath);
+  const loaded = loadRoleProfiles({ mode: "openrouter", configPath: resolvedConfigPath });
   if (!loaded.profiles) {
     throw new Error("no role profiles were loaded");
   }
-  const cachePath = `${configPath}.capabilities.json`;
+  const cachePath = `${resolvedConfigPath}.capabilities.json`;
   const fetchImpl: CapabilityFetch = (url, init) =>
     fetch(url, { ...init, headers: { ...init?.headers } });
   const manifest = await refreshCapabilityManifest({
@@ -60,8 +67,8 @@ async function main(): Promise<void> {
   // pin the exact price set that was just verified.
   const stamped = stampPricingVersion(loaded.profiles, manifest.pricingVersion);
   if (stamped.changed) {
-    writeFileSync(configPath, `${JSON.stringify(stamped.profiles, null, 2)}\n`, "utf8");
-    console.log(`stamped pricingVersion ${manifest.pricingVersion} into ${configPath}`);
+    writeFileSync(resolvedConfigPath, `${JSON.stringify(stamped.profiles, null, 2)}\n`, "utf8");
+    console.log(`stamped pricingVersion ${manifest.pricingVersion} into ${resolvedConfigPath}`);
   }
 
   for (const role of ["intent", "recommendation", "planner", "reviewer"] as const) {

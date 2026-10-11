@@ -125,6 +125,7 @@ export {
   assertFencingCurrent,
   checkpointGateKey,
   isFencingCurrent,
+  lockOperationFence,
   readOperationOwnership,
   StaleFencingError,
 } from "./operations/fencing.js";
@@ -186,8 +187,8 @@ export type { ExtensionInput } from "./scenario/snapshots.js";
 export { loadOverlay, upsertFault } from "./scenario/faults.js";
 export type { UpsertFaultInput } from "./scenario/faults.js";
 
-export { applyTripCommand, TripCommandError } from "./trip-commands.js";
-export type { ApplyTripCommandResult } from "./trip-commands.js";
+export { applyTripCommand, applyTripCommands, TripCommandError } from "./trip-commands.js";
+export type { ApplyTripCommandResult, ApplyTripCommandsResult } from "./trip-commands.js";
 
 export {
   dinnerSlotAvailable,
@@ -235,8 +236,16 @@ export {
 
 export {
   appendConversationMessage,
+  insertConversationMessage,
   latestClarification,
   listConversation,
   type AppendMessageInput,
   type ConversationMessageRecord,
 } from "./conversations.js";
+
+export {
+  assertOperationFence,
+  readEffectFenced,
+  writeEffectFenced,
+  type OperationFence,
+} from "./effects.js";

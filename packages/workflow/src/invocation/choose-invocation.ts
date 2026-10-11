@@ -176,9 +176,17 @@ export function chooseInvocation(
     };
   }
 
-  // Unfinished tasks with no unanswered interrupt: rerun only unfinished work.
+  // Unfinished tasks with no unanswered interrupt: rerun only unfinished work —
+  // and only for the operation that owns the checkpoint. A DIFFERENT operation
+  // must start fresh: recovering would replay the stale `chatMessage`/`operationId`
+  // and could trigger a paid call for the previous message.
   if (state.next.length > 0) {
-    return { kind: "recover", input: null };
+    if (state.values.operationId === operation.id) {
+      return { kind: "recover", input: null };
+    }
+    return operation.kind === "decision"
+      ? { kind: "conflict", message: "the interrupted checkpoint belongs to another operation" }
+      : { kind: "start", input: buildStartInput(operation) };
   }
 
   // Completed checkpoint.

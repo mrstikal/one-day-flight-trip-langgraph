@@ -13,8 +13,10 @@ export {
 } from "./adapter.js";
 
 export {
+  aiConfigRepoRoot,
   AiConfigError,
   loadRoleProfiles,
+  resolveAiConfigPath,
   ROLE_DEFAULT_LIMITS,
   stampPricingVersion,
   type LoadedAiConfig,
@@ -92,9 +94,11 @@ export {
   buildTransportSchema,
   OpenRouterAdapter,
   OPENROUTER_CHAT_URL,
-  strictifySchema,
+  OPTIONAL_TRANSPORT_FIELDS,
+  stripOptionalTransportNulls,
   type FetchLike,
   type OpenRouterAdapterOptions,
+  type TransportSchema,
 } from "./openrouter-adapter.js";
 
 export {
