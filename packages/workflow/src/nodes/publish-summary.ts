@@ -26,6 +26,9 @@ export function publishSummaryNode(state: TravelState): TravelUpdate {
       lastOutcome: state.intentStatus === "search_pending" ? "chat_search_pending" : "chat_unsupported",
     };
   }
+  if (state.gate === "approved" && state.itineraryStatus === "approved") {
+    return { lastOutcome: "itinerary_approved" };
+  }
   if (state.replacementStaged) {
     return { lastOutcome: "replacement_pending" };
   }

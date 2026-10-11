@@ -26,12 +26,13 @@ export default async function SummaryPage({
   const projection = await buildTripProjection(deps.pool, id, {
     aiMode: deps.config.aiMode,
     demoControlsEnabled: deps.config.demoControlsEnabled,
+    mapTileUrl: deps.config.mapTileUrl ?? null,
   });
   if (!projection || projection.trip.sessionId !== session.sessionId) {
     notFound();
   }
 
-  const { trip, reservations } = projection;
+  const { trip, reservations, itinerary } = projection;
   const activeReservations = reservations.filter((row) => row.status === "confirmed");
 
   return (
@@ -44,6 +45,15 @@ export default async function SummaryPage({
           {trip.travelVariant === "one_night" ? "one night" : "two nights"}
         </p>
       </header>
+
+      {itinerary ? (
+        <p className="text-sm">
+          Itinerary version {itinerary.version} ({itinerary.status}).{" "}
+          <Link href={`/trips/${id}/itinerary`} className="underline">
+            Open the itinerary
+          </Link>
+        </p>
+      ) : null}
 
       {activeReservations.length > 0 ? (
         <section className="flex flex-col gap-3">

@@ -96,6 +96,24 @@ function assertHttpUrl(name: string, value: string): void {
   }
 }
 
+/**
+ * The map tile URL is exposed verbatim to every browser session, so it must be a
+ * credential-free, policy-compliant source (10-security-reliability.md section 7):
+ * userinfo is rejected outright and plain HTTP only when the app itself is served
+ * over HTTP (local development).
+ */
+function assertPublicTileUrl(value: string, publicBaseUrl: string): void {
+  assertHttpUrl("MAP_TILE_URL", value);
+  const parsed = new URL(value);
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new ConfigError(["MAP_TILE_URL must not contain credentials"]);
+  }
+  const appIsHttps = new URL(publicBaseUrl).protocol === "https:";
+  if (appIsHttps && parsed.protocol !== "https:") {
+    throw new ConfigError(["MAP_TILE_URL must use https when the app is served over https"]);
+  }
+}
+
 function assertPostgresUrl(value: string): void {
   if (!/^postgres(ql)?:\/\//.test(value)) {
     throw new ConfigError(["DATABASE_URL must be a postgres:// or postgresql:// URL"]);
@@ -120,7 +138,7 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
   assertPostgresUrl(raw.DATABASE_URL);
   assertHttpUrl("PUBLIC_BASE_URL", raw.PUBLIC_BASE_URL);
   if (raw.MAP_TILE_URL !== undefined) {
-    assertHttpUrl("MAP_TILE_URL", raw.MAP_TILE_URL);
+    assertPublicTileUrl(raw.MAP_TILE_URL, raw.PUBLIC_BASE_URL);
   }
 
   return {

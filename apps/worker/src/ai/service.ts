@@ -10,7 +10,11 @@ import {
   loadCapabilityManifest,
   loadRoleProfiles,
   OpenRouterAdapter,
+  plannerOutputSchema,
+  plannerRole,
   resolveAiConfigPath,
+  reviewerOutputSchema,
+  reviewerRole,
   validateIntentSemantics,
   worstCaseCostUsd,
   type AuthorizedIntentContext,
@@ -18,6 +22,10 @@ import {
   type CapabilityManifest,
   type CompactContextSource,
   type LLMAdapter,
+  type PlannerContext,
+  type PlannerOutput,
+  type ReviewerContext,
+  type ReviewerOutput,
 } from "@odft/ai";
 import {
   domainCommandSchema,
@@ -26,6 +34,7 @@ import {
   preservableKeySchema,
   snapshotContentSchema,
   tripPreferencesSchema,
+  type AIRole,
   type DomainCommand,
   type IntentResult,
   type PreservableKey,
@@ -64,6 +73,34 @@ export interface AiService {
     /** Driver abort signal (shutdown/lease loss), forwarded to the transport. */
     readonly signal?: AbortSignal;
   }): Promise<{ readonly result: IntentResult; readonly mode: "fixture" | "openrouter" }>;
+  /**
+   * Phase 10: one planner-role call (or the deterministic fixture) under the
+   * effect ledger. Candidate membership is enforced here: a stop that references
+   * an id outside the supplied bounded context is rejected before validation.
+   */
+  plan(input: {
+    readonly tripId: string;
+    readonly operationId: string;
+    readonly fencingToken: string;
+    readonly attempt: number;
+    readonly context: PlannerContext;
+    readonly signal?: AbortSignal;
+  }): Promise<
+    | { readonly kind: "planned"; readonly output: PlannerOutput; readonly mode: "fixture" | "openrouter" }
+    | { readonly kind: "rejected"; readonly reason: string; readonly mode: "fixture" | "openrouter" }
+  >;
+  /**
+   * Phase 10: one reviewer-role call (or fixture) over the deterministically
+   * valid draft; unknown event ids in suggestions are dropped deterministically.
+   */
+  review(input: {
+    readonly tripId: string;
+    readonly operationId: string;
+    readonly fencingToken: string;
+    readonly attempt: number;
+    readonly context: ReviewerContext;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly output: ReviewerOutput; readonly mode: "fixture" | "openrouter" }>;
   /** Fixture-only counter accessor (real token/cost counters stay in the ledger). */
   readonly fixtureCounters?: () => { calls: number };
 }
@@ -341,8 +378,9 @@ function createGovernor(
     readonly tripId: string;
     readonly operationId: string;
     readonly fencingToken: string;
-    readonly role: "intent";
+    readonly role: AIRole;
     readonly profile: RoleProfile;
+    readonly promptVersion: string;
     readonly effectScope: string;
   },
 ): CallGovernor {
@@ -359,7 +397,7 @@ function createGovernor(
         role: input.role,
         model: input.profile.model,
         provider: input.profile.provider,
-        promptVersion: intentRole.promptVersion,
+        promptVersion: input.promptVersion,
         mode: "openrouter",
         effectScope: input.effectScope,
         pricingVersion: input.profile.pricingVersion,
@@ -410,6 +448,8 @@ export function createAiService(deps: InterpretDeps): AiService {
   let manifestFetchedAtMs = 0;
 
   async function resolveAdapter(
+    role: AIRole,
+    promptVersion: string,
     operationId: string,
     tripId: string,
     fencingToken: string,
@@ -443,7 +483,7 @@ export function createAiService(deps: InterpretDeps): AiService {
         : manifest;
     manifest = activeManifest;
     manifestFetchedAtMs = Date.now();
-    const profile = loaded.profiles.intent;
+    const profile = loaded.profiles[role];
     return new OpenRouterAdapter({
       apiKey: config.openrouterApiKey ?? "",
       manifest: activeManifest,
@@ -452,8 +492,9 @@ export function createAiService(deps: InterpretDeps): AiService {
         tripId,
         operationId,
         fencingToken,
-        role: "intent",
+        role,
         profile,
+        promptVersion,
         effectScope,
       }),
     });
@@ -502,6 +543,8 @@ export function createAiService(deps: InterpretDeps): AiService {
           : undefined,
       );
       const adapter = await resolveAdapter(
+        "intent",
+        intentRole.promptVersion,
         input.operationId,
         input.tripId,
         input.fencingToken,
@@ -521,6 +564,120 @@ export function createAiService(deps: InterpretDeps): AiService {
       const result = validateIntentSemantics(response.value, authorized);
       await writeEffectFenced(pool, fence, effectKey, result);
       return { result, mode: loaded.mode };
+    },
+    async plan(input) {
+      const effectScope = `itinerary:plan:${input.attempt}`;
+      const fence = {
+        operationId: input.operationId,
+        tripId: input.tripId,
+        fencingToken: input.fencingToken,
+      };
+      const effectKey = {
+        operationId: input.operationId,
+        nodeName: "plan_itinerary",
+        effectScope,
+      };
+      const cached = await readEffectFenced(pool, fence, effectKey);
+      if (cached !== undefined) {
+        const stored = cached as { kind?: unknown };
+        if (stored?.kind === "planned") {
+          return {
+            kind: "planned",
+            output: plannerOutputSchema.parse((stored as { output: unknown }).output),
+            mode: loaded.mode,
+          };
+        }
+        if (stored?.kind === "rejected") {
+          return {
+            kind: "rejected",
+            reason: String((stored as { reason?: unknown }).reason ?? "planner output rejected"),
+            mode: loaded.mode,
+          };
+        }
+      }
+      const adapter = await resolveAdapter(
+        "planner",
+        plannerRole.promptVersion,
+        input.operationId,
+        input.tripId,
+        input.fencingToken,
+        effectScope,
+      );
+      const response = await adapter.generateObject({
+        role: "planner",
+        promptVersion: plannerRole.promptVersion,
+        operationId: input.operationId,
+        effectScope,
+        systemPrompt: plannerRole.systemPrompt,
+        context: input.context,
+        outputSchema: plannerOutputSchema,
+        signal: input.signal ?? new AbortController().signal,
+      });
+      const output = plannerOutputSchema.parse(response.value);
+      const candidateIds = new Set(input.context.candidates.map((candidate) => candidate.id));
+      const invented = output.stops.find(
+        (stop) =>
+          (stop.kind === "meal" || stop.kind === "activity") &&
+          (!stop.refId || !candidateIds.has(stop.refId)),
+      );
+      if (invented && (invented.kind === "meal" || invented.kind === "activity")) {
+        const reason = `the planner referenced an unknown candidate id ${invented.refId ?? "(missing)"}; the proposal was rejected before validation`;
+        const rejection = { kind: "rejected", reason };
+        await writeEffectFenced(pool, fence, effectKey, rejection);
+        return { kind: "rejected", reason, mode: loaded.mode };
+      }
+      const stored = { kind: "planned", output };
+      await writeEffectFenced(pool, fence, effectKey, stored);
+      return { kind: "planned", output, mode: loaded.mode };
+    },
+    async review(input) {
+      const effectScope = `itinerary:review:${input.attempt}`;
+      const fence = {
+        operationId: input.operationId,
+        tripId: input.tripId,
+        fencingToken: input.fencingToken,
+      };
+      const effectKey = {
+        operationId: input.operationId,
+        nodeName: "review_itinerary",
+        effectScope,
+      };
+      const cached = await readEffectFenced(pool, fence, effectKey);
+      if (cached !== undefined) {
+        return { output: reviewerOutputSchema.parse(cached), mode: loaded.mode };
+      }
+      const adapter = await resolveAdapter(
+        "reviewer",
+        reviewerRole.promptVersion,
+        input.operationId,
+        input.tripId,
+        input.fencingToken,
+        effectScope,
+      );
+      const response = await adapter.generateObject({
+        role: "reviewer",
+        promptVersion: reviewerRole.promptVersion,
+        operationId: input.operationId,
+        effectScope,
+        systemPrompt: reviewerRole.systemPrompt,
+        context: input.context,
+        outputSchema: reviewerOutputSchema,
+        signal: input.signal ?? new AbortController().signal,
+      });
+      const raw = reviewerOutputSchema.parse(response.value);
+      // Deterministic sanitization: suggestions may only reference event ids
+      // that exist in the reviewed draft.
+      const eventIds = new Set(input.context.events.map((event) => event.id));
+      const output: ReviewerOutput = {
+        ...raw,
+        issues: raw.issues.map((issue) => ({
+          ...issue,
+          eventIds: issue.eventIds.filter((id) => eventIds.has(id)).slice(0, 8),
+        })),
+        suggestedOrder: raw.suggestedOrder.filter((id) => eventIds.has(id)).slice(0, 24),
+      };
+      await writeEffectFenced(pool, fence, effectKey, output);
+      return { output, mode: loaded.mode };
     },
   };
 }

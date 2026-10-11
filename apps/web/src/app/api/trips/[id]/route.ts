@@ -26,6 +26,7 @@ export async function GET(
   const projection = await buildTripProjection(deps.pool, id, {
     aiMode: deps.config.aiMode,
     demoControlsEnabled: deps.config.demoControlsEnabled,
+    mapTileUrl: deps.config.mapTileUrl ?? null,
   });
   if (!projection || projection.trip.sessionId !== session.sessionId) {
     return notFoundResponse();

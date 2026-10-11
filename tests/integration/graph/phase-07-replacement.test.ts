@@ -4,6 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { snapshotContentSchema } from "@odft/contracts";
 import { admitOperation, admitResume, getPendingDecisionForTrip } from "@odft/persistence";
 import {
+  approvePendingItinerary,
+  approvePendingItineraryIfAny,
   claimNextOrFail,
   createGraphTestPool,
   createHarnessTrip,
@@ -126,6 +128,10 @@ describe("travel graph phase 07 replacement (real PostgreSQL)", () => {
     await driver.runOperation(await claimNextOrFail(pools));
     expect((await readTravelState(pools, tripId)).values.programApplied).toBe(true);
 
+    // Phase 10: the valid program opens the itinerary approval; resolve it so a
+    // later command is not a pending-decision conflict.
+    await approvePendingItinerary(pool, pools, tripId, sessionId);
+
     // Optional dinner reservation through propose_selection + confirmation.
     const proposed = await admitOperation(pool, {
       tripId,
@@ -146,6 +152,28 @@ describe("travel graph phase 07 replacement (real PostgreSQL)", () => {
       acceptedDemoDisclaimer: true,
     });
     await driver.runOperation(await claimNextOrFail(pools));
+    // Phase 10: confirming a meal booking rebuilds the itinerary draft; approve
+    // it so the following command is not a pending-decision conflict.
+    await approvePendingItineraryIfAny(pool, pools, tripId, sessionId);
+
+    // AC-10-6: the confirmed dinner is locked to its persisted window and keeps
+    // the offer's fixed duration in the rebuilt itinerary.
+    const confirmedDinner = content.restaurants.find((offer) => offer.id === dinners[0]);
+    const dinnerWindowStart = /^(\d{2}):(\d{2})/.exec(confirmedDinner?.windowStart ?? "");
+    const expectedStartMinute =
+      Number(dinnerWindowStart?.[1] ?? "0") * 60 + Number(dinnerWindowStart?.[2] ?? "0");
+    const latestItinerary = await pool.query<{
+      events: { kind: string; refId: string | null; locked: boolean; startMinute: number; durationMinutes: number }[];
+    }>(
+      `SELECT events FROM odft_app.itineraries WHERE trip_id = $1 ORDER BY version DESC LIMIT 1`,
+      [tripId],
+    );
+    const lockedDinner = latestItinerary.rows[0]?.events.find(
+      (event) => event.kind === "meal" && event.refId === dinners[0],
+    );
+    expect(lockedDinner?.locked).toBe(true);
+    expect(lockedDinner?.startMinute).toBe(expectedStartMinute);
+    expect(lockedDinner?.durationMinutes).toBe(confirmedDinner?.durationMinutes);
 
     // Submit a different dinner via set_program: it must stage a replacement.
     const setProgram = await admitOperation(pool, {
@@ -175,8 +203,12 @@ describe("travel graph phase 07 replacement (real PostgreSQL)", () => {
     });
     await driver.runOperation(await claimNextOrFail(pools));
 
+    // Phase 10: the replacement commit rebuilds the itinerary; approve the new
+    // draft so the trip returns to a decision-free ready state.
+    await approvePendingItineraryIfAny(pool, pools, tripId, sessionId);
+
     const state = await readTravelState(pools, tripId);
-    expect(state.values.gate).toBe("booked");
+    expect(state.values.gate).toBe("approved");
 
     const dinnerRows = await pool.query<{ status: string; offer_id: string }>(
       `SELECT status, offer_id FROM odft_app.reservations

@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { snapshotContentSchema } from "@odft/contracts";
 import { admitOperation, admitResume, getPendingDecisionForTrip } from "@odft/persistence";
 import {
+  approvePendingItinerary,
   claimNextOrFail,
   createGraphTestPool,
   createHarnessTrip,
@@ -22,6 +23,7 @@ import {
  */
 
 export {
+  approvePendingItinerary,
   claimNextOrFail,
   createGraphTestPool,
   createHarnessTrip,
@@ -131,9 +133,13 @@ export async function driveTripToReady(
   });
   await driver.runOperation(await claimNextOrFail(pools));
 
+  // Phase 10: a valid program continues into itinerary planning; approve the
+  // resulting draft so the trip reaches a decision-free `ready` state.
+  await approvePendingItinerary(pool, pools, tripId, sessionId);
+
   const state = await readTravelState(pools, tripId);
-  if (state.values.gate !== "program_ready") {
-    throw new Error(`expected program_ready, got ${String(state.values.gate)}`);
+  if (state.values.gate !== "approved") {
+    throw new Error(`expected approved, got ${String(state.values.gate)}`);
   }
 }
 
@@ -169,17 +175,19 @@ export async function sendChat(
 /**
  * Re-submit the current program-choices decision so the trip returns to a
  * decision-free `ready` state (a chat while a non-clarification decision is
- * pending is a deliberate conflict).
+ * pending is a deliberate conflict). Returns the pending decision kind after
+ * the run: `null` when the trip is decision-free (approval handled), otherwise
+ * the clarification/recovery the caller must resolve.
  */
 export async function resolveProgramChoices(
   pool: Pool,
   pools: WorkerPools,
   tripId: string,
   sessionId: string,
-): Promise<void> {
+): Promise<string | null> {
   const decision = await getPendingDecisionForTrip(pools.operations, tripId);
   if (decision?.kind !== "program_choices") {
-    return;
+    return decision?.kind ?? null;
   }
   const snapshot = await pool.query<{ inventory: unknown }>(
     `SELECT s.inventory FROM odft_app.scenario_snapshots s
@@ -201,4 +209,12 @@ export async function resolveProgramChoices(
     preferredActivityIds: (decision.allowedOptionIds ?? []).slice(0, 2),
   });
   await createTravelDriver(pools).runOperation(await claimNextOrFail(pools));
+  // Phase 10: re-submitting the program rebuilds the itinerary draft; approve it
+  // so the caller returns to a decision-free ready state.
+  const next = await getPendingDecisionForTrip(pools.operations, tripId);
+  if (next?.kind === "itinerary_approval") {
+    await approvePendingItinerary(pool, pools, tripId, sessionId);
+    return null;
+  }
+  return next?.kind ?? null;
 }

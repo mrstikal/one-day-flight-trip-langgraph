@@ -231,12 +231,20 @@ export function SuccessPanel({
       <p className="text-sm text-ink-muted">
         This is a simulated reservation. No payment was taken and it is not valid for travel.
       </p>
-      <Link
-        href={`/trips/${tripId}/summary`}
-        className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
-      >
-        View trip summary
-      </Link>
+      <div className="flex flex-wrap gap-3">
+        <Link
+          href={`/trips/${tripId}/summary`}
+          className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
+        >
+          View trip summary
+        </Link>
+        <Link
+          href={`/trips/${tripId}/itinerary`}
+          className="w-fit rounded border border-teal px-4 py-2 text-sm font-medium text-teal"
+        >
+          View itinerary
+        </Link>
+      </div>
     </section>
   );
 }

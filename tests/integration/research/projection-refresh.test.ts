@@ -33,7 +33,7 @@ import {
  * - arming a fault after a successful research invalidates that domain only.
  */
 
-const DISPLAY = { aiMode: "fixture", demoControlsEnabled: true } as const;
+const DISPLAY = { aiMode: "fixture", demoControlsEnabled: true, mapTileUrl: null } as const;
 
 describe("projection refresh, artifact binding, and fencing (real PostgreSQL)", () => {
   let pool: Pool;

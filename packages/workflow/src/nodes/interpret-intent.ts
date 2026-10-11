@@ -62,6 +62,12 @@ function routingFor(commands: readonly DomainCommand[]): {
   if (proposal) {
     return { commandType: "propose_selection", commandPayload: proposal };
   }
+  // An explicit `build_itinerary` option (Phase 10 conflict clarifications)
+  // replans directly instead of re-opening the program step.
+  const build = commands.find((command) => command.type === "build_itinerary");
+  if (build) {
+    return { commandType: "build_itinerary", commandPayload: build };
+  }
   return { commandType: "chat_applied", commandPayload: null };
 }
 

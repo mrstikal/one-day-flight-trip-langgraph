@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import {
   CHECKPOINT_SCHEMA,
+  admitResume,
   claimNextOperation,
   createPool,
   createTrip,
+  getPendingDecisionForTrip,
   loadReferenceData,
   parseServerConfig,
   retryOperation,
@@ -132,6 +134,60 @@ export async function readTravelState(pools: WorkerPools, tripId: string) {
   const saver = new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA });
   const graph = buildTravelGraph({ checkpointer: saver });
   return graph.getState({ configurable: { thread_id: tripId } });
+}
+
+/** Approve the pending itinerary draft when one is waiting (Phase 10). */
+export async function approvePendingItineraryIfAny(
+  pool: Pool,
+  pools: WorkerPools,
+  tripId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const decision = await getPendingDecisionForTrip(pools.operations, tripId);
+  if (decision?.kind !== "itinerary_approval") {
+    return false;
+  }
+  await approvePendingItinerary(pool, pools, tripId, sessionId);
+  return true;
+}
+
+/**
+ * Approve the pending `itinerary_approval` decision (Phase 10) and run the
+ * resume operation to a decision-free ready state.
+ */
+export async function approvePendingItinerary(
+  pool: Pool,
+  pools: WorkerPools,
+  tripId: string,
+  sessionId: string,
+): Promise<void> {
+  const decision = await getPendingDecisionForTrip(pools.operations, tripId);
+  if (decision?.kind !== "itinerary_approval") {
+    throw new Error(`expected itinerary_approval, got ${String(decision?.kind)}`);
+  }
+  const state = await readTravelState(pools, tripId);
+  const itineraryId = state.values.itineraryId as string | null;
+  if (!itineraryId) {
+    throw new Error("no itinerary draft is active for approval");
+  }
+  const revision = await pool.query<{ revision: number }>(
+    `SELECT revision FROM odft_app.trips WHERE id = $1`,
+    [tripId],
+  );
+  const admitted = await admitResume(pool, {
+    tripId,
+    sessionId,
+    request: {
+      requestId: randomUUID(),
+      expectedRevision: revision.rows[0]?.revision ?? 0,
+      decisionId: decision.id,
+      response: { action: "approve_itinerary", itineraryId } as never,
+    },
+  });
+  if (!("operationId" in admitted)) {
+    throw new Error(`itinerary approval refused: ${JSON.stringify(admitted)}`);
+  }
+  await createTravelDriver(pools).runOperation(await claimNextOrFail(pools));
 }
 
 /** Claim the next ready operation, failing the test if none is available. */

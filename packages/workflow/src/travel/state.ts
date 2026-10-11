@@ -22,8 +22,8 @@ import { researchResultsValue } from "../state/research-reducer.js";
  * PostgreSQL and is read through the invocation ports.
  */
 
-export const TRAVEL_SCHEMA_VERSION = "travel-state-v3";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v3";
+export const TRAVEL_SCHEMA_VERSION = "travel-state-v4";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v4";
 
 export const travelGateSchema = z.enum([
   "pending",
@@ -39,6 +39,9 @@ export const travelGateSchema = z.enum([
   "research_failed",
   "clarification",
   "chat_done",
+  "itinerary_ready",
+  "itinerary_conflict",
+  "approved",
 ]);
 export type TravelGate = z.infer<typeof travelGateSchema>;
 
@@ -50,6 +53,7 @@ export const travelStageSchema = z.enum([
   "reselection",
   "clarification_apply",
   "clarification_modify",
+  "approve",
   "end",
 ]);
 export type TravelStage = z.infer<typeof travelStageSchema>;
@@ -61,6 +65,7 @@ export const travelDecisionKindSchema = z.enum([
   "program_choices",
   "booking_confirmation",
   "replacement_confirmation",
+  "itinerary_approval",
   "recovery",
   "clarification",
 ]);
@@ -172,6 +177,26 @@ export const travelStateFields = {
   gate: travelGateSchema.default("pending"),
   lastOutcome: z.string().nullable().default(null),
 
+  // Phase 10: itinerary planning/validation/review/approval
+  /** Total `plan_itinerary` executions for the current user operation (max 3). */
+  planningAttempt: z.number().int().min(0).max(3).default(0),
+  itineraryId: z.string().nullable().default(null),
+  itineraryVersion: z.number().int().nullable().default(null),
+  itineraryStatus: z.enum(["draft", "approved"]).nullable().default(null),
+  itineraryValidationStatus: z.enum(["valid", "invalid"]).nullable().default(null),
+  itineraryErrorCodes: z.array(z.string().min(1)).max(32).default(() => []),
+  itineraryWarningCodes: z.array(z.string().min(1)).max(32).default(() => []),
+  /** Bounded validator/review feedback for the next planning attempt. */
+  itineraryFeedback: z.array(z.string().min(1).max(300)).max(10).default(() => []),
+  itineraryReviewVerdict: z.enum(["acceptable", "revise", "conflict"]).nullable().default(null),
+  itineraryReviewSuggestions: z.array(z.string().min(1).max(300)).max(8).default(() => []),
+  /** True when the deterministic validator reported a budget conflict. */
+  itineraryBudgetConflict: z.boolean().default(false),
+  /** Plan-derived cost total reported by the clarification (minor units). */
+  itineraryTotalCostMinor: z.number().int().min(0).max(100_000_000).default(0),
+  /** Recovery options chosen by the itinerary conflict builder (ICT/recovery). */
+  recoveryOptionIds: z.array(z.string().min(1)).max(4).default(() => []),
+
   // Phase 09: parallel research fan-out (Send) with keyed results and retry
   /**
    * Current research-run scope; reducer keys are `<researchRunId>:<domain>`.
@@ -268,6 +293,7 @@ export const DECISION_KIND_FOR_STAGE: Readonly<Record<TravelDecisionKind, Decisi
   program_choices: "program_choices",
   booking_confirmation: "booking_confirmation",
   replacement_confirmation: "replacement_confirmation",
+  itinerary_approval: "itinerary_approval",
   recovery: "recovery",
   clarification: "clarification",
 };

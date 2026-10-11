@@ -4,15 +4,19 @@ import { randomUUID } from "node:crypto";
 import { tripPreferencesSchema } from "@odft/contracts";
 import {
   admitOperation,
+  admitResume,
   applyTripCommands,
   getPendingDecisionForTrip,
   listConversation,
   TripCommandError,
 } from "@odft/persistence";
 import {
+  approvePendingItinerary,
+  claimNextOrFail,
   createGraphTestPool,
   createHarnessTrip,
   createTestAiService,
+  createTravelDriver,
   createWorkerPools,
   driveTripToReady,
   endWorkerPools,
@@ -53,6 +57,29 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
       [tripId],
     );
     return tripPreferencesSchema.parse(result.rows[0]?.preferences);
+  }
+
+  /** Choose one offered clarification/recovery option and run the resume. */
+  async function choosePendingOption(
+    tripId: string,
+    sessionId: string,
+    optionId: string,
+  ): Promise<void> {
+    const decision = await getPendingDecisionForTrip(pools.operations, tripId);
+    const admitted = await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: await tripRevision(pool, tripId),
+        decisionId: decision?.id ?? "",
+        response: { action: "choose_option", optionId } as never,
+      },
+    });
+    if (!("operationId" in admitted)) {
+      throw new Error(`option choice refused: ${JSON.stringify(admitted)}`);
+    }
+    await createTravelDriver(pools).runOperation(await claimNextOrFail(pools));
   }
 
   it("applies a pace request without touching bookings or counts", async () => {
@@ -107,12 +134,36 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     expect(prefs.minimumActivityCounts.museum).toBe(3);
     expect(prefs.activityPace).toBe("moderate");
 
-    // The chat re-derived a program decision; resolve it before the next chat.
-    await resolveProgramChoices(pool, pools, tripId, sessionId);
+    // The chat re-derived the program decision. The Rome inventory holds only
+    // two museum-tagged activities, so the 3-museum request is infeasible: the
+    // Phase 10 bounded loop opens a clarification that preserves the typed
+    // numeric requirement, and nothing is reduced silently.
+    const afterProgram = await resolveProgramChoices(pool, pools, tripId, sessionId);
+    expect(afterProgram).toBe("clarification");
+    const clarification = await getPendingDecisionForTrip(pools.operations, tripId);
+    const payload = await pool.query<{ option_payload: unknown }>(
+      `SELECT option_payload FROM odft_app.pending_decisions WHERE id = $1`,
+      [clarification?.id],
+    );
+    const options =
+      (payload.rows[0]?.option_payload as { options?: { id: string; label: string }[] })?.options ??
+      [];
+    expect(options.map((option) => option.id)).toContain("review_program");
+    const reduce = options.find((option) => option.id.startsWith("reduce_"));
+    expect(reduce?.label).toContain("reduce the minimum museum visits to 2");
+    prefs = await preferences(tripId);
+    expect(prefs.minimumActivityCounts.museum).toBe(3);
+
+    // The user explicitly accepts the feasible reduction, which replans.
+    await choosePendingOption(tripId, sessionId, reduce?.id as string);
+    await approvePendingItinerary(pool, pools, tripId, sessionId);
+    prefs = await preferences(tripId);
+    expect(prefs.minimumActivityCounts.museum).toBe(2);
+
+    // AC-08-5: the absolute requirement survives the pace change.
     await sendChat(pool, pools, tripId, sessionId, "Make the day less exhausting");
     prefs = await preferences(tripId);
-    // AC-08-5: the absolute requirement survives the pace change.
-    expect(prefs.minimumActivityCounts.museum).toBe(3);
+    expect(prefs.minimumActivityCounts.museum).toBe(2);
     expect(prefs.activityPace).toBe("relaxed");
   }, 120_000);
 

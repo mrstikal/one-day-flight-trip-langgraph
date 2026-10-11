@@ -12,3 +12,8 @@ export * from "./research/rank.js";
 export * from "./booking/references.js";
 export * from "./booking/lifecycle.js";
 export * from "./booking/booking-service.js";
+export * from "./itinerary/taxonomy.js";
+export * from "./itinerary/metrics.js";
+export * from "./itinerary/assemble.js";
+export * from "./itinerary/validate.js";
+export * from "./itinerary/decision.js";

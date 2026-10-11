@@ -33,6 +33,22 @@ async function selectCombobox(page: Page, label: string, query: string): Promise
   await input.press("Enter");
 }
 
+/** Phase 10: a saved program plans the itinerary; approve it to free the chat. */
+async function approveItinerary(page: Page, tripId: string): Promise<void> {
+  await page.goto(`/trips/${tripId}/itinerary`);
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("open-approval")).toBeEnabled({ timeout: 10_000 });
+  }).toPass({ timeout: 180_000, intervals: [2_000, 3_000, 5_000] });
+  await page.getByTestId("open-approval").click();
+  await page
+    .getByTestId("approval-dialog")
+    .getByLabel("I understand this approves the current itinerary version")
+    .check();
+  await page.getByTestId("approve-itinerary").click();
+  await expect(page.getByTestId("itinerary-status")).toHaveText("Approved", { timeout: 90_000 });
+}
+
 async function confirmDialog(page: Page, referencePrefix: string): Promise<void> {
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -57,6 +73,8 @@ test("assistant rail interprets a chat request and applies a clarification choic
   await selectCombobox(page, "City", "Rome");
   await page.getByRole("button", { name: "Create trip" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+  const tripId = /\/trips\/([0-9a-f-]+)\//.exec(page.url())?.[1] ?? "";
+  expect(tripId).not.toBe("");
 
   const rail = page.getByTestId("assistant-rail");
   await expect(rail).toBeVisible();
@@ -81,6 +99,9 @@ test("assistant rail interprets a chat request and applies a clarification choic
   await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
     timeout: 60_000,
   });
+  // Phase 10: the saved program plans the itinerary and waits for approval.
+  await approveItinerary(page, tripId);
+  await page.goto(`/trips/${tripId}/meals`);
 
   // Chat: one admitted operation, interpreted in fixture mode.
   const composer = rail.getByLabel("Ask for a change");
@@ -97,6 +118,9 @@ test("assistant rail interprets a chat request and applies a clarification choic
   await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
     timeout: 60_000,
   });
+  // Phase 10: rebuilds the draft; approve it before the next chat.
+  await approveItinerary(page, tripId);
+  await page.goto(`/trips/${tripId}/meals`);
 
   // A contradictory request opens the bounded clarification card.
   await composer.fill("A relaxed day with six museums");

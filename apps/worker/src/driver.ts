@@ -152,6 +152,10 @@ const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "FORBIDDEN",
   "NOT_FOUND",
   "REF_GENERATION_FAILED",
+  // Phase 10: approving a stale draft or one that is no longer approvable can
+  // never succeed by retrying; the client refreshes and rebuilds.
+  "ITINERARY_NOT_APPROVABLE",
+  "STALE_ITINERARY",
   // AI failures are never automatically retried by the graph layer: the adapter
   // already owns its single repair/retry, and a second graph-level round would
   // stack billable calls on the same message (06-ai-agent-design.md section 9).

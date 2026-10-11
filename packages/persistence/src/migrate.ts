@@ -35,6 +35,7 @@ export const MIGRATION_VERSIONS: readonly string[] = [
   "0004-graph-lease",
   "0008-ai",
   "0009-research",
+  "0010-itinerary",
 ];
 
 export interface MigrationResult {

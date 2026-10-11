@@ -206,6 +206,30 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
     );
     expect(selections.rows.map((row) => row.service_key)).toEqual(["breakfast", "dinner", "lunch"]);
 
+    // Phase 10: a valid program continues into itinerary planning and waits at
+    // the `itinerary_approval` decision instead of ending the run directly.
+    const itineraryDecision = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(itineraryDecision?.kind).toBe("itinerary_approval");
+    const itineraryState = await readTravelState(pools, tripId);
+    expect(itineraryState.values.itineraryStatus).toBe("draft");
+    expect(itineraryState.values.itineraryValidationStatus).toBe("valid");
+    expect(itineraryState.values.planningAttempt).toBeGreaterThanOrEqual(1);
+    expect(itineraryState.values.planningAttempt).toBeLessThanOrEqual(3);
+    const itineraryId = itineraryState.values.itineraryId as string;
+    await chooseDecision(
+      tripId,
+      sessionId,
+      { kind: "itinerary_approval" },
+      { action: "approve_itinerary", itineraryId },
+    );
+    await driver.runOperation(await claimNextOrFail(pools));
+
+    const itineraryRow = await pool.query<{ status: string; version: number }>(
+      `SELECT status, version FROM odft_app.itineraries WHERE id = $1`,
+      [itineraryId],
+    );
+    expect(itineraryRow.rows[0]?.status).toBe("approved");
+
     const trip = await pool.query<{ workflow_status: string }>(
       `SELECT workflow_status FROM odft_app.trips WHERE id = $1`,
       [tripId],

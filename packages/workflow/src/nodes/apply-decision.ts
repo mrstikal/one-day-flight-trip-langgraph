@@ -9,6 +9,8 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "commit" };
     case "submit_program":
       return { pendingStage: "program" };
+    case "approve_itinerary":
+      return { pendingStage: "approve" };
     case "choose_clarification":
       return { pendingStage: "clarification_apply" };
     case "modify":

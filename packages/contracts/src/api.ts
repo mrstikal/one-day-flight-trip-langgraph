@@ -19,6 +19,7 @@ import {
   publicClarificationSchema,
   publicConversationMessageSchema,
 } from "./ai.js";
+import { publicItinerarySchema } from "./itinerary.js";
 import {
   admissionAcceptedSchema,
   commandRequestSchema,
@@ -120,6 +121,8 @@ export const tripProjectionSchema = z
     conversation: z.array(publicConversationMessageSchema),
     /** Server-side clarification question/options for the pending decision. */
     clarification: publicClarificationSchema.nullable(),
+    /** Phase 10: latest immutable itinerary version (draft or approved). */
+    itinerary: publicItinerarySchema.nullable(),
     display: tripDisplaySchema,
   })
   .strict();

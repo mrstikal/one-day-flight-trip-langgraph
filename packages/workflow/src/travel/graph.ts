@@ -25,12 +25,17 @@ import {
   resolveClarificationNode,
 } from "../nodes/interpret-intent.js";
 import { publishSummaryNode } from "../nodes/publish-summary.js";
+import { planItineraryNode } from "../nodes/plan-itinerary.js";
+import { validateItineraryNode } from "../nodes/validate-itinerary.js";
+import { reviewItineraryNode } from "../nodes/review-itinerary.js";
+import { approveItineraryNode } from "../nodes/approve-itinerary.js";
 
 /**
- * Production travel graph (Phase 06-09).
+ * Production travel graph (Phase 06-10).
  *
  * START -> load_context -> apply_commands ->
  *   propose_selection -> stage_command_proposal -> prepare_decision
+ *   build_itinerary -> plan_itinerary
  *   else -> validate_route -> (FEASIBLE) generate_flights -> validate_schedules
  *     -> (VALID) prepare_decision -> await_decision -> apply_decision ->
  *          choose_offer -> stage_selection -> prepare_decision ...
@@ -40,13 +45,20 @@ import { publishSummaryNode } from "../nodes/publish-summary.js";
  *                      join_research -> (retry) dispatch_research
  *                                    -> (failed) prepare_decision
  *                                    -> rank_recommendations -> prepare_decision ...
- *              else -> validate_selected_logistics -> ...
+ *              else -> validate_selected_logistics -> plan_itinerary
  *          submit_program -> apply_program -> validate_selected_logistics ->
- *              publish_summary -> END
+ *              plan_itinerary -> validate_itinerary ->
+ *                  (invalid, attempts < 3) plan_itinerary
+ *                  (invalid at bound / budget) prepare_decision
+ *                  (valid) review_itinerary ->
+ *                      (revise, attempts < 3) plan_itinerary
+ *                      (else) prepare_decision (itinerary_approval)
+ *          approve_itinerary -> publish_summary -> END
  *     (rejected / no schedule) -> publish_summary -> END
  *
- * Stage A/B validation is independent and deterministic; the graph never calls
- * an LLM. Domain truth is read and written through the invocation ports.
+ * Stage A/B validation and itinerary assembly/validation are independent and
+ * deterministic; the graph never calls an LLM. Domain truth is read and written
+ * through the invocation ports.
  */
 
 export function routeAfterValidation(state: TravelState): string {
@@ -83,6 +95,9 @@ export function routeAfterApplyCommands(state: TravelState): string {
   if (state.commandType === "set_program") {
     return "apply_program";
   }
+  if (state.commandType === "build_itinerary") {
+    return "plan_itinerary";
+  }
   return "detect_progress";
 }
 
@@ -102,6 +117,9 @@ export function routeAfterIntentResult(state: TravelState): string {
   if (state.commandType === "propose_selection") {
     return "stage_command_proposal";
   }
+  if (state.commandType === "build_itinerary") {
+    return "plan_itinerary";
+  }
   return "detect_progress";
 }
 
@@ -118,6 +136,8 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "commit_booking";
     case "program":
       return "apply_program";
+    case "approve":
+      return "approve_itinerary";
     case "reselection":
       return "prepare_decision";
     case "clarification_apply":
@@ -155,7 +175,35 @@ export function routeAfterLogistics(state: TravelState): string {
   ) {
     return "prepare_decision";
   }
-  return "publish_summary";
+  // Phase 10: a valid program/logistics state always (re)builds the itinerary.
+  return "plan_itinerary";
+}
+
+/**
+ * Phase 10 bounded planning loop. Budget conflicts stop the loop immediately;
+ * other invalid results replan while attempts remain (max three total) and then
+ * open the conflict decision; a valid result continues to review.
+ */
+export function routeAfterValidateItinerary(state: TravelState): string {
+  if (state.itineraryValidationStatus === "valid") {
+    return "review_itinerary";
+  }
+  if (state.itineraryBudgetConflict) {
+    return "prepare_decision";
+  }
+  if (state.planningAttempt < 3) {
+    return "plan_itinerary";
+  }
+  return "prepare_decision";
+}
+
+/** A `revise` verdict replans while attempts remain; otherwise the approval (or
+ * the review-conflict decision) opens. */
+export function routeAfterReviewItinerary(state: TravelState): string {
+  if (state.itineraryReviewVerdict === "revise" && state.planningAttempt < 3) {
+    return "plan_itinerary";
+  }
+  return "prepare_decision";
 }
 
 export interface BuildTravelGraphOptions {
@@ -179,6 +227,10 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addNode("join_research", joinResearchNode)
     .addNode("rank_recommendations", rankRecommendationsNode)
     .addNode("validate_selected_logistics", validateSelectedLogisticsNode)
+    .addNode("plan_itinerary", planItineraryNode)
+    .addNode("validate_itinerary", validateItineraryNode)
+    .addNode("review_itinerary", reviewItineraryNode)
+    .addNode("approve_itinerary", approveItineraryNode)
     .addNode("prepare_decision", prepareDecisionNode)
     .addNode("await_decision", awaitDecisionNode)
     .addNode("apply_decision", applyDecisionNode)
@@ -193,6 +245,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "interpret_intent",
       "stage_command_proposal",
       "apply_program",
+      "plan_itinerary",
       "detect_progress",
     ])
     .addConditionalEdges("interpret_intent", routeAfterIntentResult, [
@@ -200,6 +253,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "prepare_decision",
       "apply_program",
       "stage_command_proposal",
+      "plan_itinerary",
       "detect_progress",
     ])
     .addConditionalEdges("resolve_clarification", routeAfterIntentResult, [
@@ -207,6 +261,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "prepare_decision",
       "apply_program",
       "stage_command_proposal",
+      "plan_itinerary",
       "detect_progress",
     ])
     .addEdge("interpret_modification", "interpret_intent")
@@ -233,6 +288,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "stage_selection",
       "commit_booking",
       "apply_program",
+      "approve_itinerary",
       "prepare_decision",
       "resolve_clarification",
       "interpret_modification",
@@ -262,8 +318,19 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addConditionalEdges("apply_program", routeAfterApplyProgram, ["validate_selected_logistics"])
     .addConditionalEdges("validate_selected_logistics", routeAfterLogistics, [
       "prepare_decision",
-      "publish_summary",
+      "plan_itinerary",
     ])
+    .addEdge("plan_itinerary", "validate_itinerary")
+    .addConditionalEdges("validate_itinerary", routeAfterValidateItinerary, [
+      "review_itinerary",
+      "plan_itinerary",
+      "prepare_decision",
+    ])
+    .addConditionalEdges("review_itinerary", routeAfterReviewItinerary, [
+      "plan_itinerary",
+      "prepare_decision",
+    ])
+    .addEdge("approve_itinerary", "publish_summary")
     .addEdge("publish_summary", END);
 
   return builder.compile({ checkpointer: options.checkpointer });

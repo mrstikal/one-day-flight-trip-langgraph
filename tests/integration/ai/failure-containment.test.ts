@@ -53,6 +53,12 @@ describe("AI failure containment (real PostgreSQL)", () => {
         calls += 1;
         throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
       },
+      async plan() {
+        throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
+      },
+      async review() {
+        throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
+      },
     };
     const driver = createTravelDriver(pools, failing);
 
@@ -109,6 +115,12 @@ describe("AI failure containment (real PostgreSQL)", () => {
     // Fail message A terminally (the checkpoint keeps an unfinished interpret_intent).
     const failing: AiService = {
       async interpret() {
+        throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
+      },
+      async plan() {
+        throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
+      },
+      async review() {
         throw new AdapterError("AI_SCHEMA_INVALID", "model output failed validation", false);
       },
     };

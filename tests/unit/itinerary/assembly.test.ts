@@ -1,0 +1,257 @@
+import { describe, expect, it } from "vitest";
+import {
+  assembleItinerary,
+  type AssembleItineraryInput,
+  type ItineraryRouteLeg,
+} from "../../../packages/domain/src/itinerary/assemble.js";
+
+/** Deterministic routing stub: the assembly must not depend on the real provider. */
+const ROUTING = {
+  estimate(leg: ItineraryRouteLeg) {
+    if (leg.mode === "walking") {
+      return { distanceKm: 0.8, estimatedMinutes: 10, partyTotalMinor: 0, simulated: true as const };
+    }
+    if (leg.mode === "public_transport") {
+      return { distanceKm: 3.2, estimatedMinutes: 15, partyTotalMinor: 600, simulated: true as const };
+    }
+    if (leg.mode === "airport_transfer") {
+      return { distanceKm: 18, estimatedMinutes: 45, partyTotalMinor: 4000, simulated: true as const };
+    }
+    return { distanceKm: 5, estimatedMinutes: 12, partyTotalMinor: 1800, simulated: true as const };
+  },
+};
+
+function input(overrides: Partial<AssembleItineraryInput> = {}): AssembleItineraryInput {
+  return {
+    proposal: {
+      stops: [
+        { kind: "meal", refId: "meal-breakfast", startMinute: 8 * 60, durationMinutes: 60 },
+        { kind: "activity", refId: "act-museum", startMinute: 9 * 60 + 30, durationMinutes: 90 },
+        { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60 + 30, durationMinutes: 90 },
+        { kind: "activity", refId: "act-park", startMinute: 14 * 60 + 30, durationMinutes: 60 },
+        { kind: "meal", refId: "meal-dinner", startMinute: 19 * 60, durationMinutes: 120 },
+      ],
+    },
+    seedScope: "op-1:1",
+    sightseeingDate: "2026-07-10",
+    zone: "Europe/Rome",
+    adults: 2,
+    pace: "relaxed",
+    activities: [
+      {
+        id: "act-museum",
+        name: "Capitoline Museums",
+        tags: ["museum"],
+        durationMinutes: 90,
+        ticketMinorPerAdult: 600,
+        anchor: { lat: 41.8931, lon: 12.4828 },
+        reference: true,
+        provenance: ["Reference landmark data"],
+      },
+      {
+        id: "act-park",
+        name: "Villa Borghese Gardens",
+        tags: ["park"],
+        durationMinutes: 60,
+        ticketMinorPerAdult: 0,
+        anchor: { lat: 41.9142, lon: 12.4922 },
+        reference: true,
+        provenance: ["Reference landmark data"],
+      },
+    ],
+    meals: [
+      {
+        id: "meal-breakfast",
+        name: "Caffe Roma",
+        meal: "breakfast",
+        level: "standard",
+        durationMinutes: 60,
+        partyTotalMinor: 1500,
+        windowStartMinute: 7 * 60 + 30,
+        windowEndMinute: 10 * 60 + 30,
+        anchor: { lat: 41.8967, lon: 12.4822 },
+        provenance: ["Caffe Roma (standard)"],
+      },
+      {
+        id: "meal-lunch",
+        name: "Trattoria Centro",
+        meal: "lunch",
+        level: "standard",
+        durationMinutes: 90,
+        partyTotalMinor: 2500,
+        windowStartMinute: 12 * 60,
+        windowEndMinute: 15 * 60,
+        anchor: { lat: 41.8986, lon: 12.4769 },
+        provenance: ["Trattoria Centro (standard)"],
+      },
+      {
+        id: "meal-dinner",
+        name: "Osteria Serena",
+        meal: "dinner",
+        level: "standard",
+        durationMinutes: 120,
+        partyTotalMinor: 4000,
+        windowStartMinute: 18 * 60 + 30,
+        windowEndMinute: 22 * 60 + 30,
+        anchor: { lat: 41.8992, lon: 12.4716 },
+        provenance: ["Osteria Serena (standard)"],
+      },
+    ],
+    confirmedMealIds: ["meal-lunch"],
+    flight: { offerId: "flight-1", partyTotalMinor: 20_000, label: "Flights flight-1" },
+    hotel: {
+      offerId: "hotel-1",
+      name: "Hotel Centro",
+      partyTotalMinor: 30_000,
+      anchor: { lat: 41.9009, lon: 12.4792 },
+    },
+    destinationAirport: {
+      id: "FCO",
+      name: "Rome Fiumicino",
+      anchor: { lat: 41.8003, lon: 12.2389 },
+    },
+    dinnerExcludedReason: null,
+    returnDepartureInstant: "2026-07-10T21:00:00Z",
+    routing: ROUTING,
+    routingRuleVersion: "test",
+    simulatedFailure: false,
+    ...overrides,
+  };
+}
+
+describe("itinerary assembly (Phase 10)", () => {
+  it("resolves UTC instants, locks confirmed meals, and inserts transfers and breaks", () => {
+    const result = assembleItinerary(input());
+    expect(result.issues).toEqual([]);
+    const byKind = (kind: string) => result.events.filter((event) => event.kind === kind);
+    expect(byKind("meal")).toHaveLength(3);
+    expect(byKind("activity")).toHaveLength(2);
+    expect(byKind("transfer").length).toBeGreaterThan(0);
+    expect(byKind("break").length).toBeGreaterThan(0);
+
+    const lunch = result.events.find((event) => event.refId === "meal-lunch");
+    expect(lunch?.locked).toBe(true);
+    // A confirmed reservation is locked to its persisted window start.
+    expect(lunch?.startLocal).toBe("12:00");
+    // Europe/Rome is UTC+2 in July: 08:00 local = 06:00Z.
+    const breakfast = result.events.find((event) => event.refId === "meal-breakfast");
+    expect(breakfast?.startInstant).toBe("2026-07-10T06:00:00Z");
+    expect(breakfast?.endInstant).toBe("2026-07-10T07:00:00Z");
+
+    const buffer = result.events.find((event) => event.kind === "airport_buffer");
+    expect(buffer?.locked).toBe(true);
+    expect(buffer?.endMinute).toBe(23 * 60);
+    expect(buffer?.endInstant).toBe("2026-07-10T21:00:00Z");
+  });
+
+  it("computes unique inclusion keys and never double-adds a selected and confirmed meal", () => {
+    const result = assembleItinerary(input({ confirmedMealIds: ["meal-lunch", "meal-dinner"] }));
+    const keys = result.costs.items.map((item) => item.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain("flight:flight-1");
+    expect(keys).toContain("hotel:hotel-1");
+    expect(keys).toContain("meal:meal-lunch");
+    expect(keys.filter((key) => key === "meal:meal-lunch")).toHaveLength(1);
+    expect(keys).toContain("activity:act-museum");
+    expect(keys).toContain("airport_transfer:arrival");
+    expect(keys).toContain("airport_transfer:departure");
+    const total = result.costs.items.reduce((sum, item) => sum + item.amountMinor, 0);
+    expect(result.costs.totalMinor).toBe(total);
+    expect(total).toBeGreaterThan(20_000 + 30_000);
+  });
+
+  it("records an overlap conflict with both event ids when stops intersect", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "activity", refId: "act-park", startMinute: 9 * 60, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    const overlap = result.issues.find((issue) => issue.code === "overlap");
+    expect(overlap).toBeDefined();
+    expect(overlap?.eventIds).toHaveLength(2);
+    expect(overlap?.severity).toBe("error");
+  });
+
+  it("records a transfer gap instead of moving stops when the gap is too small", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "activity", refId: "act-park", startMinute: 10 * 60 + 35, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    const gap = result.issues.find((issue) => issue.code === "transfer_gap");
+    expect(gap).toBeDefined();
+    const park = result.events.find((event) => event.refId === "act-park");
+    expect(park?.startMinute).toBe(10 * 60 + 35);
+  });
+
+  it("flags an opening-hours mismatch without compressing the visit", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 20 * 60, durationMinutes: 90 },
+          ],
+        },
+      }),
+    );
+    const mismatch = result.issues.find((issue) => issue.code === "opening_hours_mismatch");
+    expect(mismatch).toBeDefined();
+    const museum = result.events.find((event) => event.refId === "act-museum");
+    expect(museum?.startMinute).toBe(20 * 60);
+    expect(museum?.durationMinutes).toBe(90);
+  });
+
+  it("keeps the deterministic dinner exclusion in the breakdown", () => {
+    const result = assembleItinerary(
+      input({
+        dinnerExcludedReason:
+          "Not included - your return flight leaves at 20:00 local time, too early to finish dinner and reach the airport.",
+        proposal: {
+          stops: [
+            { kind: "meal", refId: "meal-breakfast", startMinute: 8 * 60, durationMinutes: 60 },
+            { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60 + 30, durationMinutes: 90 },
+          ],
+        },
+      }),
+    );
+    expect(result.dinnerExcluded).toBe(true);
+    expect(result.costs.dinnerExcluded).toBe(true);
+    expect(result.costs.dinnerExcludedReason).toContain("return flight leaves");
+  });
+
+  it("produces deterministic event ids per attempt scope", () => {
+    const first = assembleItinerary(input());
+    const second = assembleItinerary(input());
+    expect(first.events.map((event) => event.id)).toEqual(second.events.map((event) => event.id));
+    const otherScope = assembleItinerary(input({ seedScope: "op-1:2" }));
+    expect(otherScope.events[0]?.id).not.toBe(first.events[0]?.id);
+  });
+
+  it("labels injected corruption on every recorded issue", () => {
+    const result = assembleItinerary(
+      input({
+        simulatedFailure: true,
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "activity", refId: "act-park", startMinute: 9 * 60, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues.length).toBeGreaterThan(0);
+    for (const issue of result.issues) {
+      expect(issue.simulatedFailure).toBe(true);
+    }
+  });
+});

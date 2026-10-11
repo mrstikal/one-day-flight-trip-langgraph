@@ -6,7 +6,11 @@ import type {
   StructuredResponse,
 } from "./adapter.js";
 import { AdapterError } from "./adapter.js";
-import type { PlannerContext, RecommendationContext } from "./context/role-contexts.js";
+import type {
+  PlannerContext,
+  RecommendationContext,
+  ReviewerContext,
+} from "./context/role-contexts.js";
 
 /**
  * Deterministic, credentials-free fixture adapter
@@ -337,18 +341,266 @@ export const FIXTURE_INVALID_FIRST_ITINERARY = {
   compromises: [],
 } as const;
 
-export function fixturePlanner(context: PlannerContext) {
-  const stops = context.candidates.slice(0, 3).map((candidate, index) => ({
-    kind: candidate.kind,
-    refId: candidate.id,
-    startMinute: 9 * 60 + index * 90,
-    durationMinutes: candidate.durationMinutes,
-  }));
-  return { stops, explanation: "Deterministic fixture itinerary.", compromises: [] };
+/**
+ * Deterministic fixture pace profile mirroring the authoritative
+ * `PACE_PROFILES` in `@odft/domain` (asserted by the itinerary pace unit test;
+ * the AI package intentionally depends only on contracts).
+ */
+const FIXTURE_PACE = {
+  relaxed: { targetMin: 2, targetMax: 3, visitCap: 240, rhythmBreak: 20, buffer: 20 },
+  moderate: { targetMin: 3, targetMax: 5, visitCap: 360, rhythmBreak: 12, buffer: 15 },
+  intensive: { targetMin: 5, targetMax: 7, visitCap: 480, rhythmBreak: 8, buffer: 10 },
+} as const;
+
+/**
+ * Extra minutes reserved inside the fixture schedule for the simulated transfer
+ * and the airport buffer, so the deterministic assembly never records a
+ * `transfer_gap` for a plan the fixture produced. The planner context carries no
+ * anchors, so the base allowance covers the worst intra-city leg; when the
+ * validator reports a `transfer_gap`, the allowance grows on the next attempt
+ * (the bounded loop repairs the plan instead of failing it).
+ */
+const TRAVEL_ALLOWANCE = 25;
+const TRAVEL_ALLOWANCE_STEP = 35;
+const TRAVEL_ALLOWANCE_MAX = 150;
+const AIRPORT_LEAD = 140;
+
+type FixtureCandidate = PlannerContext["candidates"][number];
+
+interface FixtureStop {
+  kind: "meal" | "activity" | "break" | "free_time";
+  refId?: string;
+  startMinute: number;
+  durationMinutes: number;
 }
 
-export function fixtureReviewer() {
-  return { verdict: "acceptable" as const, issues: [], suggestedOrder: [], explanation: "Fixture review." };
+function mealCandidate(
+  context: PlannerContext,
+  meal: "breakfast" | "lunch" | "dinner",
+): FixtureCandidate | undefined {
+  return context.candidates.find((candidate) => candidate.kind === "meal" && candidate.meal === meal);
+}
+
+function windowStartFor(candidate: FixtureCandidate, fallbackMinute: number): number {
+  return candidate.openingStartMinute ?? fallbackMinute;
+}
+
+function feedbackWantsFewerActivities(context: PlannerContext): boolean {
+  return context.validationFeedback.some((feedback) => /^review:.*(pace_mismatch|too dense)/i.test(feedback));
+}
+
+/**
+ * Deterministic full-day fixture planner (Phase 10 step 1): breakfast, morning
+ * activities, lunch, afternoon activities, dinner, and rhythm breaks inside the
+ * fixed windows. It honors `minimumActivityCounts` even when that exceeds the
+ * pace cap (the validator then reports the conflict instead of the planner
+ * silently dropping a requirement) and reports compromises in the output.
+ */
+export function fixturePlanner(context: PlannerContext) {
+  const profile = FIXTURE_PACE[context.pace];
+  const stops: FixtureStop[] = [];
+  const compromises: string[] = [];
+
+  const breakfast = mealCandidate(context, "breakfast");
+  const lunch = mealCandidate(context, "lunch");
+  const dinner = mealCandidate(context, "dinner");
+  const activities = context.candidates
+    .filter((candidate) => candidate.kind === "activity")
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  // 1. Required tags first: never silently drop a requested minimum.
+  const chosen: FixtureCandidate[] = [];
+  const chosenCounts: Record<string, number> = {};
+  for (const tag of Object.keys(context.minimumActivityCounts).sort()) {
+    const minimum = context.minimumActivityCounts[tag as keyof typeof context.minimumActivityCounts];
+    if (minimum === undefined || minimum === null || minimum <= 0) {
+      continue;
+    }
+    let found = 0;
+    for (const candidate of activities) {
+      if (found >= minimum) {
+        break;
+      }
+      if (chosen.includes(candidate)) {
+        if (candidate.tags.includes(tag as never)) {
+          found += 1;
+        }
+        continue;
+      }
+      if (candidate.tags.includes(tag as never)) {
+        chosen.push(candidate);
+        found += 1;
+        for (const candidateTag of candidate.tags) {
+          chosenCounts[candidateTag] = (chosenCounts[candidateTag] ?? 0) + 1;
+        }
+      }
+    }
+    if (found < minimum) {
+      compromises.push(
+        `Only ${found} ${tag} candidate${found === 1 ? "" : "s"} are available; the requested minimum of ${minimum} cannot be met from the supplied inventory.`,
+      );
+    }
+  }
+
+  // 2. Fill up to the pace target while the visit-time cap allows.
+  const requiredMinutes = chosen.reduce((sum, candidate) => sum + candidate.durationMinutes, 0);
+  if (requiredMinutes > profile.visitCap) {
+    compromises.push(
+      `The requested visits need ${requiredMinutes} minutes, above the ${profile.visitCap}-minute ${context.pace}-pace cap; the plan keeps the request for clarification instead of reducing it.`,
+    );
+  }
+  const fillTarget = Math.max(
+    profile.targetMin,
+    feedbackWantsFewerActivities(context) ? profile.targetMin : profile.targetMax,
+  );
+  let visitMinutes = requiredMinutes;
+  for (const candidate of activities) {
+    if (chosen.length >= fillTarget) {
+      break;
+    }
+    if (chosen.includes(candidate)) {
+      continue;
+    }
+    if (visitMinutes + candidate.durationMinutes > profile.visitCap) {
+      break;
+    }
+    chosen.push(candidate);
+    visitMinutes += candidate.durationMinutes;
+  }
+
+  const returnWindow = context.fixedWindows.find(
+    (window) => window.kind === "airport" && window.refId === "return_flight",
+  );
+  const departureMinute = returnWindow?.endMinute ?? null;
+
+  const breakfastStart = breakfast ? windowStartFor(breakfast, 8 * 60) : null;
+  if (breakfast && breakfastStart !== null) {
+    stops.push({
+      kind: "meal",
+      refId: breakfast.id,
+      startMinute: breakfastStart,
+      durationMinutes: breakfast.durationMinutes,
+    });
+  }
+  const breakfastEnd = breakfast && breakfastStart !== null ? breakfastStart + breakfast.durationMinutes : 9 * 60;
+
+  const lunchStart = lunch ? windowStartFor(lunch, 12 * 60 + 30) : 12 * 60 + 30;
+  const lunchEnd = lunch ? lunchStart + lunch.durationMinutes : lunchStart;
+  const dinnerStart = dinner ? windowStartFor(dinner, 19 * 60) : null;
+
+  const remaining = [...chosen];
+  const transferGapMentions = context.validationFeedback.filter((feedback) =>
+    feedback.includes("transfer_gap"),
+  ).length;
+  const allowance = Math.min(
+    TRAVEL_ALLOWANCE_MAX,
+    TRAVEL_ALLOWANCE + TRAVEL_ALLOWANCE_STEP * transferGapMentions,
+  );
+  // One uniform gap between consecutive content events: the pace buffer plus
+  // the travel allowance (the assembly computes the real estimate inside it).
+  const travelGap = profile.buffer + allowance;
+  let cursor = Math.max(9 * 60, breakfastEnd + travelGap);
+
+  // Segment A: morning activities before lunch.
+  for (const candidate of [...remaining]) {
+    const start = Math.max(cursor, candidate.openingStartMinute ?? 0);
+    const end = start + candidate.durationMinutes;
+    if (end > lunchStart - travelGap) {
+      break;
+    }
+    if (candidate.openingEndMinute !== undefined && end > candidate.openingEndMinute) {
+      break;
+    }
+    stops.push({ kind: "activity", refId: candidate.id, startMinute: start, durationMinutes: candidate.durationMinutes });
+    remaining.splice(remaining.indexOf(candidate), 1);
+    cursor = end + profile.rhythmBreak + travelGap;
+  }
+
+  if (lunch) {
+    stops.push({
+      kind: "meal",
+      refId: lunch.id,
+      startMinute: lunchStart,
+      durationMinutes: lunch.durationMinutes,
+    });
+  }
+
+  // Segment B: afternoon activities until dinner (or the return window).
+  cursor = Math.max(cursor, lunchEnd + travelGap);
+  const afternoonDeadline =
+    dinnerStart !== null
+      ? dinnerStart - travelGap
+      : departureMinute !== null
+        ? departureMinute - AIRPORT_LEAD
+        : null;
+  for (const candidate of [...remaining]) {
+    const start = Math.max(cursor, candidate.openingStartMinute ?? 0);
+    const end = start + candidate.durationMinutes;
+    if (afternoonDeadline !== null && end > afternoonDeadline) {
+      break;
+    }
+    if (candidate.openingEndMinute !== undefined && end > candidate.openingEndMinute) {
+      break;
+    }
+    stops.push({ kind: "activity", refId: candidate.id, startMinute: start, durationMinutes: candidate.durationMinutes });
+    remaining.splice(remaining.indexOf(candidate), 1);
+    cursor = end + profile.rhythmBreak + travelGap;
+  }
+
+  if (dinner) {
+    stops.push({
+      kind: "meal",
+      refId: dinner.id,
+      startMinute: dinnerStart ?? 19 * 60,
+      durationMinutes: dinner.durationMinutes,
+    });
+  }
+
+  if (remaining.length > 0) {
+    compromises.push(
+      `${remaining.length} candidate visit${remaining.length === 1 ? "" : "s"} did not fit the remaining day and were left out rather than overlapping stops.`,
+    );
+  }
+
+  return {
+    stops,
+    explanation: `Deterministic fixture itinerary: ${stops.length} stops for a ${context.pace} day.`,
+    compromises,
+  };
+}
+
+/**
+ * Deterministic fixture review (Phase 10 step 4): qualitative only. A relaxed
+ * day filled with four or more visits, or a day with excessive simulated
+ * travel, yields a nonblocking `revise` suggestion; the planner reacts to the
+ * `review:` feedback by reducing optional fill, so requirements keep priority.
+ */
+export function fixtureReviewer(context: ReviewerContext) {
+  const travelMinutes = context.metrics.totalTransferMinutes + context.metrics.totalWalkingMinutes;
+  const issues: { code: string; eventIds: string[]; explanation: string }[] = [];
+  if (context.preferences.activityPace === "relaxed" && context.metrics.activityCount >= 4) {
+    issues.push({
+      code: "pace_mismatch",
+      eventIds: [],
+      explanation: `A relaxed day with ${context.metrics.activityCount} visits feels dense; consider fewer optional visits.`,
+    });
+  }
+  if (travelMinutes > 150) {
+    issues.push({
+      code: "excess_travel",
+      eventIds: [],
+      explanation: `About ${travelMinutes} minutes of simulated travel; consider grouping nearby stops.`,
+    });
+  }
+  if (issues.length === 0) {
+    return { verdict: "acceptable" as const, issues: [], suggestedOrder: [], explanation: "Fixture review." };
+  }
+  return {
+    verdict: "revise" as const,
+    issues,
+    suggestedOrder: [],
+    explanation: "Fixture review: nonblocking stylistic suggestions.",
+  };
 }
 
 export class FixtureAdapter implements LLMAdapter {
@@ -388,7 +640,7 @@ export class FixtureAdapter implements LLMAdapter {
         value = fixturePlanner(request.context as PlannerContext);
         break;
       case "reviewer":
-        value = fixtureReviewer();
+        value = fixtureReviewer(request.context as ReviewerContext);
         break;
       default:
         throw new AdapterError("AI_UNSUPPORTED", `unknown role ${String(request.role)}`);

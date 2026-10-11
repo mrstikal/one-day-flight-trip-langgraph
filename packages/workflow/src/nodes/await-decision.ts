@@ -43,6 +43,10 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
     acceptedRevision: envelope.acceptedRevision,
     lastDecisionId: envelope.decisionId,
     decisionKind: null,
+    // Phase 10: a resolved decision starts the new operation's planning budget
+    // (3 total attempts per user operation) and clears stale replan feedback.
+    planningAttempt: 0,
+    itineraryFeedback: [],
   } satisfies Partial<TravelUpdate>;
 
   if (kind === "flight_choice" || kind === "hotel_choice") {
@@ -95,6 +99,15 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       return { ...base, lastAction: "reject_proposal", lastProposalId: response.proposalId };
     }
     throw new InvalidUpdateError("booking confirmation accepts confirm_booking or reject_proposal");
+  }
+  if (kind === "itinerary_approval") {
+    if (response.action !== "approve_itinerary") {
+      throw new InvalidUpdateError("itinerary approval accepts only approve_itinerary");
+    }
+    if (!state.itineraryId || response.itineraryId !== state.itineraryId) {
+      throw new InvalidUpdateError("the approval must reference the current itinerary draft");
+    }
+    return { ...base, lastAction: "approve_itinerary" };
   }
   if (kind === "recovery") {
     if (

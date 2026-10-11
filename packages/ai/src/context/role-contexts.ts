@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   activityPaceSchema,
   activityTagSchema,
+  mealSchema,
   nonEmptyStringSchema,
   serviceLevelSchema,
   tripPreferencesSchema,
@@ -49,6 +50,8 @@ const plannerCandidateSchema = z
   .object({
     id: nonEmptyStringSchema,
     kind: z.enum(["meal", "activity"]),
+    /** Meal identity for meal candidates (breakfast/lunch/dinner). */
+    meal: mealSchema.optional(),
     tags: z.array(activityTagSchema).max(9),
     durationMinutes: z.number().int().min(5).max(180),
     openingStartMinute: z.number().int().min(0).max(1439).optional(),

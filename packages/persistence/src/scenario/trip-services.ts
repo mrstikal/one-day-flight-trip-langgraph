@@ -204,8 +204,8 @@ export async function loadTripProgress(pool: Pool, tripId: string): Promise<Trip
 }
 
 /** Latest persisted program activity preferences (may be empty). */
-export async function loadPreferredActivityIds(pool: Pool, tripId: string): Promise<string[]> {
-  const result = await pool.query<{ ranked_offers: unknown }>(
+export async function loadPreferredActivityIds(client: Queryable, tripId: string): Promise<string[]> {
+  const result = await client.query<{ ranked_offers: unknown }>(
     `SELECT ranked_offers FROM odft_app.recommendation_artifacts
       WHERE trip_id = $1 AND service_key = 'activities' AND explanation LIKE 'User program%'
       ORDER BY created_at DESC LIMIT 1`,
@@ -477,7 +477,7 @@ export async function validateTripLogistics(
   }
 }
 
-async function loadAirportAnchor(
+export async function loadAirportAnchor(
   client: Queryable,
   airportId: string,
 ): Promise<{ lat: number; lon: number } | undefined> {

@@ -1,6 +1,10 @@
 import type { Pool } from "pg";
 import { hasOverride, nightsForVariant, resolveEffectiveLevel } from "@odft/domain";
-import { listConversation } from "@odft/persistence";
+import {
+  listConversation,
+  loadApprovedItineraryVersion,
+  loadLatestItinerary,
+} from "@odft/persistence";
 import {
   publicClarificationSchema,
   publicInterpretationSchema,
@@ -19,6 +23,8 @@ import {
   type PublicConversationMessage,
   type PublicFlightCombination,
   type PublicHotelOffer,
+  type PublicItinerary,
+  type PublicMapMarker,
   type PublicMealOffer,
   type PublicPendingDecision,
   type PublicProgramChoices,
@@ -712,6 +718,7 @@ export async function buildTripProjection(
   let hotel: PublicHotelOffer[] = [];
   let meals: PublicMealOffer[] = [];
   let program: PublicProgramChoices | null = null;
+  let activeContent: SnapshotContent | null = null;
   if (row.active_scenario_snapshot_id) {
     const snapshotResult = await pool.query<{ inventory: unknown }>(
       `SELECT inventory FROM odft_app.scenario_snapshots WHERE id = $1`,
@@ -721,6 +728,7 @@ export async function buildTripProjection(
     const parsed = inventory ? snapshotContentSchema.safeParse(inventory) : undefined;
     if (parsed?.success) {
       const content = parsed.data;
+      activeContent = content;
       const nights = nightsForVariant(trip.travelVariant);
       hotel = domainOffers(
         "hotel",
@@ -811,6 +819,15 @@ export async function buildTripProjection(
     return parsed.success ? parsed.data : null;
   })();
 
+  // Phase 10: latest immutable itinerary version (draft or approved) with the
+  // safe marker list derived from the same events plus the confirmed hotel and
+  // destination airport anchors.
+  const itinerary = await buildPublicItinerary(pool, tripId, {
+    content: activeContent,
+    reservations,
+    approvedVersion: await loadApprovedItineraryVersion(pool, tripId),
+  });
+
   return {
     trip,
     operations,
@@ -835,6 +852,119 @@ export async function buildTripProjection(
     reservations,
     conversation,
     clarification,
+    itinerary,
     display,
+  };
+}
+
+interface ItineraryMarkerInputs {
+  readonly content: SnapshotContent | null;
+  readonly reservations: readonly PublicReservation[];
+  readonly approvedVersion: number | null;
+}
+
+/**
+ * Public itinerary DTO (Phase 10): the latest version without internal
+ * fingerprints, plus the accessible marker list (every fact also renders as
+ * text; the map is decorative and client-only).
+ */
+async function buildPublicItinerary(
+  pool: Pool,
+  tripId: string,
+  inputs: ItineraryMarkerInputs,
+): Promise<PublicItinerary | null> {
+  const record = await loadLatestItinerary(pool, tripId);
+  if (!record) {
+    return null;
+  }
+  const markers: PublicMapMarker[] = [];
+  let pendingTransferMinutes: number | null = null;
+  for (const event of record.events) {
+    if (event.kind === "transfer") {
+      pendingTransferMinutes = event.durationMinutes;
+      continue;
+    }
+    if ((event.kind === "meal" || event.kind === "activity") && event.location) {
+      markers.push({
+        id: event.id,
+        kind: event.kind,
+        label: event.title,
+        lat: event.location.lat,
+        lon: event.location.lon,
+        approximate: true,
+        simulatedTransferMinutes: pendingTransferMinutes,
+      });
+      pendingTransferMinutes = null;
+    }
+  }
+  const content = inputs.content;
+  if (content) {
+    const hotelReservation = inputs.reservations.find(
+      (reservation) => reservation.serviceKey === "hotel" && reservation.status === "confirmed",
+    );
+    const hotelOffer = hotelReservation
+      ? content.hotels.find((offer) => offer.id === hotelReservation.offerId)
+      : undefined;
+    if (hotelOffer) {
+      markers.push({
+        id: `hotel:${hotelOffer.id}`,
+        kind: "hotel",
+        label: hotelOffer.name,
+        lat: hotelOffer.anchor.lat,
+        lon: hotelOffer.anchor.lon,
+        approximate: true,
+        simulatedTransferMinutes: null,
+      });
+    }
+    const flightReservation = inputs.reservations.find(
+      (reservation) => reservation.serviceKey === "flights" && reservation.status === "confirmed",
+    );
+    const flight = flightReservation
+      ? content.flights.find((combination) => combination.id === flightReservation.offerId)
+      : undefined;
+    const airline = flight?.outbound.segments[flight.outbound.segments.length - 1];
+    const airportId = airline?.toAirportId ?? null;
+    if (airportId) {
+      const anchor = await pool.query<{ lat: number; lon: number; name: string }>(
+        `SELECT lat, lon, name FROM odft_app.reference_airports WHERE id = $1`,
+        [airportId],
+      );
+      const row = anchor.rows[0];
+      if (row) {
+        markers.push({
+          id: `airport:${airportId}`,
+          kind: "airport",
+          label: row.name,
+          lat: row.lat,
+          lon: row.lon,
+          approximate: true,
+          simulatedTransferMinutes: null,
+        });
+      }
+    }
+  }
+
+  return {
+    id: record.id,
+    version: record.version,
+    status: record.status,
+    sightseeingDate: record.sightseeingDate,
+    zone: record.zone,
+    adults: record.adults,
+    pace: record.pace,
+    travelVariant: record.travelVariant,
+    events: [...record.events],
+    validation: {
+      status: record.validation.status,
+      errors: [...record.validation.errors],
+      warnings: [...record.validation.warnings],
+      metrics: record.validation.metrics,
+    },
+    review: record.review,
+    costs: record.costs,
+    simulatedFailure: record.simulatedFailure,
+    simulatedFailureNote: record.simulatedFailureNote,
+    approvedVersion: inputs.approvedVersion,
+    markers,
   };
 }

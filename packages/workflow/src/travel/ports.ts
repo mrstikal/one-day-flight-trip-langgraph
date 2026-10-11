@@ -1,6 +1,8 @@
 import type {
   DomainCommand,
   IntentResult,
+  ItineraryIssue,
+  ItineraryMetrics,
   MealSelections,
   ResearchDomain,
   ResearchDomainStatus,
@@ -12,6 +14,7 @@ import type {
   TripRecord,
   BookableKey,
 } from "@odft/contracts";
+import type { ItineraryConflictDecision } from "@odft/domain";
 
 /**
  * Server-side dependencies for the production travel graph, passed through the
@@ -107,6 +110,50 @@ export interface TravelLogisticsResult {
   readonly reason: string | null;
 }
 
+/* ---- Phase 10: itinerary planning, validation, review, approval -------------- */
+
+/**
+ * One bounded planning attempt result. The proposal is persisted as an immutable
+ * draft version (or rejected before persistence when the planner invented ids);
+ * validation errors are normal routing, never an exception.
+ */
+export interface TravelItineraryPlanResult {
+  readonly itineraryId: string | null;
+  readonly version: number | null;
+  readonly status: "valid" | "invalid";
+  readonly errors: readonly ItineraryIssue[];
+  readonly warnings: readonly ItineraryIssue[];
+  readonly metrics: ItineraryMetrics;
+  /** True when the deterministic validator reported `budget_exceeded`. */
+  readonly budgetConflict: boolean;
+  /** Ready-made conflict decision when the plan is invalid (null when valid). */
+  readonly conflictDecision: ItineraryConflictDecision | null;
+  readonly simulatedFailure: boolean;
+  readonly simulatedFailureNote: string | null;
+  readonly mode: "fixture" | "openrouter";
+}
+
+export interface TravelItineraryReviewResult {
+  readonly verdict: "acceptable" | "revise" | "conflict";
+  readonly suggestions: readonly string[];
+  readonly issueCount: number;
+  /** Suggested event order (known ids only) passed back to the planner. */
+  readonly suggestedOrder: readonly string[];
+  /**
+   * Validation warnings appended when nonblocking suggestions were demoted at
+   * the attempt bound (empty otherwise).
+   */
+  readonly warnings: readonly ItineraryIssue[];
+  /** Ready-made decision when the reviewer reported a blocking conflict. */
+  readonly conflictDecision: ItineraryConflictDecision | null;
+  readonly mode: "fixture" | "openrouter";
+}
+
+export interface TravelItineraryApprovalResult {
+  readonly itineraryId: string;
+  readonly version: number;
+}
+
 export interface TravelPorts {
   now(): Date;
   /**
@@ -184,6 +231,35 @@ export interface TravelPorts {
   validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;
   /** Confirmed flight/hotel progress so a preference change resumes at the right step. */
   loadProgress(tripId: string): Promise<TravelProgress>;
+
+  /**
+   * Phase 10: run one bounded planning attempt (planner role or fixture, then
+   * deterministic assembly + validation + immutable draft persistence).
+   */
+  planItinerary(input: {
+    tripId: string;
+    operationId: string;
+    attempt: number;
+    feedback: readonly string[];
+  }): Promise<TravelItineraryPlanResult>;
+  /**
+   * Phase 10: review the deterministically valid draft through the reviewer role
+   * (or fixture); persists typed findings and demotes nonblocking suggestions.
+   */
+  reviewItinerary(input: {
+    tripId: string;
+    operationId: string;
+    attempt: number;
+    atBound: boolean;
+  }): Promise<TravelItineraryReviewResult>;
+  /** Phase 10: fenced approval of the current draft (fingerprint-bound). */
+  approveItinerary(input: {
+    tripId: string;
+    operationId: string;
+    decisionId: string;
+    acceptedRevision: number;
+    itineraryId: string;
+  }): Promise<TravelItineraryApprovalResult>;
 
   /** Phase 08: interpret one chat message through the configured AI role. */
   interpretIntent(input: {

@@ -10,7 +10,9 @@ import {
   routeAfterCommit,
   routeAfterDetectProgress,
   routeAfterLogistics,
+  routeAfterReviewItinerary,
   routeAfterSchedules,
+  routeAfterValidateItinerary,
   routeAfterValidation,
 } from "../../packages/workflow/src/travel/graph.js";
 import { isTerminalConflictCode } from "../../apps/worker/src/driver.js";
@@ -18,7 +20,19 @@ import { isTerminalConflictCode } from "../../apps/worker/src/driver.js";
 /** P1-3 / P2-6 / P2-9: travel-graph node behavior that has no DB dependency. */
 
 function state(partial: Partial<TravelState>): TravelState {
-  return partial as TravelState;
+  // Node routers read a few fields directly; mirror the schema defaults the
+  // driver would have parsed before invoking the graph.
+  return {
+    recoveryOptionIds: [],
+    clarificationOptions: [],
+    itineraryBudgetConflict: false,
+    planningAttempt: 0,
+    itineraryValidationStatus: null,
+    itineraryReviewVerdict: null,
+    itineraryErrorCodes: [],
+    itineraryStatus: null,
+    ...partial,
+  } as TravelState;
 }
 
 describe("load_context reset (P1-3)", () => {
@@ -213,9 +227,62 @@ describe("routers", () => {
       ),
     ).toBe("prepare_decision");
     expect(routeAfterLogistics(state({ logisticsStatus: "conflict" }))).toBe("prepare_decision");
+    // Phase 10: a valid program/logistics state builds the itinerary next.
     expect(routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: null }))).toBe(
-      "publish_summary",
+      "plan_itinerary",
     );
+  });
+
+  it("routes the Phase 10 itinerary loop by validation, budget, and review", () => {
+    expect(
+      routeAfterValidateItinerary(
+        state({ itineraryValidationStatus: "valid", planningAttempt: 1 }),
+      ),
+    ).toBe("review_itinerary");
+    expect(
+      routeAfterValidateItinerary(
+        state({ itineraryValidationStatus: "invalid", planningAttempt: 1 }),
+      ),
+    ).toBe("plan_itinerary");
+    expect(
+      routeAfterValidateItinerary(
+        state({ itineraryValidationStatus: "invalid", planningAttempt: 3 }),
+      ),
+    ).toBe("prepare_decision");
+    expect(
+      routeAfterValidateItinerary(
+        state({
+          itineraryValidationStatus: "invalid",
+          itineraryBudgetConflict: true,
+          planningAttempt: 1,
+        }),
+      ),
+    ).toBe("prepare_decision");
+    expect(
+      routeAfterReviewItinerary(state({ itineraryReviewVerdict: "revise", planningAttempt: 2 })),
+    ).toBe("plan_itinerary");
+    expect(
+      routeAfterReviewItinerary(
+        state({ itineraryReviewVerdict: "revise", planningAttempt: 3 }),
+      ),
+    ).toBe("prepare_decision");
+    expect(
+      routeAfterReviewItinerary(state({ itineraryReviewVerdict: "acceptable" })),
+    ).toBe("prepare_decision");
+    expect(routeAfterApplyDecision(state({ pendingStage: "approve" }))).toBe("approve_itinerary");
+  });
+
+  it("prepare_decision opens the itinerary approval decision", () => {
+    const approval = prepareDecisionNode(
+      state({ nextDecisionKind: "itinerary_approval", itineraryId: "i1" }),
+    );
+    expect(approval.decisionKind).toBe("itinerary_approval");
+    expect(approval.gate).toBe("itinerary_ready");
+    const itineraryRecovery = prepareDecisionNode(
+      state({ nextDecisionKind: "recovery", recoveryOptionIds: ["change_meals", "change_hotel"] }),
+    );
+    expect(itineraryRecovery.allowedOptionIds).toEqual(["change_meals", "change_hotel"]);
+    expect(itineraryRecovery.gate).toBe("itinerary_conflict");
   });
 
   it("prepare_decision offers the validated combinations or the staged proposal", () => {

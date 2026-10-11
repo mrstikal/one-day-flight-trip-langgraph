@@ -128,6 +128,15 @@ export const tripDisplaySchema = z
   .object({
     aiMode: z.enum(["fixture", "openrouter"]),
     demoControlsEnabled: z.boolean(),
+    /**
+     * Public, credential-free tile URL template (`{z}/{x}/{y}`); null = the map
+     * runs with the labeled SVG fallback (Phase 10 map policy). Userinfo is
+     * rejected so a credentialed URL can never reach the browser payload.
+     */
+    mapTileUrl: z
+      .string()
+      .regex(/^https?:\/\/(?![^/]*@)/)
+      .nullable(),
   })
   .strict();
 export type TripDisplay = z.infer<typeof tripDisplaySchema>;

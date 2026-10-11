@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { tripPreferencesSchema, type DomainCommand, type TripPreferences } from "@odft/contracts";
 import { insertEvent } from "./events.js";
+import { upsertFaultRow } from "./scenario/faults.js";
 import { lockTrip } from "./trips.js";
 
 /**
@@ -148,10 +149,26 @@ async function applyCommandInMemory(
       preferences = tripPreferencesSchema.parse(next);
       break;
     }
+    case "set_simulation": {
+      // Phase 10 scenario controls (05 section 12): the budget conflict persists
+      // an explicit low budget, and the preference conflict persists the
+      // six-museums-at-relaxed-pace request. `invalid_itinerary` is a fault
+      // overlay written by the caller (no trip input change).
+      if (command.mode === "budget_conflict") {
+        preferences = tripPreferencesSchema.parse({ ...preferences, maxBudgetMinor: 100 });
+      } else if (command.mode === "preference_conflict") {
+        preferences = tripPreferencesSchema.parse({
+          ...preferences,
+          activityPace: "relaxed",
+          minimumActivityCounts: { ...preferences.minimumActivityCounts, museum: 6 },
+        });
+      }
+      break;
+    }
     default:
       // Non-preference/non-route commands (find_alternatives, propose_selection,
-      // set_program, build_itinerary, retry_failed_domains, set_simulation) are
-      // handled by later phases; they do not mutate trip inputs here.
+      // set_program, build_itinerary, retry_failed_domains) are handled by later
+      // phases; they do not mutate trip inputs here.
       break;
   }
 
@@ -205,7 +222,13 @@ export async function applyTripCommands(
       }
     }
 
-    if (applied.length === 0) {
+    // Phase 10 scenario E: the invalid-itinerary fault is a persisted overlay,
+    // not a trip input change, so it is written here and still counts as applied.
+    const itineraryFaultArmed = input.commands.some(
+      (command) => command.type === "set_simulation" && command.mode === "invalid_itinerary",
+    );
+
+    if (applied.length === 0 && !itineraryFaultArmed) {
       await client.query("ROLLBACK");
       return { outcome: "noop", routeChanged: false, appliedCount: 0 };
     }
@@ -249,8 +272,25 @@ export async function applyTripCommands(
         payload: { command: command.type },
       });
     }
+    if (itineraryFaultArmed) {
+      await upsertFaultRow(client, {
+        tripId: input.tripId,
+        domain: "itinerary",
+        fault: "invalid_itinerary",
+        state: { label: "Simulated failure: injected first-attempt overlap" },
+      });
+      await insertEvent(client, {
+        tripId: input.tripId,
+        type: "trip.simulation_armed",
+        payload: { mode: "invalid_itinerary", domain: "itinerary" },
+      });
+    }
     await client.query("COMMIT");
-    return { outcome: "applied", routeChanged, appliedCount: applied.length };
+    return {
+      outcome: "applied",
+      routeChanged,
+      appliedCount: applied.length + (itineraryFaultArmed ? 1 : 0),
+    };
   } catch (error) {
     try {
       await client.query("ROLLBACK");

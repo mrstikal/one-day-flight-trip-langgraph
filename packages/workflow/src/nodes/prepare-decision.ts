@@ -12,6 +12,15 @@ import type { TravelState, TravelUpdate } from "../travel/state.js";
  * Only ids are stored, never offer content; the projection renders the content.
  */
 export function prepareDecisionNode(state: TravelState): TravelUpdate {
+  if (state.nextDecisionKind === "itinerary_approval") {
+    return {
+      decisionKind: "itinerary_approval",
+      proposalId: null,
+      allowedOfferIds: [],
+      allowedOptionIds: [],
+      gate: "itinerary_ready",
+    };
+  }
   if (state.nextDecisionKind === "booking_confirmation") {
     return {
       decisionKind: "booking_confirmation",
@@ -57,6 +66,16 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
         allowedOfferIds: [],
         allowedOptionIds: options.length > 0 ? options : ["change_program"],
         gate: "research_failed",
+      };
+    }
+    if (state.recoveryOptionIds.length > 0) {
+      // Phase 10: the itinerary conflict builder chose the recovery options.
+      return {
+        decisionKind: "recovery",
+        proposalId: null,
+        allowedOfferIds: [],
+        allowedOptionIds: state.recoveryOptionIds,
+        gate: "itinerary_conflict",
       };
     }
     return {

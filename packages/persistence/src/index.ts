@@ -186,11 +186,33 @@ export type { ExtensionInput } from "./scenario/snapshots.js";
 
 export { loadOverlay, loadOverlaySummaries, recordFaultOutcome, upsertFault } from "./scenario/faults.js";
 export type {
+  FaultDomain,
   FaultOutcomeInput,
   FaultOutcomeRecord,
   OverlaySummary,
   UpsertFaultInput,
 } from "./scenario/faults.js";
+
+/* ---- Phase 10: immutable itinerary versions ---------------------------------- */
+
+export {
+  approveItineraryDraft,
+  ItineraryPersistenceError,
+  loadApprovedItineraryVersion,
+  loadItineraryById,
+  loadItineraryPlanningData,
+  loadLatestItinerary,
+  persistItineraryDraft,
+  saveItineraryReview,
+} from "./itineraries.js";
+export type {
+  ApproveItineraryInput,
+  ItineraryMealSelections,
+  ItineraryPlanningData,
+  PersistItineraryDraftInput,
+  PersistedItineraryRef,
+  SaveItineraryReviewInput,
+} from "./itineraries.js";
 
 /* ---- Phase 09: parallel research fan-out ------------------------------------- */
 
