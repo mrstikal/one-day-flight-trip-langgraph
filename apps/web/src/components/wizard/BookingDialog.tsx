@@ -1,26 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { PublicFlightCombination, PublicProposal } from "@odft/contracts";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
+import { formatDate, formatDuration, formatTime } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
 
 /**
- * Modal booking confirmation. The body mounts only while open, so the
- * disclaimer acknowledgement resets on every close/reopen without an effect.
+ * Modal booking confirmation. It shows the concrete itinerary being confirmed
+ * (route, dates, times, party, price) so a reloaded pending decision can still be
+ * reviewed. The body mounts only while open, so the acknowledgement resets on
+ * every close/reopen without an effect.
  */
 export function BookingDialog({
   open,
-  priceMinor,
+  flight,
+  proposal,
   busy,
   error,
   onConfirm,
+  onReject,
   onClose,
 }: {
   readonly open: boolean;
-  readonly priceMinor: number;
+  readonly flight: PublicFlightCombination | null;
+  readonly proposal: PublicProposal | null;
   readonly busy: boolean;
   readonly error: string | undefined;
   readonly onConfirm: () => void;
+  readonly onReject?: () => void;
   readonly onClose: () => void;
 }): React.JSX.Element | null {
   if (!open) {
@@ -28,26 +36,32 @@ export function BookingDialog({
   }
   return (
     <DialogBody
-      priceMinor={priceMinor}
+      flight={flight}
+      proposal={proposal}
       busy={busy}
       error={error}
       onConfirm={onConfirm}
+      {...(onReject ? { onReject } : {})}
       onClose={onClose}
     />
   );
 }
 
 function DialogBody({
-  priceMinor,
+  flight,
+  proposal,
   busy,
   error,
   onConfirm,
+  onReject,
   onClose,
 }: {
-  readonly priceMinor: number;
+  readonly flight: PublicFlightCombination | null;
+  readonly proposal: PublicProposal | null;
   readonly busy: boolean;
   readonly error: string | undefined;
   readonly onConfirm: () => void;
+  readonly onReject?: () => void;
   readonly onClose: () => void;
 }): React.JSX.Element {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -57,10 +71,16 @@ function DialogBody({
     const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
     return () => {
-      // Return focus to the trigger so keyboard users are not dropped at the top.
       previouslyFocused?.focus?.();
     };
   }, []);
+
+  function focusableItems(): HTMLElement[] {
+    const nodes = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    return nodes ? Array.from(nodes) : [];
+  }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key === "Escape") {
@@ -71,22 +91,27 @@ function DialogBody({
     if (event.key !== "Tab") {
       return;
     }
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    if (!focusable || focusable.length === 0) {
+    const items = focusableItems();
+    if (items.length === 0) {
+      event.preventDefault();
       return;
     }
-    const first = focusable[0] as HTMLElement;
-    const last = focusable[focusable.length - 1] as HTMLElement;
-    if (event.shiftKey && document.activeElement === first) {
+    const first = items[0] as HTMLElement;
+    const last = items[items.length - 1] as HTMLElement;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === dialogRef.current)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault();
       first.focus();
     }
   }
+
+  const outbound = flight?.outbound.segments[0];
+  const inboundSegments = flight?.inbound.segments ?? [];
+  const inbound = inboundSegments[inboundSegments.length - 1];
+  const priceDelta = proposal?.priceDeltaMinor ?? null;
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 p-4">
@@ -102,10 +127,52 @@ function DialogBody({
         <h2 id="booking-dialog-heading" className="text-xl">
           Confirm this simulated booking
         </h2>
-        <p className="text-sm">
-          Total price <span className="font-semibold">{formatEuroMinor(priceMinor)}</span> for the
-          party.
-        </p>
+
+        {flight && outbound && inbound ? (
+          <dl className="grid grid-cols-2 gap-2 text-sm">
+            <dt className="text-ink-muted">Route</dt>
+            <dd>
+              {outbound.fromIata} → {inbound.toIata}
+            </dd>
+            <dt className="text-ink-muted">Outbound</dt>
+            <dd>
+              {formatDate(outbound.departureInstant, outbound.departureZone)} ·{" "}
+              {formatTime(outbound.departureInstant, outbound.departureZone)} →{" "}
+              {formatTime(outbound.arrivalInstant, outbound.arrivalZone)}
+            </dd>
+            <dt className="text-ink-muted">Return</dt>
+            <dd>
+              {formatDate(inbound.departureInstant, inbound.departureZone)} ·{" "}
+              {formatTime(inbound.departureInstant, inbound.departureZone)} →{" "}
+              {formatTime(inbound.arrivalInstant, inbound.arrivalZone)}
+            </dd>
+            <dt className="text-ink-muted">Flying time</dt>
+            <dd>{formatDuration(flight.totalTravelMinutes)} total (incl. layovers)</dd>
+            <dt className="text-ink-muted">Party</dt>
+            <dd>
+              {flight.adults} {flight.adults === 1 ? "adult" : "adults"}
+            </dd>
+            <dt className="text-ink-muted">Total price</dt>
+            <dd className="font-semibold">
+              {formatEuroMinor(proposal?.partyTotalMinor ?? flight.partyTotalMinor)}
+              {priceDelta !== null ? (
+                <span className="ml-2 text-xs font-normal text-ink-muted">
+                  ({priceDelta >= 0 ? "+" : ""}
+                  {formatEuroMinor(priceDelta)} vs current)
+                </span>
+              ) : null}
+            </dd>
+          </dl>
+        ) : (
+          <p className="text-sm">
+            Total price{" "}
+            <span className="font-semibold">
+              {formatEuroMinor(proposal?.partyTotalMinor ?? 0)}
+            </span>{" "}
+            for the party.
+          </p>
+        )}
+
         <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
           {CONFIRMATION_DISCLAIMER}
         </p>
@@ -127,7 +194,17 @@ function DialogBody({
             {error}
           </p>
         ) : null}
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-wrap justify-end gap-3">
+          {onReject ? (
+            <button
+              type="button"
+              onClick={onReject}
+              disabled={busy}
+              className="rounded border border-border px-4 py-2 text-sm"
+            >
+              Choose a different flight
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}

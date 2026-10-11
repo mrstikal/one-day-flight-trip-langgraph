@@ -115,10 +115,47 @@ function stringArray(value: unknown): string[] {
 }
 
 function safeErrorCode(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+  ) {
+    return (error as { code: string }).code;
+  }
   if (error instanceof Error) {
     return error.name === "InvalidUpdateError" ? "REDUCER_CONFLICT" : error.name;
   }
   return "UNKNOWN";
+}
+
+/**
+ * Deterministic failures that a retry can never fix (a stale/invalid request or a
+ * poisoned domain state). They are finalized as an operation conflict so the
+ * client refreshes, instead of being auto-retried into `recovery_required`.
+ */
+const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
+  "REDUCER_CONFLICT",
+  "STALE_DECISION",
+  "STALE_REVISION",
+  "STALE_ROUTE_APPROVAL",
+  "PROPOSAL_EXPIRED",
+  "PROPOSAL_SUPERSEDED",
+  "OFFER_UNAVAILABLE",
+  "OFFER_MISMATCH",
+  "DISCLAIMER_REQUIRED",
+  "REPLACEMENT_CONFIRMATION_REQUIRED",
+  "CREATION_CONFLICT",
+  "VALIDATION_FAILED",
+  "CONFLICT",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "REF_GENERATION_FAILED",
+]);
+
+/** True when a failure code is a permanent conflict a retry can never resolve. */
+export function isTerminalConflictCode(code: string): boolean {
+  return TERMINAL_CONFLICT_CODES.has(code);
 }
 
 /**
@@ -255,33 +292,34 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       claim.kind === "decision" && typeof payload.decisionId === "string"
         ? payload.decisionId
         : undefined;
+    const blocked =
+      reconciliation.lastOutcome === "no_feasible_route" ||
+      reconciliation.lastOutcome === "no_feasible_schedule";
     await finalizeSuccess(
       deps.operationsPool,
       { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
       {
         result: reconciliation,
         summary: reconciliation.summary,
+        workflowStatus: blocked ? "blocked" : "ready",
         ...(resolveDecisionId ? { resolveDecisionId } : {}),
       },
     );
   }
 
   async function fail(claim: ClaimedOperation, error: unknown): Promise<void> {
-    // A resume the graph refuses to apply to the current interrupt is a permanent
-    // conflict (the client must refresh its projection), never a retryable error.
-    if (
-      claim.kind === "decision" &&
-      error instanceof Error &&
-      error.name === "InvalidUpdateError"
-    ) {
+    const code = safeErrorCode(error);
+    // A deterministic failure (stale/invalid request, poisoned domain state) is a
+    // permanent conflict the client must resolve by refreshing; retrying can never
+    // succeed and would only exhaust the claim budget into `recovery_required`.
+    if (isTerminalConflictCode(code)) {
       await finalizeConflict(
         deps.operationsPool,
         { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
-        { code: "STALE_DECISION", message: error.message },
+        { code, message: error instanceof Error ? error.message : code },
       );
       return;
     }
-    const code = safeErrorCode(error);
     const exhausted = claim.autoClaims >= MAX_AUTO_CLAIMS_PER_ROUND;
     const committed = await finalizeFailure(
       deps.operationsPool,

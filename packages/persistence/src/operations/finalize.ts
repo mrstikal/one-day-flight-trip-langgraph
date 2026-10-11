@@ -119,6 +119,8 @@ export interface SuccessSpec {
   readonly result: unknown;
   readonly summary: string;
   readonly resolveDecisionId?: string;
+  /** Terminal trip projection status; defaults to `ready`. */
+  readonly workflowStatus?: "ready" | "blocked";
 }
 
 /** Persist a `succeeded` transition with the trip projection and decision resolution. */
@@ -141,8 +143,8 @@ export async function finalizeSuccess(
       return false;
     }
     await client.query(
-      `UPDATE odft_app.trips SET workflow_status = 'ready', updated_at = now() WHERE id = $1`,
-      [fence.tripId],
+      `UPDATE odft_app.trips SET workflow_status = $2, updated_at = now() WHERE id = $1`,
+      [fence.tripId, spec.workflowStatus ?? "ready"],
     );
     if (spec.resolveDecisionId) {
       await client.query(

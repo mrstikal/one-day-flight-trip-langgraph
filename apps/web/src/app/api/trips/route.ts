@@ -2,6 +2,7 @@ import { createTripRequestSchema } from "@odft/contracts";
 import { createTrip } from "@odft/persistence";
 import { envelopeResponse, errorResponse, jsonResponse, readJsonResult } from "@/lib/http";
 import { guardMutation } from "@/lib/guard";
+import { SIGHTSEEING_DATE_WINDOW_MESSAGE, isValidSightseeingDate } from "@/lib/date-window";
 
 /**
  * POST /api/trips — create a trip and its initialization operation. Idempotent on
@@ -34,6 +35,13 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = createTripRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return envelopeResponse({ code: "VALIDATION_FAILED", message: "invalid trip creation input", retryable: false });
+  }
+  if (!isValidSightseeingDate(parsed.data.sightseeingDate)) {
+    return envelopeResponse({
+      code: "VALIDATION_FAILED",
+      message: SIGHTSEEING_DATE_WINDOW_MESSAGE,
+      retryable: false,
+    });
   }
 
   const result = await createTrip(guard.deps.pool, {

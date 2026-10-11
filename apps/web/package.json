@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@odft/contracts": "*",
+    "@odft/domain": "*",
     "@odft/persistence": "*",
     "next": "16.4.0",
     "react": "19.3.0",

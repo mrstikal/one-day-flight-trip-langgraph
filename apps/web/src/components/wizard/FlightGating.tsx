@@ -7,9 +7,11 @@ import { routeAlternativeText, routeReasonText, scheduleReasonText } from "@/lib
 export function RouteRejectionCard({
   reasons,
   alternatives,
+  children,
 }: {
   readonly reasons: readonly RouteReasonEntry[];
   readonly alternatives: readonly RouteAlternative[];
+  readonly children?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <section
@@ -40,14 +42,38 @@ export function RouteRejectionCard({
           ))}
         </ul>
       </div>
-      <div className="flex flex-wrap gap-3">
-        <Link href="/" className="rounded border border-teal px-3 py-2 text-sm text-teal">
-          Change origin
-        </Link>
-        <Link href="/destination" className="rounded border border-teal px-3 py-2 text-sm text-teal">
-          Change destination
-        </Link>
-      </div>
+      {children}
+    </section>
+  );
+}
+
+export function ExpiredProposalCard({
+  onReselect,
+  busy,
+}: {
+  readonly onReselect: () => void;
+  readonly busy: boolean;
+}): React.JSX.Element {
+  return (
+    <section
+      className="flex flex-col gap-3 rounded border border-clay bg-paper p-6"
+      aria-labelledby="stale-proposal-heading"
+    >
+      <h2 id="stale-proposal-heading" className="text-lg text-clay">
+        This proposal is no longer valid
+      </h2>
+      <p className="text-sm text-ink-muted">
+        The review proposal expired or was superseded. Choose a flight again to create a fresh
+        proposal and a new expiry.
+      </p>
+      <button
+        type="button"
+        onClick={onReselect}
+        disabled={busy}
+        className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
+      >
+        {busy ? "Reopening…" : "Choose a different flight"}
+      </button>
     </section>
   );
 }

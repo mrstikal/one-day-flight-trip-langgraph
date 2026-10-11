@@ -7,6 +7,15 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "stage" };
     case "confirm_booking":
       return { pendingStage: "commit" };
+    case "reject_proposal":
+      // Return to flight selection with the same validated combinations.
+      return {
+        pendingStage: "reselection",
+        nextDecisionKind: "flight_choice",
+        proposalId: null,
+        selectedOfferId: null,
+        decisionFingerprint: null,
+      };
     default:
       return { pendingStage: "end" };
   }

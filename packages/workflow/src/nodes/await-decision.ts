@@ -44,7 +44,7 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       };
     }
     if (response.action === "reject_proposal") {
-      return { ...base, lastAction: "reject_proposal", gate: "withdrawn" };
+      return { ...base, lastAction: "reject_proposal", lastProposalId: response.proposalId };
     }
     throw new InvalidUpdateError("booking confirmation accepts confirm_booking or reject_proposal");
   }

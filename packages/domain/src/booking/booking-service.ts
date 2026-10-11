@@ -55,6 +55,23 @@ export class BookingService {
       if (operation.status === "failed" || operation.status === "cancelled") {
         throw new DomainError("CONFLICT", "operation is no longer active");
       }
+      if (input.fencingToken) {
+        await tx.assertOperationOwnership(input.operationId, input.tripId, input.fencingToken);
+      }
+      // Idempotent effect: a crash-replay returns the stored proposal instead of
+      // superseding it and minting a new id with a fresh expiry.
+      const effectKey: EffectKey = {
+        operationId: input.operationId,
+        nodeName: "stage_selection",
+        effectScope: `${input.service}:${input.offerId}`,
+      };
+      const stored = await tx.readEffect(effectKey);
+      if (stored !== undefined) {
+        if (!isProposalResult(stored)) {
+          throw new DomainError("INTERNAL_ERROR", "stored proposal effect is malformed");
+        }
+        return stored;
+      }
       const snapshotId = trip.activeScenarioSnapshotId;
       if (!snapshotId) {
         throw new DomainError("OFFER_UNAVAILABLE", "trip has no active scenario snapshot");
@@ -81,7 +98,7 @@ export class BookingService {
         expiresAt,
         sourceFingerprint: input.sourceFingerprint,
       });
-      return {
+      const result: ProposalResult = {
         status: "proposed",
         proposalId: proposal.id,
         serviceKey: proposal.serviceKey,
@@ -89,6 +106,8 @@ export class BookingService {
         partyTotalMinor: proposal.partyTotalMinor,
         expiresAt: proposal.expiresAt,
       };
+      await tx.writeEffect(effectKey, result);
+      return result;
     });
   }
 
@@ -149,6 +168,9 @@ export class BookingService {
           "STALE_REVISION",
           "operation accepted revision does not match the request",
         );
+      }
+      if (input.fencingToken) {
+        await tx.assertOperationOwnership(input.operationId, input.tripId, input.fencingToken);
       }
 
       const stored = await tx.readEffect(effectKey);
@@ -427,6 +449,21 @@ function toResult(reservation: ReservationRecord, idempotent: boolean): Reservat
     partyTotalMinor: reservation.partyTotalMinor,
     idempotent,
   };
+}
+
+function isProposalResult(value: unknown): value is ProposalResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.status === "proposed" &&
+    typeof candidate.proposalId === "string" &&
+    typeof candidate.offerId === "string" &&
+    typeof candidate.serviceKey === "string" &&
+    typeof candidate.partyTotalMinor === "number" &&
+    typeof candidate.expiresAt === "string"
+  );
 }
 
 function isReservationResult(value: unknown): value is ReservationResult {

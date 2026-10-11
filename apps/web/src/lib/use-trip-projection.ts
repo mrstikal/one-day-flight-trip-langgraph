@@ -5,6 +5,7 @@ import type { TripProjection } from "@odft/contracts";
 import { ApiError, apiGet } from "./api-client";
 
 const POLL_INTERVAL_MS = 1500;
+const MAX_BACKOFF_MS = 10_000;
 
 interface ProjectionState {
   readonly projection: TripProjection | null;
@@ -13,14 +14,18 @@ interface ProjectionState {
 }
 
 function hasActiveWork(projection: TripProjection): boolean {
-  return projection.operations.some(
-    (operation) => operation.status === "queued" || operation.status === "running",
+  return (
+    projection.operations.some(
+      (operation) => operation.status === "queued" || operation.status === "running",
+    ) || projection.pendingDecision !== null
   );
 }
 
 /**
- * Own projection reader. Polls while the worker has active work and refetches on
- * demand (e.g. after a resume or an SSE event). It never triggers work.
+ * Own projection reader. Polls while the worker has active work or a decision is
+ * pending, and refetches on demand (after a resume or an SSE event). A transient
+ * fetch failure does not stop polling: it retries with capped backoff and keeps
+ * the last projection visible while surfacing the error.
  */
 export function useTripProjection(tripId: string): ProjectionState & {
   readonly refresh: () => void;
@@ -33,6 +38,18 @@ export function useTripProjection(tripId: string): ProjectionState & {
   const mounted = useRef(true);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
+  const failures = useRef(0);
+  const loadRef = useRef<() => void>(() => {});
+
+  const schedule = useCallback((delay: number) => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+    }
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      loadRef.current();
+    }, delay);
+  }, []);
 
   const load = useCallback(async (): Promise<void> => {
     if (inFlight.current) {
@@ -44,42 +61,61 @@ export function useTripProjection(tripId: string): ProjectionState & {
       if (!mounted.current) {
         return;
       }
+      failures.current = 0;
       setState({ projection, error: null, loading: false });
       if (hasActiveWork(projection)) {
-        timer.current = setTimeout(() => void load(), POLL_INTERVAL_MS);
+        schedule(POLL_INTERVAL_MS);
       }
     } catch (error) {
       if (!mounted.current) {
         return;
       }
+      const apiError =
+        error instanceof ApiError
+          ? error
+          : new ApiError({
+              code: "NETWORK_ERROR",
+              message: "Could not reach the server; retrying…",
+              status: 0,
+              retryable: true,
+            });
       setState((previous) => ({
         projection: previous.projection,
-        error: error instanceof ApiError ? error : null,
+        error: apiError,
         loading: false,
       }));
+      // Keep trying: an unreachable server or a dropped SSE must not freeze the view.
+      failures.current += 1;
+      schedule(Math.min(POLL_INTERVAL_MS * 2 ** Math.min(failures.current, 4), MAX_BACKOFF_MS));
     } finally {
       inFlight.current = false;
     }
-  }, [tripId]);
+  }, [schedule, tripId]);
+
+  useEffect(() => {
+    loadRef.current = () => {
+      void load();
+    };
+  }, [load]);
 
   const refresh = useCallback((): void => {
     if (timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
     }
-    void load();
-  }, [load]);
+    loadRef.current();
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
-    void load();
+    loadRef.current();
     return () => {
       mounted.current = false;
       if (timer.current) {
         clearTimeout(timer.current);
       }
     };
-  }, [load]);
+  }, []);
 
   return { ...state, refresh };
 }

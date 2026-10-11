@@ -1,35 +1,43 @@
 import type { PublicFlightCombination, PublicFlightDirection } from "@odft/contracts";
-import { formatDuration, formatStops, formatTime } from "@/lib/format/datetime";
+import { formatDate, formatDuration, formatStops, formatTime } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
 
 function DirectionSummary({
   title,
   direction,
   stops,
+  minutes,
 }: {
   readonly title: string;
   readonly direction: PublicFlightDirection;
   readonly stops: number;
+  readonly minutes: number;
 }): React.JSX.Element {
-  const first = direction.segments[0];
-  const last = direction.segments[direction.segments.length - 1];
-  if (!first || !last) {
-    return <p>{title}: no segments</p>;
-  }
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-sm">
-        {first.fromIata} {formatTime(first.departureInstant, first.departureZone)} →{" "}
-        {last.toIata} {formatTime(last.arrivalInstant, last.arrivalZone)}
+    <div className="flex flex-col gap-2">
+      <p className="text-sm font-medium">
+        {title} · {formatStops(stops)} · {formatDuration(minutes)}
       </p>
-      <p className="text-xs text-ink-muted">
-        {first.airlineName} {first.flightNumber} · {formatStops(stops)}
-      </p>
-      <p className="text-xs text-ink-muted">
-        Local {first.departureZone} / {last.arrivalZone} · departs{" "}
-        {formatTime(first.departureInstant, "UTC")} UTC
-      </p>
+      <ol className="flex flex-col gap-2">
+        {direction.segments.map((segment, index) => (
+          <li key={`${segment.flightNumber}-${index}`} className="flex flex-col gap-0.5 text-sm">
+            <span>
+              {formatDate(segment.departureInstant, segment.departureZone)} · {segment.fromIata}{" "}
+              {formatTime(segment.departureInstant, segment.departureZone)} → {segment.toIata}{" "}
+              {formatTime(segment.arrivalInstant, segment.arrivalZone)}
+            </span>
+            <span className="text-xs text-ink-muted">
+              {segment.airlineName} {segment.flightNumber} · {formatDuration(segment.elapsedMinutes)}{" "}
+              · departs {formatTime(segment.departureInstant, "UTC")} UTC
+            </span>
+            {segment.layoverAfterMinutes > 0 ? (
+              <span className="text-xs text-ink-muted">
+                Layover {formatDuration(segment.layoverAfterMinutes)} at {segment.toIata}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -60,12 +68,22 @@ export function FlightCard({
           </span>
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <DirectionSummary title="Outbound" direction={flight.outbound} stops={flight.outboundStops} />
-        <DirectionSummary title="Return" direction={flight.inbound} stops={flight.inboundStops} />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <DirectionSummary
+          title="Outbound"
+          direction={flight.outbound}
+          stops={flight.outboundStops}
+          minutes={flight.outboundTravelMinutes}
+        />
+        <DirectionSummary
+          title="Return"
+          direction={flight.inbound}
+          stops={flight.inboundStops}
+          minutes={flight.inboundTravelMinutes}
+        />
       </div>
       <p className="text-xs text-ink-muted">
-        Total travel time {formatDuration(flight.totalTravelMinutes)} ·{" "}
+        Total travel time (incl. layovers) {formatDuration(flight.totalTravelMinutes)} ·{" "}
         {formatEuroMinor(flight.perAdultMinor)} per adult ·{" "}
         {flight.supportedVariants.includes("one_night") ? "one-night trip" : "two-night trip"}
       </p>

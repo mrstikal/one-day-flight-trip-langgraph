@@ -163,5 +163,5 @@ export type { ExtensionInput } from "./scenario/snapshots.js";
 export { loadOverlay, upsertFault } from "./scenario/faults.js";
 export type { UpsertFaultInput } from "./scenario/faults.js";
 
-export { applyTripCommand } from "./trip-commands.js";
+export { applyTripCommand, TripCommandError } from "./trip-commands.js";
 export type { ApplyTripCommandResult } from "./trip-commands.js";

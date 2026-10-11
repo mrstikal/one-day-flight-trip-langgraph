@@ -2,6 +2,7 @@ import { commandApiRequestSchema } from "@odft/contracts";
 import { admitOperation } from "@odft/persistence";
 import { envelopeResponse, errorResponse, jsonResponse, readJsonResult, scopeErrorResponse } from "@/lib/http";
 import { guardMutation } from "@/lib/guard";
+import { SIGHTSEEING_DATE_WINDOW_MESSAGE, isValidSightseeingDate } from "@/lib/date-window";
 
 /**
  * POST /api/trips/[id]/commands — admit one validated command as durable work.
@@ -36,6 +37,18 @@ export async function POST(
   const parsed = commandApiRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return envelopeResponse({ code: "VALIDATION_FAILED", message: "invalid command request", retryable: false });
+  }
+  const command = parsed.data.command;
+  if (
+    command.type === "set_route" &&
+    command.sightseeingDate !== undefined &&
+    !isValidSightseeingDate(command.sightseeingDate)
+  ) {
+    return envelopeResponse({
+      code: "VALIDATION_FAILED",
+      message: SIGHTSEEING_DATE_WINDOW_MESSAGE,
+      retryable: false,
+    });
   }
 
   const { id } = await context.params;

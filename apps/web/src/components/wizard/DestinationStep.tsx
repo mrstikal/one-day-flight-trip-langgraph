@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createTripRequestSchema } from "@odft/contracts";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
 import { ApiError, apiPost } from "@/lib/api-client";
@@ -20,10 +20,18 @@ export function DestinationStep(): React.JSX.Element {
   const [datasetLimitation, setDatasetLimitation] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  // Monotonic request ids so a slow response cannot overwrite newer results or
+  // leak cities from a country the user already changed away from.
+  const cityRequest = useRef(0);
+  const countryRequest = useRef(0);
 
   async function onCountryQuery(query: string): Promise<void> {
+    const seq = ++countryRequest.current;
     try {
       const items = await searchCountries(query);
+      if (seq !== countryRequest.current) {
+        return;
+      }
       setCountryOptions(
         items.map((country) => ({
           id: country.countryKey,
@@ -32,7 +40,9 @@ export function DestinationStep(): React.JSX.Element {
         })),
       );
     } catch {
-      setCountryOptions([]);
+      if (seq === countryRequest.current) {
+        setCountryOptions([]);
+      }
     }
   }
 
@@ -40,12 +50,19 @@ export function DestinationStep(): React.JSX.Element {
     if (!draft.countryKey) {
       return;
     }
+    const requestedCountry = draft.countryKey;
+    const seq = ++cityRequest.current;
     try {
-      const result = await searchCities(draft.countryKey, query);
+      const result = await searchCities(requestedCountry, query);
+      if (seq !== cityRequest.current || requestedCountry !== draft.countryKey) {
+        return;
+      }
       setCityOptions(result.items);
       setDatasetLimitation(result.datasetLimitation);
     } catch {
-      setCityOptions([]);
+      if (seq === cityRequest.current) {
+        setCityOptions([]);
+      }
     }
   }
 
@@ -120,6 +137,7 @@ export function DestinationStep(): React.JSX.Element {
         value={draft.countryKey ? { id: draft.countryKey, label: draft.countryName } : null}
         onQueryChange={(query) => void onCountryQuery(query)}
         onSelect={(option) => {
+          cityRequest.current += 1;
           update({
             countryKey: option.id,
             countryName: option.label,

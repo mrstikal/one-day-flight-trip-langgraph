@@ -45,6 +45,8 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "stage_selection";
     case "commit":
       return "commit_booking";
+    case "reselection":
+      return "prepare_decision";
     default:
       return "publish_summary";
   }
@@ -87,6 +89,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addConditionalEdges("apply_decision", routeAfterApplyDecision, [
       "stage_selection",
       "commit_booking",
+      "prepare_decision",
       "publish_summary",
     ])
     .addEdge("stage_selection", "prepare_decision")

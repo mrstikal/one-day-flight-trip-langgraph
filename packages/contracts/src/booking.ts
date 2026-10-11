@@ -165,6 +165,16 @@ export interface CurrentApprovals {
 export interface BookingTx {
   lockTrip(tripId: string): Promise<TripRecord | undefined>;
   loadOperation(operationId: string): Promise<OperationRef | undefined>;
+  /**
+   * Take a shared lock on the operation row and require the exact fencing token.
+   * Used by booking writes so a stale worker cannot mutate domain state after a
+   * takeover. Throws (fencing loss) when the token does not match.
+   */
+  assertOperationOwnership(
+    operationId: string,
+    tripId: string,
+    fencingToken: string,
+  ): Promise<void>;
   loadCurrentApprovals(tripId: string): Promise<CurrentApprovals>;
   loadDecision(decisionId: string): Promise<DecisionBindingRecord | undefined>;
   loadProposal(tripId: string, proposalId: string): Promise<ProposalRecord | undefined>;
@@ -227,6 +237,8 @@ export interface ProposeSelectionInput {
   readonly offerId: string;
   readonly operationId: string;
   readonly sourceFingerprint: string;
+  /** Fencing token of the claiming worker; when set, the write is fenced. */
+  readonly fencingToken?: string;
   readonly expiresInMs?: number;
 }
 
@@ -239,6 +251,8 @@ export interface ConfirmBookingInput {
   readonly acceptedRevision: number;
   readonly acceptedDemoDisclaimer: true;
   readonly confirmationKey: string;
+  /** Fencing token of the claiming worker; when set, the write is fenced. */
+  readonly fencingToken?: string;
 }
 
 export interface ReplaceConfirmedInput extends ConfirmBookingInput {

@@ -43,56 +43,69 @@ interface TripRow {
   active_scenario_snapshot_id: string | null;
 }
 
+/**
+ * Door-to-door minutes for one direction: from the first departure to the last
+ * arrival, so layover time between segments is included (not just flight time).
+ */
+function directionMinutes(direction: FlightCombination["outbound"]): number {
+  const first = direction.segments[0];
+  const last = direction.segments[direction.segments.length - 1];
+  if (!first || !last) {
+    return 0;
+  }
+  const minutes = Math.round(
+    (Date.parse(last.arrivalInstant) - Date.parse(first.departureInstant)) / 60_000,
+  );
+  return Math.max(1, minutes);
+}
+
 function totalMinutes(flight: FlightCombination): number {
-  const outbound = flight.outbound.segments.reduce((sum, segment) => sum + segment.elapsedMinutes, 0);
-  const inbound = flight.inbound.segments.reduce((sum, segment) => sum + segment.elapsedMinutes, 0);
-  return outbound + inbound;
+  return directionMinutes(flight.outbound) + directionMinutes(flight.inbound);
 }
 
 /** Strip internal hashes/scenario references before the DTO leaves the server. */
+function toPublicSegments(segments: FlightCombination["outbound"]["segments"]) {
+  return segments.map((segment, index) => {
+    const next = segments[index + 1];
+    const layoverAfterMinutes = next
+      ? Math.max(
+          0,
+          Math.round(
+            (Date.parse(next.departureInstant) - Date.parse(segment.arrivalInstant)) / 60_000,
+          ),
+        )
+      : 0;
+    return {
+      fromAirportId: segment.fromAirportId,
+      toAirportId: segment.toAirportId,
+      fromIata: segment.fromIata,
+      toIata: segment.toIata,
+      departureInstant: segment.departureInstant,
+      arrivalInstant: segment.arrivalInstant,
+      departureZone: segment.departureZone,
+      arrivalZone: segment.arrivalZone,
+      elapsedMinutes: segment.elapsedMinutes,
+      layoverAfterMinutes,
+      airlineName: segment.airlineName,
+      airlineCode: segment.airlineCode,
+      flightNumber: segment.flightNumber,
+    };
+  });
+}
+
 function toPublicFlight(flight: FlightCombination): PublicFlightCombination {
   return {
     id: flight.id,
-    outbound: {
-      direction: "outbound",
-      segments: flight.outbound.segments.map((segment) => ({
-        fromAirportId: segment.fromAirportId,
-        toAirportId: segment.toAirportId,
-        fromIata: segment.fromIata,
-        toIata: segment.toIata,
-        departureInstant: segment.departureInstant,
-        arrivalInstant: segment.arrivalInstant,
-        departureZone: segment.departureZone,
-        arrivalZone: segment.arrivalZone,
-        elapsedMinutes: segment.elapsedMinutes,
-        airlineName: segment.airlineName,
-        airlineCode: segment.airlineCode,
-        flightNumber: segment.flightNumber,
-      })),
-    },
-    inbound: {
-      direction: "inbound",
-      segments: flight.inbound.segments.map((segment) => ({
-        fromAirportId: segment.fromAirportId,
-        toAirportId: segment.toAirportId,
-        fromIata: segment.fromIata,
-        toIata: segment.toIata,
-        departureInstant: segment.departureInstant,
-        arrivalInstant: segment.arrivalInstant,
-        departureZone: segment.departureZone,
-        arrivalZone: segment.arrivalZone,
-        elapsedMinutes: segment.elapsedMinutes,
-        airlineName: segment.airlineName,
-        airlineCode: segment.airlineCode,
-        flightNumber: segment.flightNumber,
-      })),
-    },
+    outbound: { direction: "outbound", segments: toPublicSegments(flight.outbound.segments) },
+    inbound: { direction: "inbound", segments: toPublicSegments(flight.inbound.segments) },
     adults: flight.adults,
     supportedVariants: flight.supportedVariants,
     perAdultMinor: flight.perAdultMinor,
     partyTotalMinor: flight.partyTotalMinor,
     outboundStops: Math.max(0, flight.outbound.segments.length - 1),
     inboundStops: Math.max(0, flight.inbound.segments.length - 1),
+    outboundTravelMinutes: directionMinutes(flight.outbound),
+    inboundTravelMinutes: directionMinutes(flight.inbound),
     totalTravelMinutes: totalMinutes(flight),
     demoLabels: flight.demoLabels,
   };
@@ -269,6 +282,7 @@ export async function buildTripProjection(
         priceDeltaMinor: proposalRow.price_delta_minor,
         status: proposalRow.status,
         expiresAt: new Date(proposalRow.expires_at).toISOString(),
+        expired: Date.parse(proposalRow.expires_at) <= Date.now(),
       }
     : null;
 

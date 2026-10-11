@@ -33,6 +33,8 @@ export const publicFlightSegmentSchema = z
     departureZone: timeZoneSchema,
     arrivalZone: timeZoneSchema,
     elapsedMinutes: z.number().int().min(1),
+    /** Minutes between this segment's arrival and the next segment's departure. */
+    layoverAfterMinutes: z.number().int().min(0),
     airlineName: nonEmptyStringSchema,
     airlineCode: nonEmptyStringSchema,
     flightNumber: nonEmptyStringSchema,
@@ -60,6 +62,9 @@ export const publicFlightCombinationSchema = z
     /** Total stops per direction, computed server-side (never by the client). */
     outboundStops: z.number().int().min(0).max(2),
     inboundStops: z.number().int().min(0).max(2),
+    /** Door-to-door travel minutes per direction (includes layovers). */
+    outboundTravelMinutes: z.number().int().positive(),
+    inboundTravelMinutes: z.number().int().positive(),
     /** Outbound + inbound total travel time in minutes, computed server-side. */
     totalTravelMinutes: z.number().int().positive(),
     demoLabels: z.array(nonEmptyStringSchema),
@@ -92,6 +97,8 @@ export const publicProposalSchema = z
     priceDeltaMinor: z.number().int().nullable(),
     status: proposalStatusSchema,
     expiresAt: instantSchema,
+    /** Server-computed: the proposal TTL has passed (client must not compare clocks). */
+    expired: z.boolean(),
   })
   .strict();
 export type PublicProposal = z.infer<typeof publicProposalSchema>;

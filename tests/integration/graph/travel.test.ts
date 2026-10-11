@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { admitResume, createTrip, getPendingDecisionForTrip } from "@odft/persistence";
+import { admitResume, applyTripCommand, createTrip, getPendingDecisionForTrip, TripCommandError } from "@odft/persistence";
 import { createFixtureSession } from "../../fixtures/session.js";
 import { fixtureCreationInput } from "../../fixtures/trip.js";
 import {
@@ -112,6 +112,15 @@ describe("travel graph (real PostgreSQL)", () => {
     );
     expect(reservations.rows[0]?.count).toBe("1");
     expect(reservations.rows[0]?.demo_reference).toBe(state.values.demoReference);
+
+    // P1-2: changing the route after a confirmed reservation is refused, not
+    // silently applied (which would desync the summary from the booking).
+    await expect(
+      applyTripCommand(pool, {
+        tripId,
+        command: { type: "set_route", travelVariant: "one_night" },
+      }),
+    ).rejects.toBeInstanceOf(TripCommandError);
   }, 60_000);
 
   it("routes PRG -> Ceske Budejovice to the gating summary and creates no offers", async () => {
@@ -149,5 +158,48 @@ describe("travel graph (real PostgreSQL)", () => {
     expect(snapshots.rows[0]?.count).toBe("0");
     const decisions = await getPendingDecisionForTrip(pools.operations, created.tripId);
     expect(decisions).toBeUndefined();
+  }, 60_000);
+
+  it("allows rejecting the staged proposal and re-selecting a flight (P2-6)", async () => {
+    const { tripId, sessionId } = await createHarnessTrip(pool);
+    const driver = createTravelDriver(pools);
+    await driver.runOperation(await claimNextOrFail(pools));
+
+    const flightChoice = await getPendingDecisionForTrip(pools.operations, tripId);
+    const offerId = flightChoice?.allowedOfferIds[0] as string;
+    const chosen = await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId: flightChoice?.id ?? "",
+        response: { action: "choose_offer", offerId },
+      },
+    });
+    expect("operationId" in chosen).toBe(true);
+    await driver.runOperation(await claimNextOrFail(pools));
+
+    const confirmation = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(confirmation?.kind).toBe("booking_confirmation");
+
+    const rejected = await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId: confirmation?.id ?? "",
+        response: { action: "reject_proposal", proposalId: confirmation?.proposalId as string },
+      },
+    });
+    expect("operationId" in rejected).toBe(true);
+
+    await driver.runOperation(await claimNextOrFail(pools));
+    const again = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(again?.kind).toBe("flight_choice");
+    expect((again?.allowedOfferIds ?? []).length).toBeGreaterThanOrEqual(3);
+    const state = await readTravelState(pools, tripId);
+    expect(state.values.gate).toBe("flights_ready");
   }, 60_000);
 });

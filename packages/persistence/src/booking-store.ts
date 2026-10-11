@@ -17,6 +17,7 @@ import type {
 import { loadDecision, resolveDecision } from "./decisions.js";
 import { readEffect, writeEffect } from "./effects.js";
 import { insertEvent } from "./events.js";
+import { StaleFencingError } from "./operations/fencing.js";
 import { loadOperationById } from "./operations.js";
 import { getProposal, insertProposal, markProposalResolved } from "./proposals.js";
 import {
@@ -149,6 +150,22 @@ class PostgresBookingTx implements BookingTx {
 
   loadOperation(operationId: string): Promise<OperationRef | undefined> {
     return loadOperationById(this.client, operationId);
+  }
+
+  async assertOperationOwnership(
+    operationId: string,
+    tripId: string,
+    fencingToken: string,
+  ): Promise<void> {
+    const result = await this.client.query(
+      `SELECT 1 FROM odft_app.workflow_operations
+        WHERE id = $1 AND trip_id = $2 AND fencing_token = $3::bigint
+        FOR SHARE`,
+      [operationId, tripId, fencingToken],
+    );
+    if (result.rowCount !== 1) {
+      throw new StaleFencingError(operationId);
+    }
   }
 
   async loadCurrentApprovals(tripId: string): Promise<CurrentApprovals> {

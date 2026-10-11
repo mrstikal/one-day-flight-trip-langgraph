@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import type { PublicDecisionResponse } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
-import { DEMO_DISCLAIMER, CONFIRMATION_DISCLAIMER } from "@/lib/disclaimers";
+import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision, retryOperation } from "@/lib/decision-client";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { BookingDialog } from "./BookingDialog";
 import { FlightCard } from "./FlightCard";
+import { RouteFix } from "./RouteFix";
 import {
   ErrorPanel,
+  ExpiredProposalCard,
   FailedCard,
   RouteRejectionCard,
   ScheduleEmptyCard,
@@ -23,7 +25,7 @@ import {
 export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.Element {
   const { projection, error, refresh } = useTripProjection(tripId);
   const onEvent = useCallback(() => refresh(), [refresh]);
-  useTripEvents(tripId, onEvent);
+  const { reconnecting } = useTripEvents(tripId, onEvent);
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>();
@@ -78,20 +80,12 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     [handleError, refresh, tripId],
   );
 
-  const confirmBooking = useCallback(
-    async (response: PublicDecisionResponse): Promise<void> => {
-      if (!projection) {
-        return;
-      }
+  const submitResponse = useCallback(
+    async (decisionId: string, revision: number, response: PublicDecisionResponse): Promise<void> => {
       setBusy(true);
       setActionError(undefined);
       try {
-        await submitDecision({
-          tripId,
-          decisionId: projection.pendingDecision?.id ?? "",
-          expectedRevision: projection.trip.revision,
-          response,
-        });
+        await submitDecision({ tripId, decisionId, expectedRevision: revision, response });
         setDialogOpen(false);
         refresh();
       } catch (caught) {
@@ -100,7 +94,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
         setBusy(false);
       }
     },
-    [handleError, projection, refresh, tripId],
+    [handleError, refresh, tripId],
   );
 
   const requestTwoNights = useCallback(async (): Promise<void> => {
@@ -155,8 +149,25 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     .reverse()
     .find((operation) => operation.status === "failed");
 
+  const stalenessBanner = error ? (
+    <p role="status" className="rounded border border-clay bg-cream p-3 text-sm text-clay">
+      {error.message} Showing the last known state.
+    </p>
+  ) : reconnecting ? (
+    <p role="status" className="text-sm text-ink-muted">
+      Live updates reconnecting…
+    </p>
+  ) : null;
+
+  const wrap = (content: React.JSX.Element): React.JSX.Element => (
+    <div className="flex flex-col gap-4">
+      {stalenessBanner}
+      {content}
+    </div>
+  );
+
   if (projection.trip.recoveryRequired || projection.trip.workflowStatus === "failed") {
-    return (
+    return wrap(
       <FailedCard
         message="The planner stopped before finishing this trip. Retrying re-runs only the unfinished work."
         canRetry={Boolean(failedOperation)}
@@ -166,94 +177,133 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
             void retryPlanning(failedOperation.operationId);
           }
         }}
-      />
+      />,
     );
   }
 
-  if (projection.trip.workflowStatus === "blocked") {
-    return (
-      <FailedCard
-        message="This trip is blocked by a decision that needs to be resolved. Refresh to check the current state."
-        canRetry={false}
-        busy={false}
-        onRetry={() => {}}
-      />
-    );
-  }
-
-  if (reservation) {
-    return (
-      <div className="flex flex-col gap-6">
-        <SuccessPanel demoReference={reservation.demoReference} tripId={tripId} />
-        <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
-          {CONFIRMATION_DISCLAIMER}
-        </p>
-      </div>
-    );
-  }
-
+  // A live gating decision or a pending decision always wins over an earlier
+  // reservation, so a route change cannot leave a stale confirmation on screen.
   if (flights.routeStatus === "INFEASIBLE" || flights.routeStatus === "UNDETERMINED") {
-    return (
-      <RouteRejectionCard reasons={flights.routeReasons} alternatives={flights.alternatives} />
+    return wrap(
+      <RouteRejectionCard reasons={flights.routeReasons} alternatives={flights.alternatives}>
+        <RouteFix tripId={tripId} revision={projection.trip.revision} onSubmitted={refresh} />
+      </RouteRejectionCard>,
     );
   }
 
   if (flights.routeStatus === "FEASIBLE" && flights.scheduleStatus === "NO_VALID_OFFERS") {
+    return wrap(
+      <ScheduleEmptyCard
+        oneNight={projection.trip.travelVariant === "one_night"}
+        reasons={flights.scheduleReasons}
+        explanation={flights.scheduleExplanation}
+        busy={variantBusy}
+        onRequestTwoNights={() => void requestTwoNights()}
+      />,
+    );
+  }
+
+  if (pendingDecision?.kind === "booking_confirmation") {
+    const proposalUsable = proposal !== null && proposal.status === "proposed" && !proposal.expired;
+    if (!proposalUsable) {
+      return wrap(
+        <ExpiredProposalCard
+          busy={busy}
+          onReselect={() => {
+            if (pendingDecision.proposalId ?? proposal?.id) {
+              void submitResponse(pendingDecision.id, projection.trip.revision, {
+                action: "reject_proposal",
+                proposalId: (pendingDecision.proposalId ?? proposal?.id) as string,
+              });
+            }
+          }}
+        />,
+      );
+    }
+    const selected = flights.offers.find((offer) => offer.id === proposal.offerId) ?? null;
     return (
-      <div className="flex flex-col gap-4">
-        <ScheduleEmptyCard
-          oneNight={projection.trip.travelVariant === "one_night"}
-          reasons={flights.scheduleReasons}
-          explanation={flights.scheduleExplanation}
-          busy={variantBusy}
-          onRequestTwoNights={() => void requestTwoNights()}
-        />
+      <div className="flex flex-col gap-6">
+        {stalenessBanner}
         {actionError ? (
           <p role="alert" className="text-sm text-clay">
             {actionError}
           </p>
         ) : null}
+        <section className="flex flex-col gap-3 rounded border border-border bg-paper p-6">
+          <h2 className="text-lg">Review and confirm</h2>
+          <p className="text-sm">
+            Your selected flight is staged as a review proposal. Confirm to create the simulated
+            reservation, or choose a different flight.
+          </p>
+          <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
+            {DEMO_DISCLAIMER}
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
+            >
+              Review booking
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void submitResponse(pendingDecision.id, projection.trip.revision, {
+                  action: "reject_proposal",
+                  proposalId: proposal.id,
+                })
+              }
+              className="w-fit rounded border border-border px-4 py-2 text-sm disabled:opacity-50"
+            >
+              Choose a different flight
+            </button>
+          </div>
+        </section>
+        <BookingDialog
+          open={dialogOpen}
+          flight={selected}
+          proposal={proposal}
+          busy={busy}
+          error={actionError}
+          onClose={() => setDialogOpen(false)}
+          onReject={() => {
+            setDialogOpen(false);
+            void submitResponse(pendingDecision.id, projection.trip.revision, {
+              action: "reject_proposal",
+              proposalId: proposal.id,
+            });
+          }}
+          onConfirm={() =>
+            void submitResponse(pendingDecision.id, projection.trip.revision, {
+              action: "confirm_booking",
+              proposalId: proposal.id,
+              acceptedDemoDisclaimer: true,
+            })
+          }
+        />
       </div>
     );
   }
 
-  if (flights.scheduleStatus !== "VALID" || flights.offers.length === 0) {
-    const activeOperation = projection.operations.find(
-      (operation) => operation.status === "queued" || operation.status === "running",
-    );
+  if (pendingDecision?.kind === "flight_choice") {
     return (
-      <StatusPanel
-        message={
-          activeWork
-            ? `Accepted - planning in progress${
-                activeOperation ? ` (operation ${activeOperation.operationId.slice(0, 8)})` : ""
-              }`
-            : "Preparing flight options…"
-        }
-      />
-    );
-  }
-
-  const bookingDecision = pendingDecision?.kind === "booking_confirmation" ? pendingDecision : null;
-  const proposalPrice = proposal?.partyTotalMinor ?? 0;
-
-  return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-2">
-        <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 3 of 3</p>
-        <h1 className="text-2xl">Choose your flights</h1>
-        <p className="text-sm text-ink-muted">
-          These combinations passed the independent schedule validator. Prices are simulated in EUR.
-        </p>
-      </header>
-
-      {actionError ? (
-        <p role="alert" className="text-sm text-clay">
-          {actionError}
-        </p>
-      ) : null}
-
-      {pendingDecision?.kind === "flight_choice" ? (
+      <div className="flex flex-col gap-6">
+        {stalenessBanner}
+        <header className="flex flex-col gap-2">
+          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 3 of 3</p>
+          <h1 className="text-2xl">Choose your flights</h1>
+          <p className="text-sm text-ink-muted">
+            These combinations passed the independent schedule validator. Prices are simulated in
+            EUR.
+          </p>
+        </header>
+        {actionError ? (
+          <p role="alert" className="text-sm text-clay">
+            {actionError}
+          </p>
+        ) : null}
         <ul className="flex flex-col gap-4" aria-label="Flight combinations">
           {flights.offers.map((flight) => (
             <FlightCard
@@ -267,50 +317,39 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
             />
           ))}
         </ul>
-      ) : null}
+        <p className="text-sm">
+          <Link href={`/trips/${tripId}/summary`} className="underline">
+            View trip summary
+          </Link>
+        </p>
+      </div>
+    );
+  }
 
-      {bookingDecision && proposal ? (
-        <section className="flex flex-col gap-3 rounded border border-border bg-paper p-6">
-          <h2 className="text-lg">Review and confirm</h2>
-          <p className="text-sm">
-            Selected offer is staged as a review proposal. Confirm to create the simulated
-            reservation.
-          </p>
-          <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
-            {DEMO_DISCLAIMER}
-          </p>
-          <button
-            type="button"
-            onClick={() => setDialogOpen(true)}
-            className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
-          >
-            Review booking
-          </button>
-        </section>
-      ) : null}
+  if (reservation && !pendingDecision) {
+    return (
+      <div className="flex flex-col gap-6">
+        {stalenessBanner}
+        <SuccessPanel demoReference={reservation.demoReference} tripId={tripId} />
+        <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
+          {DEMO_DISCLAIMER}
+        </p>
+      </div>
+    );
+  }
 
-      <BookingDialog
-        open={dialogOpen}
-        priceMinor={proposalPrice}
-        busy={busy}
-        error={actionError}
-        onClose={() => setDialogOpen(false)}
-        onConfirm={() => {
-          if (bookingDecision?.proposalId ?? proposal?.id) {
-            void confirmBooking({
-              action: "confirm_booking",
-              proposalId: (bookingDecision?.proposalId ?? proposal?.id) as string,
-              acceptedDemoDisclaimer: true,
-            });
-          }
-        }}
-      />
-
-      <p className="text-sm">
-        <Link href={`/trips/${tripId}/summary`} className="underline">
-          View trip summary
-        </Link>
-      </p>
-    </div>
+  const activeOperation = projection.operations.find(
+    (operation) => operation.status === "queued" || operation.status === "running",
+  );
+  return wrap(
+    <StatusPanel
+      message={
+        activeWork
+          ? `Accepted - planning in progress${
+              activeOperation ? ` (operation ${activeOperation.operationId.slice(0, 8)})` : ""
+            }`
+          : "Preparing flight options…"
+      }
+    />,
   );
 }

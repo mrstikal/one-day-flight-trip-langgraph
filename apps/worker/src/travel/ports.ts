@@ -75,6 +75,7 @@ export function createTravelPortsFactory(
         offerId: input.offerId,
         operationId: input.operationId,
         sourceFingerprint: input.sourceFingerprint,
+        fencingToken: ctx.fencingToken,
       });
     },
 
@@ -92,6 +93,7 @@ export function createTravelPortsFactory(
         acceptedRevision: input.acceptedRevision,
         confirmationKey: input.confirmationKey,
         acceptedDemoDisclaimer: true,
+        fencingToken: ctx.fencingToken,
       });
     },
   });

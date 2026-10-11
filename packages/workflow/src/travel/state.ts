@@ -31,7 +31,7 @@ export const travelGateSchema = z.enum([
 ]);
 export type TravelGate = z.infer<typeof travelGateSchema>;
 
-export const travelStageSchema = z.enum(["flight_decision", "stage", "commit", "end"]);
+export const travelStageSchema = z.enum(["flight_decision", "stage", "commit", "reselection", "end"]);
 export type TravelStage = z.infer<typeof travelStageSchema>;
 
 /** The admitted command payload (creation input or a domain command). */

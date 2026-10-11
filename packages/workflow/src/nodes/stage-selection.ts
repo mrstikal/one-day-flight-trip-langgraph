@@ -27,15 +27,15 @@ export async function stageSelectionNode(
     snapshotId: state.snapshotId,
   });
   const ports = travelPorts(runtime);
-  const proposal = await ports.runEffect("stage_selection", `flights:${offerId}`, () =>
-    ports.propose({
-      tripId: state.tripId,
-      operationId: state.operationId,
-      service: "flights",
-      offerId,
-      sourceFingerprint,
-    }),
-  );
+  // `propose` is idempotent through its own effect ledger inside the booking
+  // transaction, so it is called directly (never wrapped in a second effect).
+  const proposal = await ports.propose({
+    tripId: state.tripId,
+    operationId: state.operationId,
+    service: "flights",
+    offerId,
+    sourceFingerprint,
+  });
   return {
     proposalId: proposal.proposalId,
     selectedOfferId: offerId,

@@ -19,6 +19,16 @@ export interface ApplyTripCommandResult {
   readonly routeChanged: boolean;
 }
 
+/** An Error carrying a safe domain code that the worker maps to a conflict. */
+export class TripCommandError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "DomainError";
+    this.code = code;
+  }
+}
+
 export async function applyTripCommand(
   pool: Pool,
   input: { readonly tripId: string; readonly command: DomainCommand },
@@ -148,6 +158,24 @@ export async function applyTripCommand(
     if (!routeChanged && !preferencesChanged) {
       await client.query("ROLLBACK");
       return { outcome: "noop", routeChanged: false };
+    }
+
+    // Changing the route (origin/destination/date/variant) invalidates any
+    // confirmed reservation. Replacing a booking needs an explicit impact review
+    // (Phase 07+), so refuse here instead of silently diverging from the booking.
+    if (routeChanged) {
+      const reservations = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM odft_app.reservations
+          WHERE trip_id = $1 AND status = 'confirmed'`,
+        [input.tripId],
+      );
+      if (Number(reservations.rows[0]?.count ?? "0") > 0) {
+        await client.query("ROLLBACK");
+        throw new TripCommandError(
+          "REPLACEMENT_CONFIRMATION_REQUIRED",
+          "changing the route after a confirmed reservation requires an impact review",
+        );
+      }
     }
 
     await client.query(
