@@ -184,8 +184,38 @@ export {
 } from "./scenario/snapshots.js";
 export type { ExtensionInput } from "./scenario/snapshots.js";
 
-export { loadOverlay, upsertFault } from "./scenario/faults.js";
-export type { UpsertFaultInput } from "./scenario/faults.js";
+export { loadOverlay, recordFaultOutcome, upsertFault } from "./scenario/faults.js";
+export type {
+  FaultOutcomeInput,
+  FaultOutcomeRecord,
+  UpsertFaultInput,
+} from "./scenario/faults.js";
+
+/* ---- Phase 09: parallel research fan-out ------------------------------------- */
+
+export {
+  artifactIdFor,
+  listLatestRecommendationArtifacts,
+  recordRecommendationArtifact,
+} from "./recommendations.js";
+export type {
+  RecommendationArtifactInput,
+  RecommendationArtifactRecord,
+} from "./recommendations.js";
+
+export {
+  loadTripResearchInputs,
+  overlayTargetsDomain,
+  rankTripRecommendations,
+  researchTripDomain,
+} from "./scenario/research-domains.js";
+export type {
+  RankDomainCandidates,
+  RankedTripServices,
+  ResearchDomainOutcome,
+  ResearchDomainRequest,
+  TripResearchInputs,
+} from "./scenario/research-domains.js";
 
 export { applyTripCommand, applyTripCommands, TripCommandError } from "./trip-commands.js";
 export type { ApplyTripCommandResult, ApplyTripCommandsResult } from "./trip-commands.js";
@@ -197,7 +227,6 @@ export {
   parseClock,
   planProgramSelections,
   recordPreferredActivities,
-  researchTripServices,
   ServiceSelectionError,
   upsertProgramSelections,
   validateTripLogistics,
@@ -208,7 +237,6 @@ export type {
   ResearchMeal,
   TripLogisticsResult,
   TripProgress,
-  TripResearchResult,
 } from "./scenario/trip-services.js";
 
 /* ---- Phase 08: AI call governance and persistent conversation ---------------- */

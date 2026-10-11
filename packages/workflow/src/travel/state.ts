@@ -5,12 +5,14 @@ import {
   decisionKindSchema,
   domainCommandSchema,
   preservableKeySchema,
+  researchDomainSchema,
   routeAlternativeSchema,
   routeReasonEntrySchema,
   routeValidationSchema,
   scheduleValidationSchema,
   type DecisionKind,
 } from "@odft/contracts";
+import { researchResultsValue } from "../state/research-reducer.js";
 
 /**
  * Production travel-graph state (Phase 06, 03-langgraph-design.md).
@@ -20,8 +22,8 @@ import {
  * PostgreSQL and is read through the invocation ports.
  */
 
-export const TRAVEL_SCHEMA_VERSION = "travel-state-v2";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v2";
+export const TRAVEL_SCHEMA_VERSION = "travel-state-v3";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v3";
 
 export const travelGateSchema = z.enum([
   "pending",
@@ -34,6 +36,7 @@ export const travelGateSchema = z.enum([
   "program_ready",
   "withdrawn",
   "logistics_conflict",
+  "research_failed",
   "clarification",
   "chat_done",
 ]);
@@ -133,7 +136,7 @@ export const travelStateFields = {
 
   // Phase 07: hotel/meal/program research + program choices
   domainsEnsured: z.boolean().default(false),
-  researchStatus: z.enum(["pending", "ok", "partial"]).default("pending"),
+  researchStatus: z.enum(["pending", "ok", "partial", "failed"]).default("pending"),
   hotelOfferIds: z.array(z.string().min(1)).default(() => []),
   mealOfferIds: z
     .object({
@@ -168,6 +171,34 @@ export const travelStateFields = {
   pendingStage: travelStageSchema.nullable().default(null),
   gate: travelGateSchema.default("pending"),
   lastOutcome: z.string().nullable().default(null),
+
+  // Phase 09: parallel research fan-out (Send) with keyed results and retry
+  /**
+   * Current research-run scope; reducer keys are `<researchRunId>:<domain>`.
+   * Empty until `dispatch_research` opens the first scope (the schema must keep
+   * an empty default: LangGraph validates applied defaults).
+   */
+  researchRunId: z.string().default(""),
+  /** Domains dispatched in the current run scope (never all six on a refresh). */
+  requiredDomains: z.array(researchDomainSchema).default(() => []),
+  /** Keyed per-domain results; each task writes only its own key. */
+  researchResults: researchResultsValue,
+  /** Provider attempts used per domain in this operation (bounded to two). */
+  researchAttempts: z.record(z.string(), z.number().int().min(1).max(2)).default(() => ({})),
+  /** Research run round within the operation; a retry opens round + 1. */
+  researchRound: z.number().int().min(0).max(8).default(0),
+  /** Domains whose automatic retry is pending (`join_research` -> dispatch). */
+  researchRetryPending: z.boolean().default(false),
+  /** Domains that failed this run scope; inputs for the retry dispatch. */
+  failedDomains: z.array(researchDomainSchema).default(() => []),
+  /** Deterministic research input fingerprint per domain of the last dispatch. */
+  researchInputFingerprints: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)).default(() => ({})),
+  /** Dispatch routing flag: `none` continues directly with retained results. */
+  dispatchMode: z.enum(["none", "fanout"]).default("none"),
+  /** Necessary domains that stayed unavailable after the bounded retry. */
+  researchFailedDomains: z.array(researchDomainSchema).default(() => []),
+  /** Safe short reason for the research-failure recovery decision. */
+  researchReason: z.string().nullable().default(null),
 
   // Phase 08: chat intent interpretation and clarification
   chatMessage: z.string().nullable().default(null),

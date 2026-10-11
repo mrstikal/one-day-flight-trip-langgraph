@@ -2,6 +2,8 @@ import type {
   DomainCommand,
   IntentResult,
   MealSelections,
+  ResearchDomain,
+  ResearchDomainStatus,
   RouteValidation,
   ScheduleValidation,
   ReservationResult,
@@ -27,9 +29,31 @@ export interface TravelMaterializedFlights {
   readonly snapshotId: string;
 }
 
-/** Deterministic, serial Phase 07 service research result (no LLM at this stage). */
-export interface TravelResearchResult {
-  readonly status: "ok" | "partial";
+/** Phase 09: deterministic per-domain research input fingerprints. */
+export interface TravelResearchInputs {
+  readonly snapshotId: string;
+  readonly fingerprints: Record<ResearchDomain, string>;
+}
+
+/** Phase 09: one domain's tagged research outcome (never a dataset). */
+export interface TravelResearchOutcome {
+  readonly domain: ResearchDomain;
+  readonly status: ResearchDomainStatus;
+  readonly artifactId: string | null;
+  readonly offerIds: string[];
+  readonly simulatedFailure: boolean;
+  readonly reason: string | null;
+  readonly attempt: number;
+}
+
+export interface TravelRankDomainCandidates {
+  readonly domain: ResearchDomain;
+  readonly artifactId: string;
+  readonly inputFingerprint: string;
+  readonly offerIds: readonly string[];
+}
+
+export interface TravelRankedServices {
   readonly hotelOfferIds: string[];
   readonly mealOfferIds: {
     readonly breakfast: string[];
@@ -44,6 +68,19 @@ export interface TravelResearchResult {
     readonly dinner: string | null;
   };
   readonly dinnerNotIncludedReason: string | null;
+}
+
+/** Phase 09: safe domain timing/attempt event persisted for the projection. */
+export interface TravelResearchEvent {
+  readonly tripId: string;
+  readonly operationId: string;
+  readonly domain: ResearchDomain;
+  readonly phase: "started" | "finished";
+  readonly attempt: number;
+  readonly durationMs: number | null;
+  readonly status: ResearchDomainStatus | null;
+  readonly simulatedFailure: boolean;
+  readonly reason: string | null;
 }
 
 export interface TravelProgramResult {
@@ -109,10 +146,26 @@ export interface TravelPorts {
     confirmationKey: string;
   }): Promise<ReservationResult>;
 
-  /** Phase 07: idempotently materialize hotels/breakfast/lunch/dinner/activities. */
+  /** Phase 07/09: idempotently materialize hotels/meals/activities/events. */
   ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;
-  /** Phase 07: deterministic serial provider research over the active snapshot. */
-  researchServices(tripId: string): Promise<TravelResearchResult>;
+  /** Phase 09: deterministic per-domain research input fingerprints. */
+  loadResearchInputs(tripId: string): Promise<TravelResearchInputs>;
+  /** Phase 09: research one domain (provider + idempotent artifact write). */
+  researchDomain(input: {
+    tripId: string;
+    operationId: string;
+    domain: ResearchDomain;
+    attempt: number;
+    inputFingerprint: string;
+  }): Promise<TravelResearchOutcome>;
+  /** Phase 09: deterministic re-filter/re-order + artifact persistence. */
+  rankRecommendations(input: {
+    tripId: string;
+    operationId: string;
+    domains: readonly TravelRankDomainCandidates[];
+  }): Promise<TravelRankedServices>;
+  /** Phase 09: persist one safe domain timing/attempt event. */
+  recordResearchEvent(event: TravelResearchEvent): Promise<void>;
   /** Phase 07: apply a `submit_program` selection without moving bookings. */
   applyProgram(input: {
     tripId: string;

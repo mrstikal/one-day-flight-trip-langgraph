@@ -15,6 +15,19 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "clarification_modify" };
     case "choose_option": {
       // Recovery decision: re-open the affected choice step without editing data.
+      // A research-failure recovery ends the run instead: the affected page shows
+      // its empty/failed state with active controls and the retry action.
+      if (state.researchStatus === "failed") {
+        return {
+          pendingStage: "end",
+          proposalId: null,
+          selectedOfferId: null,
+          decisionFingerprint: null,
+          bookingService: null,
+          logisticsStatus: "pending",
+          logisticsReason: null,
+        };
+      }
       const kind = state.lastOptionId === "change_meals" ? "program_choices" : "hotel_choice";
       return {
         pendingStage: "reselection",

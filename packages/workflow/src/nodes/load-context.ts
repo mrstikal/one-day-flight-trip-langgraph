@@ -51,6 +51,20 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     // Phase 07 research/program state
     domainsEnsured: false,
     researchStatus: "pending",
+    // Phase 09 research fan-out: the keyed result map is deliberately NOT reset
+    // here. It is pruned by `join_research` and carries the retained usable
+    // results across operations, so a dinner-only change never reruns
+    // breakfast/lunch; only the per-operation scope is reset.
+    researchRunId: "",
+    requiredDomains: [],
+    researchAttempts: {},
+    researchRound: 0,
+    researchRetryPending: false,
+    failedDomains: [],
+    researchInputFingerprints: {},
+    dispatchMode: "none",
+    researchFailedDomains: [],
+    researchReason: null,
     hotelOfferIds: [],
     mealOfferIds: { breakfast: [], lunch: [], dinner: [] },
     activityIds: [],

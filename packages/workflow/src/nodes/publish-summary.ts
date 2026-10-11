@@ -15,6 +15,9 @@ export function publishSummaryNode(state: TravelState): TravelUpdate {
   if (state.gate === "logistics_conflict") {
     return { lastOutcome: "logistics_conflict" };
   }
+  if (state.gate === "research_failed") {
+    return { lastOutcome: "research_failed" };
+  }
   if (state.gate === "withdrawn") {
     return { lastOutcome: "withdrawn" };
   }

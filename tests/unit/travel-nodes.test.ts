@@ -176,12 +176,12 @@ describe("routers", () => {
     );
   });
 
-  it("revalidates schedules before research after a domain extension (Phase 07)", () => {
+  it("revalidates schedules before research after a domain extension (Phase 07/09)", () => {
     expect(
       routeAfterSchedules(
         state({ scheduleStatus: "VALID", domainsEnsured: true, researchStatus: "pending" }),
       ),
-    ).toBe("research_services");
+    ).toBe("dispatch_research");
     expect(routeAfterSchedules(state({ scheduleStatus: "VALID" }))).toBe("prepare_decision");
   });
 

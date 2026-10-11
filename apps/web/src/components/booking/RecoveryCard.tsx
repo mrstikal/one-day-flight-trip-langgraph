@@ -3,10 +3,12 @@ import type { PublicPendingDecision } from "@odft/contracts";
 const OPTION_LABELS: Readonly<Record<string, string>> = {
   change_hotel: "Adjust the hotel",
   change_meals: "Adjust the meals",
+  change_program: "Adjust the program",
 };
 
 /**
- * Typed recovery decision (Phase 07 step 7). A deterministic logistics conflict
+ * Typed recovery decision (Phase 07 step 7, extended in Phase 09). A
+ * deterministic logistics conflict or an unavailable necessary research domain
  * opens this instead of editing a reservation: the user re-opens the affected
  * step. The reason itself is not carried in the decision DTO (no free text), only
  * the offered recovery options.
@@ -31,8 +33,9 @@ export function RecoveryCard({
         We need one change to keep your day feasible
       </h2>
       <p className="text-sm text-ink-muted">
-        The confirmed plan has a logistics conflict (for example a transfer or a meal window).
-        Nothing has been changed automatically; pick which part to adjust.
+        The confirmed plan needs one adjustment (for example a transfer, a meal window, or an
+        option that is unavailable for the selected category). Nothing has been changed
+        automatically; pick which part to adjust.
       </p>
       {error ? (
         <p role="alert" className="text-sm text-clay">

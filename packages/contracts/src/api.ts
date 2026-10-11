@@ -10,6 +10,7 @@ import {
   publicMealOfferSchema,
   publicProgramChoicesSchema,
   publicProposalSchema,
+  publicResearchStateSchema,
   publicReservationSchema,
   publicServiceLevelsSchema,
   tripDisplaySchema,
@@ -110,6 +111,8 @@ export const tripProjectionSchema = z
     meals: z.array(publicMealOfferSchema),
     program: publicProgramChoicesSchema.nullable(),
     serviceLevels: publicServiceLevelsSchema,
+    /** Phase 09: latest per-domain research outcomes (safe, events-derived). */
+    research: publicResearchStateSchema.nullable(),
     proposal: publicProposalSchema.nullable(),
     reservation: publicReservationSchema.nullable(),
     reservations: z.array(publicReservationSchema),

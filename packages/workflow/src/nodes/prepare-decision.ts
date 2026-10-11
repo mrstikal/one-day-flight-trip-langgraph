@@ -40,6 +40,25 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
     };
   }
   if (state.nextDecisionKind === "recovery") {
+    if (state.researchStatus === "failed") {
+      // Research failure: offer only the adjustments that can help. Choosing one
+      // ends the run so the page shows its empty/failed state with the active
+      // preference controls and the retry action.
+      const options: string[] = [];
+      if (state.researchFailedDomains.includes("hotel")) {
+        options.push("change_hotel");
+      }
+      if (state.researchFailedDomains.some((domain) => domain !== "hotel")) {
+        options.push("change_program");
+      }
+      return {
+        decisionKind: "recovery",
+        proposalId: null,
+        allowedOfferIds: [],
+        allowedOptionIds: options.length > 0 ? options : ["change_program"],
+        gate: "research_failed",
+      };
+    }
     return {
       decisionKind: "recovery",
       proposalId: null,

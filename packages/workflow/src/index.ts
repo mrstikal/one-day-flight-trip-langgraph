@@ -22,7 +22,6 @@ export type {
 export { buildHarnessGraph, routeAfterBegin } from "./harness/graph.js";
 export type { BuildHarnessGraphOptions } from "./harness/graph.js";
 
-export { researchDomainNode } from "./harness/test-domain-node.js";
 export type { HarnessContext, HarnessPorts } from "./harness/test-domain-node.js";
 
 export { awaitDecisionNode } from "./harness/interrupt.js";
@@ -67,11 +66,13 @@ export {
   routeAfterApplyProgram,
   routeAfterCommit,
   routeAfterDetectProgress,
+  routeAfterDispatch,
   routeAfterEnsureDomains,
   routeAfterGeneration,
   routeAfterIntentResult,
+  routeAfterJoin,
   routeAfterLogistics,
-  routeAfterResearch,
+  routeAfterRank,
   routeAfterSchedules,
   routeAfterValidation,
 } from "./travel/graph.js";
@@ -81,6 +82,10 @@ export {
   interpretModificationNode,
   resolveClarificationNode,
 } from "./nodes/interpret-intent.js";
+export { dispatchResearchNode } from "./nodes/dispatch-research.js";
+export { researchDomainNode } from "./nodes/research-domain.js";
+export { joinResearchNode } from "./nodes/join-research.js";
+export { rankRecommendationsNode } from "./nodes/rank-recommendations.js";
 export { buildTravelStartInput } from "./travel/start-input.js";
 export type {
   TravelLogisticsResult,
@@ -88,6 +93,24 @@ export type {
   TravelPorts,
   TravelProgramResult,
   TravelProgress,
-  TravelResearchResult,
+  TravelRankDomainCandidates,
+  TravelRankedServices,
+  TravelResearchEvent,
+  TravelResearchInputs,
+  TravelResearchOutcome,
   TravelTripContext,
 } from "./travel/ports.js";
+
+// Phase 09 research fan-out state slice.
+export {
+  emptyResearchResults,
+  researchDomainResultSchema,
+  researchDomainStatusSchema,
+  researchResultsValue as travelResearchResultsValue,
+  researchRunKey,
+} from "./state/research-reducer.js";
+export type {
+  ResearchDomain,
+  ResearchDomainResult,
+  ResearchDomainStatus,
+} from "./state/research-reducer.js";

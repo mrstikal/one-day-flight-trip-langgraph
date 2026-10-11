@@ -147,3 +147,65 @@ export const scenarioDomainSchema = z.enum([
   "events",
 ]);
 export type ScenarioDomain = z.infer<typeof scenarioDomainSchema>;
+
+/**
+ * Phase 09 research fan-out domains: exactly the non-flight inventories that a
+ * parallel research task can cover. `hotel`/`attractions` are the task-facing
+ * names of the `hotels`/`activities` scenario domains.
+ */
+export const researchDomainSchema = z.enum([
+  "hotel",
+  "breakfast",
+  "lunch",
+  "dinner",
+  "attractions",
+  "events",
+]);
+export type ResearchDomain = z.infer<typeof researchDomainSchema>;
+
+/** Canonical display/dispatch order for research domains. */
+export const RESEARCH_DOMAINS: readonly ResearchDomain[] = researchDomainSchema.options;
+
+export const researchDomainStatusSchema = z.enum([
+  "ok",
+  "unavailable",
+  "retryable_error",
+  "unsupported",
+]);
+export type ResearchDomainStatus = z.infer<typeof researchDomainStatusSchema>;
+
+/** Scenario domain behind each research domain (never `flights`). */
+export const SCENARIO_DOMAIN_FOR_RESEARCH: Readonly<Record<ResearchDomain, ScenarioDomain>> = {
+  hotel: "hotels",
+  breakfast: "breakfast",
+  lunch: "lunch",
+  dinner: "dinner",
+  attractions: "activities",
+  events: "events",
+};
+
+/** The research domain for a scenario domain, or undefined for `flights`. */
+export function researchDomainForScenario(domain: ScenarioDomain): ResearchDomain | undefined {
+  return (Object.keys(SCENARIO_DOMAIN_FOR_RESEARCH) as ResearchDomain[]).find(
+    (research) => SCENARIO_DOMAIN_FOR_RESEARCH[research] === domain,
+  );
+}
+
+/**
+ * Recommendation-artifact service key for each research domain. The artifact
+ * convention keeps the display names (`hotel`) and maps the activity domain to
+ * its scenario service key (`activities`).
+ */
+export const ARTIFACT_SERVICE_KEY_FOR_RESEARCH: Readonly<Record<ResearchDomain, string>> = {
+  hotel: "hotel",
+  breakfast: "breakfast",
+  lunch: "lunch",
+  dinner: "dinner",
+  attractions: "activities",
+  events: "events",
+};
+
+/** The stable reducer key of one research task: `<researchRunId>:<domain>`. */
+export function researchRunKey(researchRunId: string, domain: ResearchDomain): string {
+  return `${researchRunId}:${domain}`;
+}

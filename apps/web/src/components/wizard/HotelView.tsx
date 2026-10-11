@@ -19,6 +19,7 @@ import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
 import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
+import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
 function hotelDetails(offer: PublicHotelOffer): { label: string; value: string }[] {
   return [
@@ -99,6 +100,8 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
   const confirmedHotel = reservations.find(
     (reservation) => reservation.serviceKey === "hotel" && reservation.status === "confirmed",
   );
+  const hotelResearch =
+    projection.research?.domains.find((entry) => entry.domain === "hotel") ?? null;
 
   const banner = error ? (
     <p role="status" className="rounded border border-clay bg-cream p-3 text-sm text-clay">
@@ -151,6 +154,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           {serviceLevels.hotel.inherited ? "using the global default" : "explicit choice"}). A
           pending choice must be answered before preferences can change.
         </p>
+        <SimulatedFailureNote state={hotelResearch} />
         {hotel.length === 0 ? (
           <p className="text-sm text-ink-muted">
             No hotel offers are available for your selection.
@@ -288,6 +292,35 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
         ) : null}
         <p role="note" className="text-sm text-ink-muted">
           {DEMO_DISCLAIMER}
+        </p>
+      </div>
+    );
+  }
+
+  if (hotelResearch && hotelResearch.status !== "ok" && pendingDecision === null) {
+    return (
+      <div className="flex flex-col gap-6">
+        {banner}
+        <ResearchFailurePanel
+          tripId={tripId}
+          revision={projection.trip.revision}
+          domain="hotel"
+          state={hotelResearch}
+          disabled={activeWork}
+          onRetried={refresh}
+        />
+        <ServiceLevelControl
+          tripId={tripId}
+          revision={projection.trip.revision}
+          service="hotel"
+          label="Hotel"
+          levelState={serviceLevels.hotel}
+          onChanged={refresh}
+        />
+        <p className="text-sm">
+          <Link href={`/trips/${tripId}/flights`} className="underline">
+            Back to flights
+          </Link>
         </p>
       </div>
     );

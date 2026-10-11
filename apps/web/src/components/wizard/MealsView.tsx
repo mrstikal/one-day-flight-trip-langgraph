@@ -17,6 +17,7 @@ import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
 import { ProgramChoices } from "@/components/program/ProgramChoices";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
+import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
 const MEALS: readonly Meal[] = ["breakfast", "lunch", "dinner"];
 
@@ -139,6 +140,14 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           <span className="capitalize">{serviceLevels.dinner.level}</span>. A pending choice must be
           answered before preferences can change.
         </p>
+        <SimulatedFailureNote
+          state={
+            MEALS.map(
+              (meal) =>
+                projection.research?.domains.find((entry) => entry.domain === meal) ?? null,
+            ).find((state) => state?.simulatedFailure) ?? null
+          }
+        />
         <ProgramChoices
           mealOffers={meals}
           program={program}
@@ -339,12 +348,46 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
     );
   }
 
+  const failedMeals = MEALS.flatMap((meal) => {
+    const state = projection.research?.domains.find((entry) => entry.domain === meal) ?? null;
+    return state && state.status !== "ok" ? [{ meal, state }] : [];
+  });
+
   return (
     <div className="flex flex-col gap-4">
       {banner}
-      <StatusPanel
-        message={activeWork ? "Accepted - preparing meals…" : "Preparing meal options…"}
-      />
+      {failedMeals.length > 0 && pendingDecision === null ? (
+        <div className="flex flex-col gap-6">
+          {failedMeals.map(({ meal, state }) => (
+            <ResearchFailurePanel
+              key={meal}
+              tripId={tripId}
+              revision={projection.trip.revision}
+              domain={meal}
+              state={state}
+              disabled={activeWork}
+              onRetried={refresh}
+            />
+          ))}
+          <div className="grid gap-3 sm:grid-cols-3">
+            {failedMeals.map(({ meal }) => (
+              <ServiceLevelControl
+                key={meal}
+                tripId={tripId}
+                revision={projection.trip.revision}
+                service={meal}
+                label={meal}
+                levelState={serviceLevels[meal]}
+                onChanged={refresh}
+              />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <StatusPanel
+          message={activeWork ? "Accepted - preparing meals…" : "Preparing meal options…"}
+        />
+      )}
     </div>
   );
 }

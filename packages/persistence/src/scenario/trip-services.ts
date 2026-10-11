@@ -1,20 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import {
-  SyntheticAccommodationSearchProvider,
-  SyntheticAttractionsProvider,
-  SyntheticRestaurantSearchProvider,
-  SyntheticRoutingProvider,
-} from "@odft/data";
-import type { ServiceKey, ServiceLevel, TripPreferences } from "@odft/contracts";
+import { SyntheticRoutingProvider } from "@odft/data";
+import type { ServiceKey } from "@odft/contracts";
 import { tripPreferencesSchema } from "@odft/contracts";
 import { getTrip } from "../trips.js";
-import { loadSnapshotContent, PostgresSnapshotSource } from "./snapshots.js";
+import { loadSnapshotContent } from "./snapshots.js";
 
 /**
- * Deterministic Phase 07 service research, program application, and selected
- * logistics (serial, no LLM). Phase 09 replaces the serial research with a
- * `Send` fan-out while keeping these result shapes.
+ * Deterministic Phase 07 program application and selected logistics (serial, no
+ * LLM). Phase 09 replaced the serial service research with a `Send` fan-out in
+ * `research-domains.ts`; the program and logistics shapes are unchanged.
  *
  * Pool safety: this module never holds a connection across a provider call.
  * Providers acquire their own short-lived connections, so one operation needs at
@@ -27,23 +22,6 @@ import { loadSnapshotContent, PostgresSnapshotSource } from "./snapshots.js";
 type Queryable = { query: PoolClient["query"] };
 
 export type ResearchMeal = "breakfast" | "lunch" | "dinner";
-
-export interface TripResearchResult {
-  readonly status: "ok" | "partial";
-  readonly hotelOfferIds: string[];
-  readonly mealOfferIds: {
-    readonly breakfast: string[];
-    readonly lunch: string[];
-    readonly dinner: string[];
-  };
-  readonly activityIds: string[];
-  readonly mealDefaults: {
-    readonly breakfast: string | null;
-    readonly lunch: string | null;
-    readonly dinner: string | null;
-  };
-  readonly dinnerNotIncludedReason: string | null;
-}
 
 export interface ProgramSelection {
   readonly serviceKey: ServiceKey;
@@ -78,46 +56,11 @@ export class ServiceSelectionError extends Error {
   }
 }
 
-const MEALS: readonly ResearchMeal[] = ["breakfast", "lunch", "dinner"];
 const MEAL_SERVICES: readonly ("breakfast" | "lunch" | "dinner")[] = [
   "breakfast",
   "lunch",
   "dinner",
 ];
-
-function effectiveLevel(preferences: TripPreferences, service: ServiceKey): ServiceLevel {
-  return preferences.serviceOverrides[service] ?? preferences.defaultServiceLevel;
-}
-
-function nightsForVariant(variant: "one_night" | "two_nights"): number {
-  return variant === "one_night" ? 1 : 2;
-}
-
-function shiftDate(iso: string, days: number): string {
-  const [year, month, day] = iso.split("-").map((part) => Number.parseInt(part, 10));
-  const date = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 1, (day ?? 1) + days));
-  return date.toISOString().slice(0, 10);
-}
-
-function nightDates(sightseeingDate: string, variant: "one_night" | "two_nights"): string[] {
-  const checkIn = shiftDate(sightseeingDate, -1);
-  return Array.from({ length: nightsForVariant(variant) }, (_unused, index) =>
-    shiftDate(checkIn, index),
-  );
-}
-
-/** Deterministic default: lowest party total, then lowest id. */
-function pickDefault<T extends { id: string; partyTotalMinor: number }>(
-  offers: readonly T[],
-): string | null {
-  if (offers.length === 0) {
-    return null;
-  }
-  const sorted = [...offers].sort(
-    (a, b) => a.partyTotalMinor - b.partyTotalMinor || a.id.localeCompare(b.id),
-  );
-  return sorted[0]?.id ?? null;
-}
 
 function contentFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -247,122 +190,6 @@ async function recordRecommendation(
       input.explanation ?? "Deterministic serial research (Phase 07).",
     ],
   );
-}
-
-export async function researchTripServices(
-  pool: Pool,
-  tripId: string,
-): Promise<TripResearchResult> {
-  const loadClient = await pool.connect();
-  let trip: Awaited<ReturnType<typeof getTrip>>;
-  let snapshotId: string | null | undefined;
-  let content: Awaited<ReturnType<typeof loadSnapshotContent>>;
-  try {
-    trip = await getTrip(loadClient, tripId);
-    if (!trip) {
-      throw new ServiceSelectionError("NOT_FOUND", `trip ${tripId} not found`);
-    }
-    snapshotId = trip.activeScenarioSnapshotId;
-    if (!snapshotId) {
-      throw new ServiceSelectionError("CONFLICT", "trip has no active scenario snapshot");
-    }
-    content = await loadSnapshotContent(loadClient, snapshotId);
-  } finally {
-    loadClient.release();
-  }
-  if (!content) {
-    throw new ServiceSelectionError("CONFLICT", `snapshot ${snapshotId} is not materialized`);
-  }
-
-  // Providers acquire and release their own pooled connections per query; we must
-  // not hold one here (see the module note).
-  const source = new PostgresSnapshotSource(pool);
-  const accommodation = new SyntheticAccommodationSearchProvider(source);
-  const restaurant = new SyntheticRestaurantSearchProvider(source);
-  const attractions = new SyntheticAttractionsProvider(source);
-
-  let partial = false;
-  const hotelResult = await accommodation.search({
-    snapshotId,
-    level: effectiveLevel(trip.preferences, "hotel"),
-    adults: trip.adults,
-    dates: nightDates(trip.sightseeingDate, trip.travelVariant),
-  });
-  let hotelOffers = hotelResult.status === "ok" ? hotelResult.value : [];
-  if (hotelResult.status !== "ok") {
-    partial = true;
-  }
-  // The one-night variant needs luggage storage after checkout during the
-  // sightseeing day; budget hotels without it are not offerable.
-  if (trip.travelVariant === "one_night") {
-    hotelOffers = hotelOffers.filter((offer) => offer.luggageStorage);
-  }
-
-  const mealOfferIds: Record<ResearchMeal, string[]> = { breakfast: [], lunch: [], dinner: [] };
-  const offersByMeal: Record<ResearchMeal, readonly { id: string; partyTotalMinor: number }[]> = {
-    breakfast: [],
-    lunch: [],
-    dinner: [],
-  };
-  for (const meal of MEALS) {
-    const result = await restaurant.search({
-      snapshotId,
-      meal,
-      level: effectiveLevel(trip.preferences, meal),
-      adults: trip.adults,
-    });
-    const offers = result.status === "ok" ? result.value : [];
-    if (result.status !== "ok") {
-      partial = true;
-    }
-    mealOfferIds[meal] = offers.map((offer) => offer.id);
-    offersByMeal[meal] = offers;
-  }
-
-  const attractionResult = await attractions.list({ snapshotId, cityId: trip.destinationCityId });
-  const activities = attractionResult.status === "ok" ? attractionResult.value : [];
-  if (attractionResult.status !== "ok") {
-    partial = true;
-  }
-
-  const dinnerSlot = await dinnerSlotAvailable(pool, tripId, content);
-  const mealDefaults: Record<ResearchMeal, string | null> = {
-    breakfast: pickDefault(offersByMeal.breakfast),
-    lunch: pickDefault(offersByMeal.lunch),
-    dinner: dinnerSlot.available ? pickDefault(offersByMeal.dinner) : null,
-  };
-  const dinnerNotIncludedReason = dinnerSlot.available ? null : dinnerSlot.reason;
-
-  for (const meal of MEALS) {
-    await recordRecommendation(pool, {
-      tripId,
-      serviceKey: meal,
-      snapshotId,
-      rankedOfferIds: mealOfferIds[meal],
-      explanation: meal === "dinner" ? (dinnerNotIncludedReason ?? "") : undefined,
-    });
-  }
-  await recordRecommendation(pool, {
-    tripId,
-    serviceKey: "hotel",
-    snapshotId,
-    rankedOfferIds: hotelOffers.map((offer) => offer.id),
-  });
-  await recordRecommendation(pool, {
-    tripId,
-    serviceKey: "activities",
-    snapshotId,
-    rankedOfferIds: activities.map((activity) => activity.id),
-  });
-
-  return {
-    status: partial ? "partial" : "ok",
-    hotelOfferIds: hotelOffers.map((offer) => offer.id),
-    mealOfferIds,
-    activityIds: activities.map((activity) => activity.id),
-    mealDefaults,
-    dinnerNotIncludedReason,
-  };
 }
 
 /** Confirmed flight/hotel progress used to resume a preference change at the right step. */

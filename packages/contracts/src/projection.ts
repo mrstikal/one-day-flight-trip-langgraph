@@ -6,6 +6,8 @@ import {
   mealSchema,
   proposalStatusSchema,
   reservationStatusSchema,
+  researchDomainSchema,
+  researchDomainStatusSchema,
   scheduleReasonSchema,
   serviceLevelSchema,
   travelVariantSchema,
@@ -236,3 +238,31 @@ export const publicServiceLevelsSchema = z
   })
   .strict();
 export type PublicServiceLevels = z.infer<typeof publicServiceLevelsSchema>;
+
+/* ---- Phase 09 research fan-out state ---------------------------------------- */
+
+export const publicResearchDomainStateSchema = z
+  .object({
+    domain: researchDomainSchema,
+    status: researchDomainStatusSchema,
+    /** Provider attempts used for this domain in the latest research run. */
+    attempts: z.number().int().min(1).max(2),
+    /** True when an injected simulation fault was observed for this domain. */
+    simulatedFailure: z.boolean(),
+    /** Safe short explanation (never a provider payload or hash). */
+    reason: nonEmptyStringSchema.max(400).nullable(),
+  })
+  .strict();
+export type PublicResearchDomainState = z.infer<typeof publicResearchDomainStateSchema>;
+
+export const publicResearchStateSchema = z
+  .object({
+    /** Latest persisted outcome per domain of the most recent research run. */
+    domains: z.array(publicResearchDomainStateSchema),
+    /** Domains whose latest outcome is not `ok`; a retry may be offered. */
+    failedDomains: z.array(researchDomainSchema),
+    /** Any simulated failure observed in the latest research run. */
+    simulatedFailure: z.boolean(),
+  })
+  .strict();
+export type PublicResearchState = z.infer<typeof publicResearchStateSchema>;

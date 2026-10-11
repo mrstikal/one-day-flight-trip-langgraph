@@ -6,7 +6,10 @@ import { validateRouteNode } from "../nodes/validate-route.js";
 import { generateFlightsNode } from "../nodes/generate-flights.js";
 import { validateSchedulesNode } from "../nodes/validate-schedules.js";
 import { ensureDomainsNode } from "../nodes/ensure-domains.js";
-import { researchServicesNode } from "../nodes/research-services.js";
+import { dispatchResearchNode, routeAfterDispatch } from "../nodes/dispatch-research.js";
+import { researchDomainNode } from "../nodes/research-domain.js";
+import { joinResearchNode, routeAfterJoin } from "../nodes/join-research.js";
+import { rankRecommendationsNode, routeAfterRank } from "../nodes/rank-recommendations.js";
 import { validateSelectedLogisticsNode } from "../nodes/validate-selected-logistics.js";
 import { detectProgressNode } from "../nodes/detect-progress.js";
 import { prepareDecisionNode } from "../nodes/prepare-decision.js";
@@ -24,7 +27,7 @@ import {
 import { publishSummaryNode } from "../nodes/publish-summary.js";
 
 /**
- * Production travel graph (Phase 06-07).
+ * Production travel graph (Phase 06-09).
  *
  * START -> load_context -> apply_commands ->
  *   propose_selection -> stage_command_proposal -> prepare_decision
@@ -32,7 +35,11 @@ import { publishSummaryNode } from "../nodes/publish-summary.js";
  *     -> (VALID) prepare_decision -> await_decision -> apply_decision ->
  *          choose_offer -> stage_selection -> prepare_decision ...
  *          confirm_booking -> commit_booking ->
- *              flights -> ensure_domains -> research_services -> prepare_decision ...
+ *              flights -> ensure_domains -> validate_schedules ->
+ *                  dispatch_research -> Send research_domain x N ->
+ *                      join_research -> (retry) dispatch_research
+ *                                    -> (failed) prepare_decision
+ *                                    -> rank_recommendations -> prepare_decision ...
  *              else -> validate_selected_logistics -> ...
  *          submit_program -> apply_program -> validate_selected_logistics ->
  *              publish_summary -> END
@@ -54,10 +61,10 @@ export function routeAfterSchedules(state: TravelState): string {
   if (state.scheduleStatus !== "VALID") {
     return "publish_summary";
   }
-  // After a Phase 07 domain extension the snapshot version changes, so the
-  // schedule validation must be rebound before any non-flight confirmation.
+  // After a domain extension the snapshot version changes, so the schedule
+  // validation must be rebound before any non-flight confirmation.
   if (state.domainsEnsured && state.researchStatus === "pending") {
-    return "research_services";
+    return "dispatch_research";
   }
   return "prepare_decision";
 }
@@ -132,11 +139,6 @@ export function routeAfterEnsureDomains(): string {
   return "validate_schedules";
 }
 
-/** After research, offer the hotel choice. */
-export function routeAfterResearch(): string {
-  return "prepare_decision";
-}
-
 /** Program application always runs the deterministic logistics check next. */
 export function routeAfterApplyProgram(): string {
   return "validate_selected_logistics";
@@ -172,7 +174,10 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addNode("generate_flights", generateFlightsNode)
     .addNode("validate_schedules", validateSchedulesNode)
     .addNode("ensure_domains", ensureDomainsNode)
-    .addNode("research_services", researchServicesNode)
+    .addNode("dispatch_research", dispatchResearchNode)
+    .addNode("research_domain", researchDomainNode)
+    .addNode("join_research", joinResearchNode)
+    .addNode("rank_recommendations", rankRecommendationsNode)
     .addNode("validate_selected_logistics", validateSelectedLogisticsNode)
     .addNode("prepare_decision", prepareDecisionNode)
     .addNode("await_decision", awaitDecisionNode)
@@ -219,7 +224,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     ])
     .addConditionalEdges("validate_schedules", routeAfterSchedules, [
       "prepare_decision",
-      "research_services",
+      "dispatch_research",
       "publish_summary",
     ])
     .addEdge("prepare_decision", "await_decision")
@@ -240,7 +245,20 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "validate_selected_logistics",
     ])
     .addConditionalEdges("ensure_domains", routeAfterEnsureDomains, ["validate_schedules"])
-    .addConditionalEdges("research_services", routeAfterResearch, ["prepare_decision"])
+    // Phase 09: `dispatch_research` fans out through `Send` (or continues with
+    // retained results); `research_domain` uses one static edge into the single
+    // serial join; the join alone decides retry/recovery/rank.
+    .addConditionalEdges("dispatch_research", routeAfterDispatch)
+    .addEdge("research_domain", "join_research")
+    .addConditionalEdges("join_research", routeAfterJoin, [
+      "dispatch_research",
+      "rank_recommendations",
+      "prepare_decision",
+    ])
+    .addConditionalEdges("rank_recommendations", routeAfterRank, [
+      "prepare_decision",
+      "publish_summary",
+    ])
     .addConditionalEdges("apply_program", routeAfterApplyProgram, ["validate_selected_logistics"])
     .addConditionalEdges("validate_selected_logistics", routeAfterLogistics, [
       "prepare_decision",
@@ -252,3 +270,4 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
 }
 
 export { TRAVEL_GRAPH_VERSION };
+export { routeAfterDispatch, routeAfterJoin, routeAfterRank };

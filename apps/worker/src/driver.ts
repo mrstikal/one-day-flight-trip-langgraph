@@ -175,6 +175,33 @@ export function isTerminalConflictCode(code: string): boolean {
 }
 
 /**
+ * Build the fenced event writer for one claimed operation. Exported so graph
+ * ports can persist safe progress events (Phase 09 domain timing/attempt
+ * evidence) under the same fencing rule as the driver's own events.
+ */
+export function createFencedEventWriter(
+  operationsPool: Pool,
+): (
+  ctx: { tripId: string; operationId: string; fencingToken: string },
+  event: { type: string; payload: unknown },
+) => Promise<void> {
+  return async (ctx, event) => {
+    // The fencing token alone identifies the admitted writer: it rotates on every
+    // new claim, so a stale worker's events are rejected while the current owner's
+    // events (including post-completion) are accepted.
+    await operationsPool.query(
+      `INSERT INTO odft_app.execution_events (trip_id, operation_id, type, payload)
+       SELECT $1, $2, $3, $4::jsonb
+        WHERE EXISTS (
+          SELECT 1 FROM odft_app.workflow_operations
+           WHERE id = $2 AND trip_id = $1 AND fencing_token = $5::bigint
+        )`,
+      [ctx.tripId, ctx.operationId, event.type, JSON.stringify(event.payload), ctx.fencingToken],
+    );
+  };
+}
+
+/**
  * Build the fenced effect runner for one claimed operation. Exported so richer
  * graphs (the production travel graph) can reuse the exact same fencing and
  * advisory-lock semantics as the Phase 05 harness.
@@ -227,23 +254,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
   const logger = deps.logger ?? (() => {});
   const selectInvocation = deps.chooseInvocation ?? chooseInvocation;
 
-  async function insertFencedEvent(
-    ctx: { tripId: string; operationId: string; fencingToken: string },
-    event: { type: string; payload: unknown },
-  ): Promise<void> {
-    // The fencing token alone identifies the admitted writer: it rotates on every
-    // new claim, so a stale worker's events are rejected while the current owner's
-    // events (including post-completion) are accepted.
-    await deps.operationsPool.query(
-      `INSERT INTO odft_app.execution_events (trip_id, operation_id, type, payload)
-       SELECT $1, $2, $3, $4::jsonb
-        WHERE EXISTS (
-          SELECT 1 FROM odft_app.workflow_operations
-           WHERE id = $2 AND trip_id = $1 AND fencing_token = $5::bigint
-        )`,
-      [ctx.tripId, ctx.operationId, event.type, JSON.stringify(event.payload), ctx.fencingToken],
-    );
-  }
+  const insertFencedEvent = createFencedEventWriter(deps.operationsPool);
 
   function buildPorts(ctx: OperationFencingContext): HarnessPorts {
     return {
@@ -395,7 +406,8 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         : undefined);
     const blocked =
       reconciliation.lastOutcome === "no_feasible_route" ||
-      reconciliation.lastOutcome === "no_feasible_schedule";
+      reconciliation.lastOutcome === "no_feasible_schedule" ||
+      reconciliation.lastOutcome === "research_failed";
     const committed = await finalizeSuccess(
       deps.operationsPool,
       { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },

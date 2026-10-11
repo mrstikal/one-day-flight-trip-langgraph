@@ -4,6 +4,9 @@ import { listConversation } from "@odft/persistence";
 import {
   publicClarificationSchema,
   publicInterpretationSchema,
+  RESEARCH_DOMAINS,
+  researchDomainSchema,
+  researchDomainStatusSchema,
   routeValidationSchema,
   scheduleValidationSchema,
   snapshotContentSchema,
@@ -20,9 +23,13 @@ import {
   type PublicPendingDecision,
   type PublicProgramChoices,
   type PublicProposal,
+  type PublicResearchDomainState,
+  type PublicResearchState,
   type PublicReservation,
   type PublicServiceLevels,
   type OperationStatusResponse,
+  type ResearchDomain,
+  type ResearchDomainStatus,
   type ServiceKey,
   type SnapshotContent,
   type TripDisplay,
@@ -210,6 +217,73 @@ function levelState(
   return {
     level: resolveEffectiveLevel(preferences, service),
     inherited: !hasOverride(preferences, service),
+  };
+}
+
+interface ResearchEventRow {
+  operation_id: string;
+  type: string;
+  payload: unknown;
+}
+
+/**
+ * Phase 09: per-domain research state derived only from persisted events of the
+ * latest research operation (HTTP 202 stays "queued": the client never learns a
+ * domain outcome from a response body). A later operation without research
+ * events keeps the previous outcomes visible.
+ */
+function buildResearchState(rows: readonly ResearchEventRow[]): PublicResearchState | null {
+  const operationId = rows[0]?.operation_id;
+  if (!operationId) {
+    return null;
+  }
+  const latest = new Map<ResearchDomain, PublicResearchDomainState>();
+  const simulated = new Set<ResearchDomain>();
+  for (const row of rows) {
+    if (row.operation_id !== operationId) {
+      continue;
+    }
+    const payload = (row.payload ?? {}) as Record<string, unknown>;
+    const parsedDomain = researchDomainSchema.safeParse(payload.domain);
+    if (!parsedDomain.success) {
+      continue;
+    }
+    const domain = parsedDomain.data;
+    if (payload.simulatedFailure === true) {
+      simulated.add(domain);
+    }
+    if (row.type !== "research.domain_finished" || latest.has(domain)) {
+      continue;
+    }
+    const parsedStatus = researchDomainStatusSchema.safeParse(payload.status);
+    if (!parsedStatus.success) {
+      continue;
+    }
+    const attempt = typeof payload.attempt === "number" ? payload.attempt : 1;
+    latest.set(domain, {
+      domain,
+      status: parsedStatus.data,
+      attempts: Math.min(2, Math.max(1, Math.trunc(attempt))),
+      simulatedFailure: false,
+      reason:
+        typeof payload.reason === "string" && payload.reason.length > 0
+          ? payload.reason.slice(0, 400)
+          : null,
+    });
+  }
+  const domains = RESEARCH_DOMAINS.flatMap((domain) => {
+    const state = latest.get(domain);
+    return state ? [{ ...state, simulatedFailure: simulated.has(domain) }] : [];
+  });
+  if (domains.length === 0) {
+    return null;
+  }
+  return {
+    domains,
+    failedDomains: domains
+      .filter((domain) => domain.status !== "ok")
+      .map((domain) => domain.domain),
+    simulatedFailure: simulated.size > 0,
   };
 }
 
@@ -476,6 +550,43 @@ export async function buildTripProjection(
       )
     : [];
 
+  // Phase 09: latest per-domain research outcomes from persisted events, and the
+  // newest ranked offers per service so a failed/empty domain renders empty
+  // instead of leaking the raw snapshot inventory.
+  const researchEventsResult = await pool.query<ResearchEventRow>(
+    `SELECT operation_id, type, payload FROM odft_app.execution_events
+      WHERE trip_id = $1 AND type IN ('research.domain_started','research.domain_finished')
+      ORDER BY id DESC LIMIT 120`,
+    [tripId],
+  );
+  const research = buildResearchState(researchEventsResult.rows);
+  const researchStatusFor = (domain: ResearchDomain): ResearchDomainStatus | null =>
+    research?.domains.find((entry) => entry.domain === domain)?.status ?? null;
+  const artifactsResult = await pool.query<{ service_key: string; ranked_offers: unknown }>(
+    `SELECT DISTINCT ON (service_key) service_key, ranked_offers
+       FROM odft_app.recommendation_artifacts
+      WHERE trip_id = $1 AND NOT (snapshot_refs @> '["preferred"]'::jsonb)
+      ORDER BY service_key, created_at DESC, id DESC`,
+    [tripId],
+  );
+  const rankedIdsByService = new Map<string, Set<string>>();
+  for (const artifact of artifactsResult.rows) {
+    const ids = Array.isArray(artifact.ranked_offers)
+      ? artifact.ranked_offers.filter((value): value is string => typeof value === "string")
+      : [];
+    rankedIdsByService.set(artifact.service_key, new Set(ids));
+  }
+  const researchAllows = (domain: ResearchDomain, serviceKey: string, offerId: string): boolean => {
+    const status = researchStatusFor(domain);
+    if (status === null) {
+      return true;
+    }
+    if (status !== "ok") {
+      return false;
+    }
+    return rankedIdsByService.get(serviceKey)?.has(offerId) ?? false;
+  };
+
   // Phase 07: hotel/meal offers, effective levels, and program choices.
   const serviceLevels: PublicServiceLevels = {
     hotel: levelState(trip.preferences, "hotel"),
@@ -502,18 +613,24 @@ export async function buildTripProjection(
             offer.level === serviceLevels.hotel.level &&
             offer.adults === trip.adults &&
             offer.nights === nights &&
-            (trip.travelVariant !== "one_night" || offer.luggageStorage),
+            (trip.travelVariant !== "one_night" || offer.luggageStorage) &&
+            researchAllows("hotel", "hotel", offer.id),
         )
         .map(toPublicHotel);
       meals = content.restaurants
         .filter(
           (offer) =>
             offer.level === serviceLevels[offer.meal].level &&
-            content.context.adults === trip.adults,
+            content.context.adults === trip.adults &&
+            researchAllows(offer.meal, offer.meal, offer.id),
         )
         .map(toPublicMeal);
       const activities = content.activities
-        .filter((activity) => activity.cityId === trip.destinationCityId)
+        .filter(
+          (activity) =>
+            activity.cityId === trip.destinationCityId &&
+            researchAllows("attractions", "activities", activity.id),
+        )
         .map(toPublicActivity);
       const breakfastOffers = meals.filter((offer) => offer.meal === "breakfast");
       const lunchOffers = meals.filter((offer) => offer.meal === "lunch");
@@ -582,6 +699,7 @@ export async function buildTripProjection(
     meals,
     program,
     serviceLevels,
+    research,
     proposal,
     reservation,
     reservations,

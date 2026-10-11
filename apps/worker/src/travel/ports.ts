@@ -7,11 +7,13 @@ import {
   getOperationPayload,
   getTrip,
   loadTripProgress,
+  loadTripResearchInputs,
   materializeFlightSnapshot,
   planProgramSelections,
   PostgresBookingStore,
+  rankTripRecommendations,
   recordPreferredActivities,
-  researchTripServices,
+  researchTripDomain,
   ScenarioService,
   upsertProgramSelections,
   validateAndPersistSchedules,
@@ -20,17 +22,24 @@ import {
 } from "@odft/persistence";
 import { chatCommandPayloadSchema } from "@odft/contracts";
 import type { TravelPorts } from "@odft/workflow";
-import { createFencedRunEffect } from "../driver.js";
+import { createFencedEventWriter, createFencedRunEffect } from "../driver.js";
 import type { AiService } from "../ai/service.js";
 
 /**
  * Build the production travel-graph ports for one claimed operation. All access
  * to reference data, scenario generation, the two feasibility stages, the Phase
- * 07 service research/program logic, the Phase 08 intent runtime, and the
+ * 09 per-domain research/ranking services, the Phase 08 intent runtime, and the
  * booking service is wired here so the graph nodes stay orchestration-only.
  */
 
-const PHASE07_DOMAINS = ["hotels", "breakfast", "lunch", "dinner", "activities"] as const;
+const RESEARCH_MATERIALIZED_DOMAINS = [
+  "hotels",
+  "breakfast",
+  "lunch",
+  "dinner",
+  "activities",
+  "events",
+] as const;
 
 export function createTravelPortsFactory(
   pool: Pool,
@@ -38,6 +47,7 @@ export function createTravelPortsFactory(
 ): (ctx: OperationFencingContext, signal?: AbortSignal) => TravelPorts {
   const booking = new BookingService(new PostgresBookingStore(pool));
   const scenarios = new ScenarioService(pool);
+  const insertFencedEvent = createFencedEventWriter(pool);
   return (ctx: OperationFencingContext, signal?: AbortSignal): TravelPorts => ({
     now: () => new Date(),
     runEffect: createFencedRunEffect(pool, ctx),
@@ -134,12 +144,34 @@ export function createTravelPortsFactory(
     },
 
     async ensureDomains(tripId) {
-      const manifest = await scenarios.ensureDomains(tripId, [...PHASE07_DOMAINS]);
+      const manifest = await scenarios.ensureDomains(tripId, [...RESEARCH_MATERIALIZED_DOMAINS]);
       return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
     },
 
-    async researchServices(tripId) {
-      return researchTripServices(pool, tripId);
+    async loadResearchInputs(tripId) {
+      return loadTripResearchInputs(pool, tripId);
+    },
+
+    async researchDomain(input) {
+      return researchTripDomain(pool, input);
+    },
+
+    async rankRecommendations(input) {
+      return rankTripRecommendations(pool, input);
+    },
+
+    async recordResearchEvent(event) {
+      await insertFencedEvent(ctx, {
+        type: `research.domain_${event.phase}`,
+        payload: {
+          domain: event.domain,
+          attempt: event.attempt,
+          durationMs: event.durationMs,
+          status: event.status,
+          simulatedFailure: event.simulatedFailure,
+          reason: event.reason,
+        },
+      });
     },
 
     async applyProgram(input) {
