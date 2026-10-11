@@ -72,7 +72,8 @@ describe("failed-subset retry (real PostgreSQL)", () => {
 
     const counters = await pool.query<{ counters: Record<string, number> }>(
       `SELECT counters FROM odft_app.simulation_faults
-        WHERE trip_id = $1 AND domain = 'hotels' AND fault = 'provider_failure'`,
+        WHERE trip_id = $1 AND domain = 'hotels' AND fault = 'provider_failure'
+        ORDER BY updated_at DESC LIMIT 1`,
       [tripId],
     );
     expect(counters.rows[0]?.counters["attempts"]).toBe(2);

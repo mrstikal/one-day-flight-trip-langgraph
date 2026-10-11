@@ -184,10 +184,11 @@ export {
 } from "./scenario/snapshots.js";
 export type { ExtensionInput } from "./scenario/snapshots.js";
 
-export { loadOverlay, recordFaultOutcome, upsertFault } from "./scenario/faults.js";
+export { loadOverlay, loadOverlaySummaries, recordFaultOutcome, upsertFault } from "./scenario/faults.js";
 export type {
   FaultOutcomeInput,
   FaultOutcomeRecord,
+  OverlaySummary,
   UpsertFaultInput,
 } from "./scenario/faults.js";
 

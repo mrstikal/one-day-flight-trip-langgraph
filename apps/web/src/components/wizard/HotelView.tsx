@@ -297,7 +297,12 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     );
   }
 
-  if (hotelResearch && hotelResearch.status !== "ok" && pendingDecision === null) {
+  if (
+    hotelResearch &&
+    hotelResearch.status !== "ok" &&
+    hotelResearch.status !== "pending" &&
+    pendingDecision === null
+  ) {
     return (
       <div className="flex flex-col gap-6">
         {banner}

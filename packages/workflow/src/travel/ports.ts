@@ -81,6 +81,12 @@ export interface TravelResearchEvent {
   readonly status: ResearchDomainStatus | null;
   readonly simulatedFailure: boolean;
   readonly reason: string | null;
+  /**
+   * The research input fingerprint this result was computed from (finished only).
+   * A hash is internal evidence: the projection uses it to select the matching
+   * artifact and never exposes it in a public DTO.
+   */
+  readonly fingerprint: string | null;
 }
 
 export interface TravelProgramResult {
@@ -148,8 +154,9 @@ export interface TravelPorts {
 
   /** Phase 07/09: idempotently materialize hotels/meals/activities/events. */
   ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;
-  /** Phase 09: deterministic per-domain research input fingerprints. */
-  loadResearchInputs(tripId: string): Promise<TravelResearchInputs>;
+  /** Phase 09: deterministic per-domain research input fingerprints (the
+   * operation id resolves operation-scoped fault overlays exactly as the task will). */
+  loadResearchInputs(tripId: string, operationId: string): Promise<TravelResearchInputs>;
   /** Phase 09: research one domain (provider + idempotent artifact write). */
   researchDomain(input: {
     tripId: string;

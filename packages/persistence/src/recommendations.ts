@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { lockOperationFence, type OperationFencingContext } from "./operations/fencing.js";
 
 /**
  * Recommendation artifacts (05 sections 7 and 11): the persisted, idempotent
@@ -51,30 +52,51 @@ export function artifactIdFor(input: {
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20, 32)}`;
 }
 
+/**
+ * Upsert one artifact. When a fencing context is given, the write is guarded by
+ * the operation's exact fencing token inside a short transaction (never held
+ * across a provider call): a worker that lost its lease writes nothing.
+ */
 export async function recordRecommendationArtifact(
   pool: Pool,
   input: RecommendationArtifactInput,
+  fence?: OperationFencingContext,
 ): Promise<string> {
   const id = artifactIdFor(input);
-  await pool.query(
-    `INSERT INTO odft_app.recommendation_artifacts
+  const parameters = [
+    id,
+    input.tripId,
+    input.serviceKey,
+    input.inputFingerprint,
+    JSON.stringify(input.snapshotRefs ?? []),
+    JSON.stringify(input.rankedOfferIds),
+    input.explanation ?? null,
+  ];
+  const upsert = `INSERT INTO odft_app.recommendation_artifacts
        (id, trip_id, service_key, input_fingerprint, snapshot_refs, ranked_offers, explanation)
      VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
      ON CONFLICT (id) DO UPDATE
-       SET snapshot_refs = EXCLUDED.snapshot_refs,
+       SET input_fingerprint = EXCLUDED.input_fingerprint,
+           snapshot_refs = EXCLUDED.snapshot_refs,
            ranked_offers = EXCLUDED.ranked_offers,
-           explanation = EXCLUDED.explanation`,
-    [
-      id,
-      input.tripId,
-      input.serviceKey,
-      input.inputFingerprint,
-      JSON.stringify(input.snapshotRefs ?? []),
-      JSON.stringify(input.rankedOfferIds),
-      input.explanation ?? null,
-    ],
-  );
-  return id;
+           explanation = EXCLUDED.explanation`;
+  if (!fence) {
+    await pool.query(upsert, parameters);
+    return id;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockOperationFence(client, fence);
+    await client.query(upsert, parameters);
+    await client.query("COMMIT");
+    return id;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /** The newest artifact per service for a trip (safe read for projections/tests). */

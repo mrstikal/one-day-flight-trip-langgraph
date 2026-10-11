@@ -7,7 +7,6 @@ import {
   proposalStatusSchema,
   reservationStatusSchema,
   researchDomainSchema,
-  researchDomainStatusSchema,
   scheduleReasonSchema,
   serviceLevelSchema,
   travelVariantSchema,
@@ -241,10 +240,24 @@ export type PublicServiceLevels = z.infer<typeof publicServiceLevelsSchema>;
 
 /* ---- Phase 09 research fan-out state ---------------------------------------- */
 
+/**
+ * Public domain outcome: the persisted statuses plus `pending` for a domain whose
+ * research has started in the latest run but has not finished yet (the UI must
+ * not fall back to the raw inventory while a domain is still being researched).
+ */
+export const publicResearchStatusSchema = z.enum([
+  "pending",
+  "ok",
+  "unavailable",
+  "retryable_error",
+  "unsupported",
+]);
+export type PublicResearchStatus = z.infer<typeof publicResearchStatusSchema>;
+
 export const publicResearchDomainStateSchema = z
   .object({
     domain: researchDomainSchema,
-    status: researchDomainStatusSchema,
+    status: publicResearchStatusSchema,
     /** Provider attempts used for this domain in the latest research run. */
     attempts: z.number().int().min(1).max(2),
     /** True when an injected simulation fault was observed for this domain. */
@@ -259,7 +272,7 @@ export const publicResearchStateSchema = z
   .object({
     /** Latest persisted outcome per domain of the most recent research run. */
     domains: z.array(publicResearchDomainStateSchema),
-    /** Domains whose latest outcome is not `ok`; a retry may be offered. */
+    /** Domains whose latest outcome is a failure; a retry may be offered. */
     failedDomains: z.array(researchDomainSchema),
     /** Any simulated failure observed in the latest research run. */
     simulatedFailure: z.boolean(),

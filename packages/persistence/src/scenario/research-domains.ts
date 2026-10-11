@@ -20,7 +20,8 @@ import {
 } from "@odft/contracts";
 import { getTrip } from "../trips.js";
 import { recordRecommendationArtifact } from "../recommendations.js";
-import { loadOverlay, recordFaultOutcome } from "./faults.js";
+import type { OperationFencingContext } from "../operations/fencing.js";
+import { loadOverlay, loadOverlaySummaries, recordFaultOutcome } from "./faults.js";
 import {
   loadSnapshotContent,
   loadSnapshotManifest,
@@ -169,16 +170,20 @@ export function overlayTargetsDomain(overlay: BehaviorOverlay, domain: ScenarioD
 
 /**
  * Deterministic per-domain research input fingerprints. Only the domain's own
- * content hash (plus the effective preferences it consumes) enters the digest,
- * so extending the dinner inventory cannot invalidate flights or other meals.
+ * content hash, the effective preferences it consumes, and the overlay that can
+ * alter its provider behavior enter the digest, so extending the dinner inventory
+ * cannot invalidate flights or other meals, while arming/re-arming a fault for a
+ * domain does invalidate that domain's cached result.
  */
 export async function loadTripResearchInputs(
   pool: Pool,
   tripId: string,
+  operationId?: string,
 ): Promise<TripResearchInputs> {
   const client = await pool.connect();
   let trip: Awaited<ReturnType<typeof getTrip>>;
   let manifest: Awaited<ReturnType<typeof loadSnapshotManifest>>;
+  let overlays: Awaited<ReturnType<typeof loadOverlaySummaries>>;
   try {
     trip = await getTrip(client, tripId);
     if (!trip) {
@@ -188,6 +193,7 @@ export async function loadTripResearchInputs(
       throw new Error(`trip ${tripId} has no active scenario snapshot`);
     }
     manifest = await loadSnapshotManifest(client, trip.activeScenarioSnapshotId);
+    overlays = await loadOverlaySummaries(client, tripId, operationId);
   } finally {
     client.release();
   }
@@ -200,6 +206,8 @@ export async function loadTripResearchInputs(
   const minimumCounts = Object.entries(preferences.minimumActivityCounts)
     .filter((entry): entry is [string, number] => typeof entry[1] === "number")
     .sort((a, b) => a[0].localeCompare(b[0]));
+  const overlayFor = (domain: ScenarioDomain): { mode: string; overlayVersion: number } =>
+    overlays[domain] ?? { mode: "normal", overlayVersion: 0 };
   const fingerprintFor = (domain: ResearchDomain, extra: Record<string, unknown>): string =>
     contentFingerprint({ schema: "research-input-v1", domain, ...extra });
   return {
@@ -211,21 +219,25 @@ export async function loadTripResearchInputs(
         adults: trip.adults,
         variant: trip.travelVariant,
         dates: nightDates(trip.sightseeingDate, trip.travelVariant),
+        overlay: overlayFor("hotels"),
       }),
       breakfast: fingerprintFor("breakfast", {
         hash: hashes.breakfast,
         level: effectiveLevel(preferences, "breakfast"),
         adults: trip.adults,
+        overlay: overlayFor("breakfast"),
       }),
       lunch: fingerprintFor("lunch", {
         hash: hashes.lunch,
         level: effectiveLevel(preferences, "lunch"),
         adults: trip.adults,
+        overlay: overlayFor("lunch"),
       }),
       dinner: fingerprintFor("dinner", {
         hash: hashes.dinner,
         level: effectiveLevel(preferences, "dinner"),
         adults: trip.adults,
+        overlay: overlayFor("dinner"),
       }),
       attractions: fingerprintFor("attractions", {
         hash: hashes.activities,
@@ -233,11 +245,13 @@ export async function loadTripResearchInputs(
         interests,
         preferredTags,
         minimumCounts,
+        overlay: overlayFor("activities"),
       }),
       events: fingerprintFor("events", {
         hash: hashes.events,
         cityId: trip.destinationCityId,
         date: trip.sightseeingDate,
+        overlay: overlayFor("events"),
       }),
     },
   };
@@ -326,6 +340,7 @@ async function callDomainProvider(input: {
 export async function researchTripDomain(
   pool: Pool,
   input: ResearchDomainRequest,
+  fence?: OperationFencingContext,
 ): Promise<ResearchDomainOutcome> {
   const scenarioDomain = SCENARIO_DOMAIN_FOR_RESEARCH[input.domain];
   const loadClient = await pool.connect();
@@ -358,16 +373,20 @@ export async function researchTripDomain(
   });
 
   if (simulated && overlay) {
-    await recordFaultOutcome(pool, {
-      tripId: input.tripId,
-      operationId: input.operationId,
-      domain: scenarioDomain,
-      fault: overlay.mode,
-      outcome: result.status,
-      attempt: input.attempt,
-      overlayVersion: overlay.overlayVersion,
-      ...(result.status === "ok" ? {} : { reason: result.reason }),
-    });
+    await recordFaultOutcome(
+      pool,
+      {
+        tripId: input.tripId,
+        operationId: input.operationId,
+        domain: scenarioDomain,
+        fault: overlay.mode,
+        outcome: result.status,
+        attempt: input.attempt,
+        overlayVersion: overlay.overlayVersion,
+        ...(result.status === "ok" ? {} : { reason: result.reason }),
+      },
+      fence,
+    );
   }
 
   if (result.status !== "ok") {
@@ -402,17 +421,21 @@ export async function researchTripDomain(
     }
   }
 
-  const artifactId = await recordRecommendationArtifact(pool, {
-    tripId: input.tripId,
-    serviceKey: ARTIFACT_SERVICE_KEY_FOR_RESEARCH[input.domain],
-    inputFingerprint: input.inputFingerprint,
-    rankedOfferIds: result.offerIds,
-    snapshotRefs: [snapshotId],
-    explanation:
-      input.domain === "dinner"
-        ? (dinnerNotIncludedReason ?? "")
-        : `Deterministic research (Phase 09, ${input.domain}).`,
-  });
+  const artifactId = await recordRecommendationArtifact(
+    pool,
+    {
+      tripId: input.tripId,
+      serviceKey: ARTIFACT_SERVICE_KEY_FOR_RESEARCH[input.domain],
+      inputFingerprint: input.inputFingerprint,
+      rankedOfferIds: result.offerIds,
+      snapshotRefs: [snapshotId],
+      explanation:
+        input.domain === "dinner"
+          ? (dinnerNotIncludedReason ?? "")
+          : `Deterministic research (Phase 09, ${input.domain}).`,
+    },
+    fence,
+  );
   return {
     domain: input.domain,
     status: "ok",
@@ -436,6 +459,7 @@ export async function rankTripRecommendations(
     readonly tripId: string;
     readonly domains: readonly RankDomainCandidates[];
   },
+  fence?: OperationFencingContext,
 ): Promise<RankedTripServices> {
   const client = await pool.connect();
   let trip: Awaited<ReturnType<typeof getTrip>>;
@@ -517,17 +541,21 @@ export async function rankTripRecommendations(
               domain.domain === "dinner"
             ? mealOfferIds[domain.domain]
             : [];
-    await recordRecommendationArtifact(pool, {
-      tripId: input.tripId,
-      serviceKey: ARTIFACT_SERVICE_KEY_FOR_RESEARCH[domain.domain],
-      inputFingerprint: domain.inputFingerprint,
-      rankedOfferIds: rankedIds,
-      snapshotRefs: [snapshotId],
-      explanation:
-        domain.domain === "dinner"
-          ? (dinnerNotIncludedReason ?? "")
-          : `Deterministic ranking (Phase 09, ${domain.domain}).`,
-    });
+    await recordRecommendationArtifact(
+      pool,
+      {
+        tripId: input.tripId,
+        serviceKey: ARTIFACT_SERVICE_KEY_FOR_RESEARCH[domain.domain],
+        inputFingerprint: domain.inputFingerprint,
+        rankedOfferIds: rankedIds,
+        snapshotRefs: [snapshotId],
+        explanation:
+          domain.domain === "dinner"
+            ? (dinnerNotIncludedReason ?? "")
+            : `Deterministic ranking (Phase 09, ${domain.domain}).`,
+      },
+      fence,
+    );
   }
 
   return {

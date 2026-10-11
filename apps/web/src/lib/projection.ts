@@ -23,13 +23,12 @@ import {
   type PublicPendingDecision,
   type PublicProgramChoices,
   type PublicProposal,
-  type PublicResearchDomainState,
   type PublicResearchState,
+  type PublicResearchStatus,
   type PublicReservation,
   type PublicServiceLevels,
   type OperationStatusResponse,
   type ResearchDomain,
-  type ResearchDomainStatus,
   type ServiceKey,
   type SnapshotContent,
   type TripDisplay,
@@ -226,65 +225,154 @@ interface ResearchEventRow {
   payload: unknown;
 }
 
+interface DomainOutcome {
+  readonly status: PublicResearchStatus;
+  readonly attempts: number;
+  readonly simulatedFailure: boolean;
+  readonly reason: string | null;
+  readonly fingerprint: string | null;
+}
+
+interface ResearchOutcomeSet {
+  readonly state: PublicResearchState;
+  readonly outcomes: ReadonlyMap<ResearchDomain, DomainOutcome>;
+}
+
 /**
- * Phase 09: per-domain research state derived only from persisted events of the
- * latest research operation (HTTP 202 stays "queued": the client never learns a
- * domain outcome from a response body). A later operation without research
- * events keeps the previous outcomes visible.
+ * Phase 09: per-domain research state derived only from persisted events (HTTP
+ * 202 stays "queued": the client never learns a domain outcome from a response
+ * body). Each domain keeps its own latest finished outcome across operations, so
+ * a selective refresh retains the siblings, and a domain that has started in the
+ * newest run but not finished is `pending` (never "show the raw inventory").
+ * The internal outcomes carry the fingerprint used to select the matching
+ * artifact; the public state never exposes it.
  */
-function buildResearchState(rows: readonly ResearchEventRow[]): PublicResearchState | null {
-  const operationId = rows[0]?.operation_id;
-  if (!operationId) {
+function buildResearchState(rows: readonly ResearchEventRow[]): ResearchOutcomeSet | null {
+  const newestOperationId = rows[0]?.operation_id;
+  if (!newestOperationId) {
     return null;
   }
-  const latest = new Map<ResearchDomain, PublicResearchDomainState>();
-  const simulated = new Set<ResearchDomain>();
+  const eventsByDomain = new Map<ResearchDomain, ResearchEventRow[]>();
   for (const row of rows) {
-    if (row.operation_id !== operationId) {
-      continue;
-    }
     const payload = (row.payload ?? {}) as Record<string, unknown>;
     const parsedDomain = researchDomainSchema.safeParse(payload.domain);
     if (!parsedDomain.success) {
       continue;
     }
-    const domain = parsedDomain.data;
-    if (payload.simulatedFailure === true) {
-      simulated.add(domain);
-    }
-    if (row.type !== "research.domain_finished" || latest.has(domain)) {
+    const list = eventsByDomain.get(parsedDomain.data) ?? [];
+    list.push(row);
+    eventsByDomain.set(parsedDomain.data, list);
+  }
+  const outcomes = new Map<ResearchDomain, DomainOutcome>();
+  for (const [domain, events] of eventsByDomain) {
+    // Rows are newest-first, so the first finished event is the domain's latest.
+    const finished = events.find((event) => event.type === "research.domain_finished");
+    const startedInNewest = events.some(
+      (event) => event.operation_id === newestOperationId && event.type === "research.domain_started",
+    );
+    const finishedInNewest = events.some(
+      (event) => event.operation_id === newestOperationId && event.type === "research.domain_finished",
+    );
+    if (!finished && !startedInNewest) {
       continue;
     }
+    if (startedInNewest && !finishedInNewest) {
+      outcomes.set(domain, {
+        status: "pending",
+        attempts: 1,
+        simulatedFailure: false,
+        reason: null,
+        fingerprint: null,
+      });
+      continue;
+    }
+    if (!finished) {
+      continue;
+    }
+    const payload = (finished.payload ?? {}) as Record<string, unknown>;
     const parsedStatus = researchDomainStatusSchema.safeParse(payload.status);
     if (!parsedStatus.success) {
       continue;
     }
     const attempt = typeof payload.attempt === "number" ? payload.attempt : 1;
-    latest.set(domain, {
-      domain,
+    const simulatedFailure = events.some((event) => {
+      if (event.operation_id !== finished.operation_id || event.type !== "research.domain_finished") {
+        return false;
+      }
+      return ((event.payload ?? {}) as Record<string, unknown>).simulatedFailure === true;
+    });
+    outcomes.set(domain, {
       status: parsedStatus.data,
       attempts: Math.min(2, Math.max(1, Math.trunc(attempt))),
-      simulatedFailure: false,
+      simulatedFailure,
       reason:
         typeof payload.reason === "string" && payload.reason.length > 0
           ? payload.reason.slice(0, 400)
           : null,
+      fingerprint:
+        typeof payload.fingerprint === "string" && /^[a-f0-9]{64}$/.test(payload.fingerprint)
+          ? payload.fingerprint
+          : null,
     });
   }
   const domains = RESEARCH_DOMAINS.flatMap((domain) => {
-    const state = latest.get(domain);
-    return state ? [{ ...state, simulatedFailure: simulated.has(domain) }] : [];
+    const outcome = outcomes.get(domain);
+    return outcome ? [{ domain, ...outcome }] : [];
   });
   if (domains.length === 0) {
     return null;
   }
   return {
-    domains,
-    failedDomains: domains
-      .filter((domain) => domain.status !== "ok")
-      .map((domain) => domain.domain),
-    simulatedFailure: simulated.size > 0,
+    state: {
+      domains: domains.map(({ domain, status, attempts, simulatedFailure, reason }) => ({
+        domain,
+        status,
+        attempts,
+        simulatedFailure,
+        reason,
+      })),
+      failedDomains: domains
+        .filter((domain) => domain.status !== "ok" && domain.status !== "pending")
+        .map((domain) => domain.domain),
+      simulatedFailure: domains.some((domain) => domain.simulatedFailure),
+    },
+    outcomes,
   };
+}
+
+/** Ranked ids of one artifact, in their stored order (never a set). */
+function parseRankedIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+/**
+ * Build an offer list in the ranked order persisted by `rank_recommendations`
+ * (the deterministic ranking is binding for presentation too). A domain that has
+ * not been researched yet keeps the legacy snapshot order; a `pending` or failed
+ * domain renders empty rather than leaking the raw inventory.
+ */
+function offersInRankedOrder<T extends { id: string }, U>(
+  order: readonly string[],
+  offers: readonly T[],
+  eligible: (offer: T) => boolean,
+  toPublic: (offer: T) => U,
+): U[] {
+  const byId = new Map(offers.map((offer) => [offer.id, offer]));
+  const seen = new Set<string>();
+  const result: U[] = [];
+  for (const id of order) {
+    if (seen.has(id)) {
+      continue;
+    }
+    const offer = byId.get(id);
+    if (offer && eligible(offer)) {
+      seen.add(id);
+      result.push(toPublic(offer));
+    }
+  }
+  return result;
 }
 
 export async function buildTripProjection(
@@ -525,19 +613,9 @@ export async function buildTripProjection(
     selectionResult.rows.map((row) => [row.service_key, row.offer_id]),
   );
 
-  // Latest deterministic research reason for dinner (empty = a slot exists) and
+  // The deterministic dinner reason is read from the artifact matching the
+  // current dinner fingerprint (inside the research block below), together with
   // the persisted program activity preferences.
-  const dinnerReasonResult = await pool.query<{ explanation: string | null }>(
-    `SELECT explanation FROM odft_app.recommendation_artifacts
-      WHERE trip_id = $1 AND service_key = 'dinner'
-      ORDER BY created_at DESC LIMIT 1`,
-    [tripId],
-  );
-  const dinnerReasonRaw = dinnerReasonResult.rows[0]?.explanation ?? null;
-  const dinnerNotIncludedReason =
-    dinnerReasonRaw && dinnerReasonRaw.length > 0 && !dinnerReasonRaw.startsWith("Deterministic")
-      ? dinnerReasonRaw
-      : null;
   const preferredResult = await pool.query<{ ranked_offers: unknown }>(
     `SELECT ranked_offers FROM odft_app.recommendation_artifacts
       WHERE trip_id = $1 AND service_key = 'activities' AND explanation LIKE 'User program%'
@@ -551,41 +629,78 @@ export async function buildTripProjection(
     : [];
 
   // Phase 09: latest per-domain research outcomes from persisted events, and the
-  // newest ranked offers per service so a failed/empty domain renders empty
-  // instead of leaking the raw snapshot inventory.
+  // artifact that matches each domain's current research fingerprint (never the
+  // newest row by time: returning to an earlier category re-upserts the older
+  // deterministic row, so only the fingerprint identifies the current result).
   const researchEventsResult = await pool.query<ResearchEventRow>(
     `SELECT operation_id, type, payload FROM odft_app.execution_events
       WHERE trip_id = $1 AND type IN ('research.domain_started','research.domain_finished')
       ORDER BY id DESC LIMIT 120`,
     [tripId],
   );
-  const research = buildResearchState(researchEventsResult.rows);
-  const researchStatusFor = (domain: ResearchDomain): ResearchDomainStatus | null =>
-    research?.domains.find((entry) => entry.domain === domain)?.status ?? null;
-  const artifactsResult = await pool.query<{ service_key: string; ranked_offers: unknown }>(
-    `SELECT DISTINCT ON (service_key) service_key, ranked_offers
+  const researchOutcomes = buildResearchState(researchEventsResult.rows);
+  const research = researchOutcomes?.state ?? null;
+  const researchOutcomeFor = (domain: ResearchDomain): DomainOutcome | null =>
+    researchOutcomes?.outcomes.get(domain) ?? null;
+  const artifactsResult = await pool.query<{
+    service_key: string;
+    input_fingerprint: string;
+    ranked_offers: unknown;
+    explanation: string | null;
+  }>(
+    `SELECT service_key, input_fingerprint, ranked_offers, explanation
        FROM odft_app.recommendation_artifacts
-      WHERE trip_id = $1 AND NOT (snapshot_refs @> '["preferred"]'::jsonb)
-      ORDER BY service_key, created_at DESC, id DESC`,
+      WHERE trip_id = $1 AND NOT (snapshot_refs @> '["preferred"]'::jsonb)`,
     [tripId],
   );
-  const rankedIdsByService = new Map<string, Set<string>>();
-  for (const artifact of artifactsResult.rows) {
-    const ids = Array.isArray(artifact.ranked_offers)
-      ? artifact.ranked_offers.filter((value): value is string => typeof value === "string")
-      : [];
-    rankedIdsByService.set(artifact.service_key, new Set(ids));
-  }
-  const researchAllows = (domain: ResearchDomain, serviceKey: string, offerId: string): boolean => {
-    const status = researchStatusFor(domain);
-    if (status === null) {
-      return true;
+  const artifactFor = (
+    serviceKey: string,
+    fingerprint: string | null,
+  ): { rankedOfferIds: string[]; explanation: string | null } | undefined => {
+    if (fingerprint === null) {
+      return undefined;
     }
-    if (status !== "ok") {
-      return false;
-    }
-    return rankedIdsByService.get(serviceKey)?.has(offerId) ?? false;
+    const row = artifactsResult.rows.find(
+      (artifact) =>
+        artifact.service_key === serviceKey && artifact.input_fingerprint === fingerprint,
+    );
+    return row ? { rankedOfferIds: parseRankedIds(row.ranked_offers), explanation: row.explanation } : undefined;
   };
+  /**
+   * Offers of one domain: pre-research keeps the legacy snapshot order, `ok`
+   * renders the persisted ranked order (filtered by eligibility), and a pending
+   * or failed domain renders empty.
+   */
+  const domainOffers = <T extends { id: string }, U>(
+    domain: ResearchDomain,
+    serviceKey: string,
+    offers: readonly T[],
+    eligible: (offer: T) => boolean,
+    toPublic: (offer: T) => U,
+  ): U[] => {
+    const outcome = researchOutcomeFor(domain);
+    if (outcome === null) {
+      return offers.filter(eligible).map(toPublic);
+    }
+    if (outcome.status !== "ok") {
+      return [];
+    }
+    const artifact = artifactFor(serviceKey, outcome.fingerprint);
+    if (!artifact) {
+      // A successful event without a fingerprint comes from the pre-P09 event
+      // format; keep the legacy eligibility filter instead of hiding offers.
+      return outcome.fingerprint === null ? offers.filter(eligible).map(toPublic) : [];
+    }
+    return offersInRankedOrder(artifact.rankedOfferIds, offers, eligible, toPublic);
+  };
+  const dinnerOutcome = researchOutcomeFor("dinner");
+  const dinnerArtifact =
+    dinnerOutcome?.status === "ok" ? artifactFor("dinner", dinnerOutcome.fingerprint) : undefined;
+  const dinnerReasonRaw = dinnerArtifact?.explanation ?? null;
+  const dinnerNotIncludedReason =
+    dinnerReasonRaw && dinnerReasonRaw.length > 0 && !dinnerReasonRaw.startsWith("Deterministic")
+      ? dinnerReasonRaw
+      : null;
 
   // Phase 07: hotel/meal offers, effective levels, and program choices.
   const serviceLevels: PublicServiceLevels = {
@@ -607,31 +722,46 @@ export async function buildTripProjection(
     if (parsed?.success) {
       const content = parsed.data;
       const nights = nightsForVariant(trip.travelVariant);
-      hotel = content.hotels
-        .filter(
-          (offer) =>
-            offer.level === serviceLevels.hotel.level &&
-            offer.adults === trip.adults &&
-            offer.nights === nights &&
-            (trip.travelVariant !== "one_night" || offer.luggageStorage) &&
-            researchAllows("hotel", "hotel", offer.id),
-        )
-        .map(toPublicHotel);
-      meals = content.restaurants
-        .filter(
-          (offer) =>
-            offer.level === serviceLevels[offer.meal].level &&
-            content.context.adults === trip.adults &&
-            researchAllows(offer.meal, offer.meal, offer.id),
-        )
-        .map(toPublicMeal);
-      const activities = content.activities
-        .filter(
-          (activity) =>
-            activity.cityId === trip.destinationCityId &&
-            researchAllows("attractions", "activities", activity.id),
-        )
-        .map(toPublicActivity);
+      hotel = domainOffers(
+        "hotel",
+        "hotel",
+        content.hotels,
+        (offer) =>
+          offer.level === serviceLevels.hotel.level &&
+          offer.adults === trip.adults &&
+          offer.nights === nights &&
+          (trip.travelVariant !== "one_night" || offer.luggageStorage),
+        toPublicHotel,
+      );
+      meals = domainOffers(
+        "breakfast",
+        "breakfast",
+        content.restaurants.filter((offer) => offer.meal === "breakfast"),
+        (offer) => offer.level === serviceLevels.breakfast.level && content.context.adults === trip.adults,
+        toPublicMeal,
+      ).concat(
+        domainOffers(
+          "lunch",
+          "lunch",
+          content.restaurants.filter((offer) => offer.meal === "lunch"),
+          (offer) => offer.level === serviceLevels.lunch.level && content.context.adults === trip.adults,
+          toPublicMeal,
+        ),
+        domainOffers(
+          "dinner",
+          "dinner",
+          content.restaurants.filter((offer) => offer.meal === "dinner"),
+          (offer) => offer.level === serviceLevels.dinner.level && content.context.adults === trip.adults,
+          toPublicMeal,
+        ),
+      );
+      const activities = domainOffers(
+        "attractions",
+        "activities",
+        content.activities,
+        (activity) => activity.cityId === trip.destinationCityId,
+        toPublicActivity,
+      );
       const breakfastOffers = meals.filter((offer) => offer.meal === "breakfast");
       const lunchOffers = meals.filter((offer) => offer.meal === "lunch");
       const dinnerOffers = meals.filter((offer) => offer.meal === "dinner");

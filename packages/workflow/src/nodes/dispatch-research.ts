@@ -23,7 +23,7 @@ export async function dispatchResearchNode(
 ): Promise<TravelUpdate> {
   const ports = travelPorts(runtime);
   await ports.runEffect("dispatch_research", "ensure", () => ports.ensureDomains(state.tripId));
-  const inputs = await ports.loadResearchInputs(state.tripId);
+  const inputs = await ports.loadResearchInputs(state.tripId, state.operationId);
 
   // A retry dispatch sends exactly the retryable domains `join_research` named —
   // never a deterministically unavailable sibling. A normal dispatch recomputes

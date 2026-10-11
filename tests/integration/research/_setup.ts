@@ -121,6 +121,7 @@ export interface DomainEvent {
   readonly status: string | null;
   readonly simulatedFailure: boolean;
   readonly reason: string | null;
+  readonly fingerprint: string | null;
   readonly operationId: string;
   readonly createdAt: Date;
 }
@@ -144,6 +145,7 @@ export async function researchEvents(pool: Pool, tripId: string): Promise<Domain
     status: typeof row.payload["status"] === "string" ? row.payload["status"] : null,
     simulatedFailure: row.payload["simulatedFailure"] === true,
     reason: typeof row.payload["reason"] === "string" ? row.payload["reason"] : null,
+    fingerprint: typeof row.payload["fingerprint"] === "string" ? row.payload["fingerprint"] : null,
     operationId: row.operation_id,
     createdAt: row.created_at,
   }));

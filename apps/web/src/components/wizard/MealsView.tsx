@@ -350,7 +350,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
 
   const failedMeals = MEALS.flatMap((meal) => {
     const state = projection.research?.domains.find((entry) => entry.domain === meal) ?? null;
-    return state && state.status !== "ok" ? [{ meal, state }] : [];
+    return state && state.status !== "ok" && state.status !== "pending" ? [{ meal, state }] : [];
   });
 
   return (

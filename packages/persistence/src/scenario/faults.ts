@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import type { ScenarioDomain, SimulationMode } from "@odft/contracts";
 import type { BehaviorOverlay, FaultDecision } from "@odft/data";
+import type { ScenarioDomain, SimulationMode } from "@odft/contracts";
+import { lockOperationFence, type OperationFencingContext } from "../operations/fencing.js";
 
 /**
  * Persisted failure-injection overlays (05 section 12, FR-DEMO-2). Counters are
@@ -11,6 +12,18 @@ import type { BehaviorOverlay, FaultDecision } from "@odft/data";
  */
 
 type Queryable = Pick<PoolClient, "query">;
+
+function numericCounters(value: unknown): Record<string, number> {
+  const counters: Record<string, number> = {};
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      if (typeof entry === "number") {
+        counters[key] = entry;
+      }
+    }
+  }
+  return counters;
+}
 
 export interface UpsertFaultInput {
   readonly tripId: string;
@@ -24,20 +37,25 @@ export interface UpsertFaultInput {
 
 export async function upsertFault(pool: Pool, input: UpsertFaultInput): Promise<string> {
   const operationId = input.operationId ?? null;
-  const counters = JSON.stringify({
-    ...(input.counters ?? {}),
-    overlayVersion: input.overlayVersion ?? 1,
-  });
   const state = JSON.stringify(input.state ?? {});
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const existing = await client.query<{ id: string }>(
-      `SELECT id FROM odft_app.simulation_faults
+    const existing = await client.query<{ id: string; counters: Record<string, unknown> }>(
+      `SELECT id, counters FROM odft_app.simulation_faults
          WHERE trip_id = $1 AND operation_id IS NOT DISTINCT FROM $2 AND domain = $3 AND fault = $4
          FOR UPDATE`,
       [input.tripId, operationId, input.domain, input.fault],
     );
+    const previous = numericCounters(existing.rows[0]?.counters);
+    const counters = JSON.stringify({
+      ...previous,
+      ...(input.counters ?? {}),
+      // Every arm/re-arm advances the version, so re-activating the same fault
+      // still invalidates a cached research result (the version is part of the
+      // domain's research input fingerprint).
+      overlayVersion: input.overlayVersion ?? (previous["overlayVersion"] ?? 0) + 1,
+    });
     const existingId = existing.rows[0]?.id;
     if (existingId) {
       await client.query(
@@ -82,19 +100,51 @@ export async function loadOverlay(
   if (!row) {
     return null;
   }
-  const counters: Record<string, number> = {};
-  for (const [key, value] of Object.entries(row.counters)) {
-    if (typeof value === "number") {
-      counters[key] = value;
-    }
-  }
+  const counters = numericCounters(row.counters);
   return {
     mode: row.fault,
     failureDomain: row.fault === "provider_failure" ? domain : null,
-    overlayVersion:
-      typeof row.counters["overlayVersion"] === "number" ? row.counters["overlayVersion"] : 1,
+    overlayVersion: counters["overlayVersion"] ?? 1,
     counters,
   };
+}
+
+export interface OverlaySummary {
+  readonly mode: SimulationMode;
+  readonly overlayVersion: number;
+}
+
+/**
+ * The newest visible overlay per scenario domain for one operation, resolved with
+ * exactly the same rule as {@link loadOverlay}. Used to build the per-domain
+ * research input fingerprint, so arming/re-arming a fault invalidates a cached
+ * successful research result.
+ */
+export async function loadOverlaySummaries(
+  client: Queryable,
+  tripId: string,
+  operationId?: string,
+): Promise<Partial<Record<ScenarioDomain, OverlaySummary>>> {
+  const result = await client.query<{
+    domain: ScenarioDomain;
+    fault: SimulationMode;
+    counters: Record<string, unknown>;
+  }>(
+    `SELECT DISTINCT ON (domain) domain, fault, counters
+       FROM odft_app.simulation_faults
+      WHERE trip_id = $1
+        AND ($2::uuid IS NULL OR operation_id IS NULL OR operation_id = $2::uuid)
+      ORDER BY domain, updated_at DESC`,
+    [tripId, operationId ?? null],
+  );
+  const summaries: Partial<Record<ScenarioDomain, OverlaySummary>> = {};
+  for (const row of result.rows) {
+    summaries[row.domain] = {
+      mode: row.fault,
+      overlayVersion: numericCounters(row.counters)["overlayVersion"] ?? 1,
+    };
+  }
+  return summaries;
 }
 
 export interface FaultOutcomeInput {
@@ -129,36 +179,36 @@ export interface FaultOutcomeRecord {
 export async function recordFaultOutcome(
   pool: Pool,
   input: FaultOutcomeInput,
+  fence?: OperationFencingContext,
 ): Promise<FaultOutcomeRecord> {
   const operationId = input.operationId ?? null;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (fence) {
+      // The overlay counters are a domain write like any other: a worker that
+      // lost its lease must not advance them.
+      await lockOperationFence(client, fence);
+    }
     const existing = await client.query<{ id: string; counters: Record<string, unknown> }>(
       `SELECT id, counters FROM odft_app.simulation_faults
          WHERE trip_id = $1 AND operation_id IS NOT DISTINCT FROM $2 AND domain = $3 AND fault = $4
          FOR UPDATE`,
       [input.tripId, operationId, input.domain, input.fault],
     );
-    const previous = existing.rows[0]?.counters ?? {};
-    const counters: Record<string, number> = {};
-    for (const [key, value] of Object.entries(previous)) {
-      if (typeof value === "number") {
-        counters[key] = value;
-      }
-    }
-    const previousAttempts = counters["attempts"] ?? 0;
+    const previous = numericCounters(existing.rows[0]?.counters);
+    const previousAttempts = previous["attempts"] ?? 0;
     if (input.attempt <= previousAttempts) {
       await client.query("COMMIT");
-      return { attempts: previousAttempts, injected: counters["injected"] ?? 0 };
+      return { attempts: previousAttempts, injected: previous["injected"] ?? 0 };
     }
     const attempts = input.attempt;
-    const injected = (counters["injected"] ?? 0) + (input.outcome === "ok" ? 0 : 1);
+    const injected = (previous["injected"] ?? 0) + (input.outcome === "ok" ? 0 : 1);
     const next = {
-      ...counters,
+      ...previous,
       attempts,
       injected,
-      overlayVersion: counters["overlayVersion"] ?? input.overlayVersion ?? input.attempt,
+      overlayVersion: previous["overlayVersion"] ?? input.overlayVersion ?? input.attempt,
     };
     const state = JSON.stringify({
       lastOutcome: input.outcome,

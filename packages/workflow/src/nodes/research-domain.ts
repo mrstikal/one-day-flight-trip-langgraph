@@ -35,6 +35,7 @@ export async function researchDomainNode(
     status: null,
     simulatedFailure: false,
     reason: null,
+    fingerprint: null,
   });
 
   const outcome = await ports.researchDomain({
@@ -55,6 +56,7 @@ export async function researchDomainNode(
     status: outcome.status,
     simulatedFailure: outcome.simulatedFailure,
     reason: outcome.reason,
+    fingerprint: task.inputFingerprint,
   });
 
   const result: ResearchDomainResult = {

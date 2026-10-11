@@ -41,6 +41,22 @@ const RESEARCH_MATERIALIZED_DOMAINS = [
   "events",
 ] as const;
 
+/**
+ * The fencing context for a domain write. It refuses a write that targets a
+ * different operation/trip than the claimed one, so a stale or misrouted task
+ * can never borrow the current worker's token.
+ */
+function fenceFor(
+  ctx: OperationFencingContext,
+  operationId: string,
+  tripId: string,
+): OperationFencingContext {
+  if (operationId !== ctx.operationId || tripId !== ctx.tripId) {
+    throw new Error("research write targets a different operation than the claimed one");
+  }
+  return { operationId: ctx.operationId, tripId: ctx.tripId, fencingToken: ctx.fencingToken };
+}
+
 export function createTravelPortsFactory(
   pool: Pool,
   ai: AiService,
@@ -148,16 +164,23 @@ export function createTravelPortsFactory(
       return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
     },
 
-    async loadResearchInputs(tripId) {
-      return loadTripResearchInputs(pool, tripId);
+    async loadResearchInputs(tripId, operationId) {
+      return loadTripResearchInputs(pool, tripId, operationId);
     },
 
     async researchDomain(input) {
-      return researchTripDomain(pool, input);
+      // Domain writes (artifact upsert, fault counters) verify the operation's
+      // fencing token inside their own short transactions, so a worker that lost
+      // its lease writes nothing.
+      return researchTripDomain(pool, input, fenceFor(ctx, input.operationId, input.tripId));
     },
 
     async rankRecommendations(input) {
-      return rankTripRecommendations(pool, input);
+      return rankTripRecommendations(
+        pool,
+        input,
+        fenceFor(ctx, input.operationId, input.tripId),
+      );
     },
 
     async recordResearchEvent(event) {
@@ -170,6 +193,7 @@ export function createTravelPortsFactory(
           status: event.status,
           simulatedFailure: event.simulatedFailure,
           reason: event.reason,
+          fingerprint: event.fingerprint,
         },
       });
     },

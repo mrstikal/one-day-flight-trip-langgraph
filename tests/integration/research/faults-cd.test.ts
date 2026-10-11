@@ -107,7 +107,8 @@ describe("deterministic empty domain (real PostgreSQL)", () => {
 
     const counters = await pool.query<{ counters: Record<string, number>; state: unknown }>(
       `SELECT counters, state FROM odft_app.simulation_faults
-        WHERE trip_id = $1 AND domain = 'hotels' AND fault = 'hotels_unavailable'`,
+        WHERE trip_id = $1 AND domain = 'hotels' AND fault = 'hotels_unavailable'
+        ORDER BY updated_at DESC LIMIT 1`,
       [tripId],
     );
     expect(counters.rows[0]?.counters["attempts"]).toBe(1);
