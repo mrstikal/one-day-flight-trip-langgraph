@@ -220,6 +220,8 @@ export const publicProgramChoicesSchema = z
       .strict(),
     /** Deterministic reason dinner is optional (null), or null when a slot exists. */
     dinnerNotIncludedReason: nonEmptyStringSchema.nullable(),
+    /** Persisted program activity preferences (safe ids). */
+    preferredActivityIds: z.array(nonEmptyStringSchema),
     activities: z.array(publicActivityChoiceSchema),
   })
   .strict();

@@ -8,6 +8,7 @@ import {
   routeAfterApplyCommands,
   routeAfterApplyDecision,
   routeAfterCommit,
+  routeAfterDetectProgress,
   routeAfterLogistics,
   routeAfterSchedules,
   routeAfterValidation,
@@ -115,6 +116,33 @@ describe("prepare_decision phase 07 kinds", () => {
     expect(program.decisionKind).toBe("program_choices");
     expect(program.allowedOfferIds).toEqual(["b1", "l1", "d1"]);
     expect(program.allowedOptionIds).toEqual(["a1", "a2"]);
+
+    const replacement = prepareDecisionNode(
+      state({
+        nextDecisionKind: "replacement_confirmation",
+        proposalId: "p",
+        selectedOfferId: "d2",
+      }),
+    );
+    expect(replacement.decisionKind).toBe("replacement_confirmation");
+    expect(replacement.allowedOfferIds).toEqual(["d2"]);
+
+    const recovery = prepareDecisionNode(state({ nextDecisionKind: "recovery" }));
+    expect(recovery.decisionKind).toBe("recovery");
+    expect(recovery.allowedOptionIds).toEqual(["change_hotel", "change_meals"]);
+  });
+
+  it("choose_option recovery reopens the affected step without editing (Phase 07)", () => {
+    const hotel = applyDecisionNode(
+      state({ lastAction: "choose_option", lastOptionId: "change_hotel" }),
+    );
+    expect(hotel.pendingStage).toBe("reselection");
+    expect(hotel.nextDecisionKind).toBe("hotel_choice");
+    expect(hotel.logisticsStatus).toBe("pending");
+    const meals = applyDecisionNode(
+      state({ lastAction: "choose_option", lastOptionId: "change_meals" }),
+    );
+    expect(meals.nextDecisionKind).toBe("program_choices");
   });
 });
 
@@ -161,7 +189,13 @@ describe("routers", () => {
     expect(routeAfterApplyCommands(state({ commandType: "propose_selection" }))).toBe(
       "stage_command_proposal",
     );
-    expect(routeAfterApplyCommands(state({ commandType: "set_route" }))).toBe("validate_route");
+    expect(routeAfterApplyCommands(state({ commandType: "set_program" }))).toBe("apply_program");
+    expect(routeAfterApplyCommands(state({ commandType: "set_route" }))).toBe("detect_progress");
+  });
+
+  it("resumes a preference change at the confirmed progress (Phase 07)", () => {
+    expect(routeAfterDetectProgress(state({ hasConfirmedFlight: true }))).toBe("ensure_domains");
+    expect(routeAfterDetectProgress(state({ hasConfirmedFlight: false }))).toBe("validate_route");
   });
 
   it("routes confirmed bookings by service and program actions to logistics (Phase 07)", () => {
@@ -173,7 +207,12 @@ describe("routers", () => {
     expect(
       routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: "program_choices" })),
     ).toBe("prepare_decision");
-    expect(routeAfterLogistics(state({ logisticsStatus: "conflict" }))).toBe("publish_summary");
+    expect(
+      routeAfterLogistics(
+        state({ logisticsStatus: "valid", nextDecisionKind: "replacement_confirmation" }),
+      ),
+    ).toBe("prepare_decision");
+    expect(routeAfterLogistics(state({ logisticsStatus: "conflict" }))).toBe("prepare_decision");
     expect(routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: null }))).toBe(
       "publish_summary",
     );

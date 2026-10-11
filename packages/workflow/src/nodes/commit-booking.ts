@@ -21,14 +21,25 @@ export async function commitBookingNode(
   }
   const service = state.bookingService ?? "flights";
   const ports = travelPorts(runtime);
-  const result = await ports.confirm({
-    tripId: state.tripId,
-    operationId: state.operationId,
-    proposalId,
-    decisionId: state.lastDecisionId,
-    acceptedRevision: state.acceptedRevision,
-    confirmationKey: `confirm:${service}:${state.operationId}:${proposalId}`,
-  });
+  const confirmationKey = `confirm:${service}:${state.operationId}:${proposalId}`;
+  const result = state.pendingReplacement
+    ? await ports.replace({
+        tripId: state.tripId,
+        operationId: state.operationId,
+        service,
+        proposalId,
+        decisionId: state.lastDecisionId,
+        acceptedRevision: state.acceptedRevision,
+        confirmationKey,
+      })
+    : await ports.confirm({
+        tripId: state.tripId,
+        operationId: state.operationId,
+        proposalId,
+        decisionId: state.lastDecisionId,
+        acceptedRevision: state.acceptedRevision,
+        confirmationKey,
+      });
   const nextDecisionKind =
     service === "flights" ? "hotel_choice" : service === "hotel" ? "program_choices" : null;
   return {
@@ -36,6 +47,7 @@ export async function commitBookingNode(
     demoReference: result.demoReference,
     gate: "booked",
     bookingService: service,
+    pendingReplacement: false,
     ...(nextDecisionKind ? { nextDecisionKind } : { nextDecisionKind: null }),
   };
 }

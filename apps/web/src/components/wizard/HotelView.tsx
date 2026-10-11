@@ -13,6 +13,8 @@ import { useTripEvents } from "@/lib/use-sse";
 import { BookingConfirmationDialog } from "@/components/booking/BookingConfirmationDialog";
 import { ConfirmationResult } from "@/components/booking/ConfirmationResult";
 import { ProposalReview } from "@/components/booking/ProposalReview";
+import { RecoveryCard } from "@/components/booking/RecoveryCard";
+import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
 import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
@@ -108,6 +110,25 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     </p>
   ) : null;
 
+  if (pendingDecision?.kind === "recovery") {
+    return (
+      <div className="flex flex-col gap-6">
+        {banner}
+        <RecoveryCard
+          decision={pendingDecision}
+          busy={busy}
+          error={actionError}
+          onChoose={(optionId) =>
+            void submitResponse(pendingDecision.id, projection.trip.revision, {
+              action: "choose_option",
+              optionId,
+            })
+          }
+        />
+      </div>
+    );
+  }
+
   if (pendingDecision?.kind === "hotel_choice") {
     const selectedId = proposal?.serviceKey === "hotel" ? proposal.offerId : null;
     return (
@@ -168,7 +189,31 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     );
   }
 
-  if (pendingDecision?.kind === "booking_confirmation" && proposal?.serviceKey === "hotel") {
+  if (
+    pendingDecision?.kind === "booking_confirmation" &&
+    (proposal === null || proposal.serviceKey === "hotel")
+  ) {
+    if (proposal === null || proposal.expired) {
+      const staleProposalId = proposal?.id ?? pendingDecision.proposalId;
+      return (
+        <div className="flex flex-col gap-6">
+          {banner}
+          <StaleProposalNotice
+            serviceLabel="hotel"
+            busy={busy}
+            canReselect={Boolean(staleProposalId)}
+            onReselect={() => {
+              if (staleProposalId) {
+                void submitResponse(pendingDecision.id, projection.trip.revision, {
+                  action: "reject_proposal",
+                  proposalId: staleProposalId,
+                });
+              }
+            }}
+          />
+        </div>
+      );
+    }
     const selected = hotel.find((offer) => offer.id === proposal.offerId) ?? null;
     return (
       <div className="flex flex-col gap-6">

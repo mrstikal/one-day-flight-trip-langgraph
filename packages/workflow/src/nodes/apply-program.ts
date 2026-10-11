@@ -30,9 +30,28 @@ export async function applyProgramNode(
       preferredActivityIds: state.submittedActivityIds,
     }),
   );
+  if (result.replacementStaged && result.replacementProposalId) {
+    // Open an explicit replacement confirmation for the staged proposal; the
+    // confirmed reservation stays active until the user confirms the replacement.
+    const service = result.replacementService;
+    const replacementOfferId =
+      service === "breakfast" || service === "lunch" || service === "dinner"
+        ? selections[service]
+        : null;
+    return {
+      programApplied: true,
+      replacementStaged: true,
+      proposalId: result.replacementProposalId,
+      selectedOfferId: replacementOfferId,
+      decisionFingerprint: result.replacementSourceFingerprint,
+      bookingService: service,
+      nextDecisionKind: "replacement_confirmation",
+      gate: "awaiting_booking",
+    };
+  }
   return {
     programApplied: true,
-    replacementStaged: result.replacementStaged,
+    replacementStaged: false,
     nextDecisionKind: null,
     gate: "program_ready",
   };

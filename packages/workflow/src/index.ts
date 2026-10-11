@@ -66,6 +66,7 @@ export {
   routeAfterApplyDecision,
   routeAfterApplyProgram,
   routeAfterCommit,
+  routeAfterDetectProgress,
   routeAfterEnsureDomains,
   routeAfterGeneration,
   routeAfterLogistics,
@@ -80,6 +81,7 @@ export type {
   TravelMaterializedFlights,
   TravelPorts,
   TravelProgramResult,
+  TravelProgress,
   TravelResearchResult,
   TravelTripContext,
 } from "./travel/ports.js";

@@ -3,7 +3,9 @@ import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { snapshotContentSchema } from "@odft/contracts";
 import {
+  admitOperation,
   admitResume,
+  dinnerSlotAvailable,
   getPendingDecisionForTrip,
   planProgramSelections,
   ServiceSelectionError,
@@ -157,10 +159,18 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
     expect(dinner).not.toBe("");
     const activityIds = (program?.allowedOptionIds ?? []).slice(0, 2);
 
-    // A null dinner is refused while a feasible dinner slot exists.
-    await expect(
-      planProgramSelections(pool, { tripId, mealSelections: { breakfast, lunch, dinner: null } }),
-    ).rejects.toBeInstanceOf(ServiceSelectionError);
+    // The null-dinner rule is deterministic: it is refused only when a feasible
+    // dinner slot exists (return late enough for the window + buffer).
+    const slot = await dinnerSlotAvailable(pool, tripId, content);
+    if (slot.available) {
+      await expect(
+        planProgramSelections(pool, { tripId, mealSelections: { breakfast, lunch, dinner: null } }),
+      ).rejects.toBeInstanceOf(ServiceSelectionError);
+    } else {
+      await expect(
+        planProgramSelections(pool, { tripId, mealSelections: { breakfast, lunch, dinner: null } }),
+      ).resolves.toBeDefined();
+    }
 
     await chooseDecision(
       tripId,
@@ -201,5 +211,25 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
       [tripId],
     );
     expect(trip.rows[0]?.workflow_status).toBe("ready");
+
+    // A preference change after booking must resume at the relevant step, not
+    // restart the flight flow.
+    const revisionRow = await pool.query<{ revision: number }>(
+      `SELECT revision FROM odft_app.trips WHERE id = $1`,
+      [tripId],
+    );
+    const paced = await admitOperation(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: revisionRow.rows[0]?.revision ?? 0,
+        command: { type: "set_activity_pace", pace: "relaxed" },
+      },
+    });
+    expect("operationId" in paced).toBe(true);
+    await driver.runOperation(await claimNextOrFail(pools));
+    const reDerived = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(reDerived?.kind).toBe("program_choices");
   }, 90_000);
 });

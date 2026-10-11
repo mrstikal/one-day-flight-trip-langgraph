@@ -15,7 +15,16 @@ import { loadSnapshotContent, PostgresSnapshotSource } from "./snapshots.js";
  * Deterministic Phase 07 service research, program application, and selected
  * logistics (serial, no LLM). Phase 09 replaces the serial research with a
  * `Send` fan-out while keeping these result shapes.
+ *
+ * Pool safety: this module never holds a connection across a provider call.
+ * Providers acquire their own short-lived connections, so one operation needs at
+ * most the `runEffect` connection plus one pooled connection at a time. Holding a
+ * connection while calling providers could exhaust the worker pool under
+ * concurrency.
  */
+
+/** Minimal query surface shared by `Pool` and `PoolClient`. */
+type Queryable = { query: PoolClient["query"] };
 
 export type ResearchMeal = "breakfast" | "lunch" | "dinner";
 
@@ -54,6 +63,11 @@ export interface TripLogisticsResult {
   readonly reason: string | null;
 }
 
+export interface TripProgress {
+  readonly flightConfirmed: boolean;
+  readonly hotelConfirmed: boolean;
+}
+
 /** A selection that cannot be applied; `code` is a safe terminal conflict code. */
 export class ServiceSelectionError extends Error {
   readonly code: string;
@@ -65,6 +79,11 @@ export class ServiceSelectionError extends Error {
 }
 
 const MEALS: readonly ResearchMeal[] = ["breakfast", "lunch", "dinner"];
+const MEAL_SERVICES: readonly ("breakfast" | "lunch" | "dinner")[] = [
+  "breakfast",
+  "lunch",
+  "dinner",
+];
 
 function effectiveLevel(preferences: TripPreferences, service: ServiceKey): ServiceLevel {
   return preferences.serviceOverrides[service] ?? preferences.defaultServiceLevel;
@@ -104,10 +123,22 @@ function contentFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
 
-function localParts(
-  instant: string,
-  zone: string,
-): { date: string; hour: number; clock: string } | null {
+/** Parse an `HH:MM` clock, tolerating decorated values like `22:00 (simulated)`. */
+export function parseClock(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})/.exec(value);
+  if (!match) {
+    return null;
+  }
+  const hour = Number.parseInt(match[1] ?? "", 10);
+  const minute = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour > 23 || minute > 59) {
+    return null;
+  }
+  return hour * 60 + minute;
+}
+
+/** Minutes the destination-local wall clock reads for an instant, or null. */
+function localMinutes(instant: string, zone: string): { date: string; minutes: number } | null {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: zone,
@@ -119,30 +150,39 @@ function localParts(
       hour12: false,
     }).formatToParts(new Date(instant));
     const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? "";
-    const date = `${get("year")}-${get("month")}-${get("day")}`;
     const hour = Number.parseInt(get("hour"), 10);
-    if (date.length !== 10 || !Number.isFinite(hour)) {
+    const minute = Number.parseInt(get("minute"), 10);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
       return null;
     }
-    const clock = `${String(hour).padStart(2, "0")}:${get("minute")}`;
-    return { date, hour, clock };
+    return { date: `${get("year")}-${get("month")}-${get("day")}`, minutes: hour * 60 + minute };
   } catch {
     return null;
   }
 }
 
+/** Airport buffer required after the last planned activity before departure. */
+const AIRPORT_BUFFER_MINUTES = 120;
+
 /**
- * Deterministic dinner-slot assessment. Dinner is unavailable when the return
- * leg leaves the destination before the dinner window opens on the sightseeing
- * day (a return on a later day leaves the evening free). With no confirmed
- * flight the check is not binding and dinner is treated as available.
+ * Deterministic dinner-slot assessment. Dinner is infeasible when the return leg
+ * leaves the destination the same day before the dinner window plus the meal
+ * duration and the airport buffer have elapsed. A return on a later day leaves
+ * the evening free; with no confirmed flight the check is not binding.
  */
 export async function dinnerSlotAvailable(
-  client: Pick<PoolClient, "query">,
+  queryable: Queryable,
   tripId: string,
   content: NonNullable<Awaited<ReturnType<typeof loadSnapshotContent>>>,
 ): Promise<{ available: boolean; reason: string | null }> {
-  const reservation = await client.query<{ offer_id: string }>(
+  const dinnerOffers = content.restaurants.filter((offer) => offer.meal === "dinner");
+  if (dinnerOffers.length === 0) {
+    return {
+      available: false,
+      reason: "Not included - no dinner offers are available for this trip.",
+    };
+  }
+  const reservation = await queryable.query<{ offer_id: string }>(
     `SELECT offer_id FROM odft_app.reservations
       WHERE trip_id = $1 AND service_key = 'flights' AND status = 'confirmed'`,
     [tripId],
@@ -156,33 +196,44 @@ export async function dinnerSlotAvailable(
   if (!firstReturnSegment) {
     return { available: true, reason: null };
   }
-  const parts = localParts(
+  const departure = localMinutes(
     firstReturnSegment.departureInstant,
     firstReturnSegment.departureZone || content.context.cityZone,
   );
-  if (!parts) {
+  if (!departure) {
     return { available: true, reason: null };
   }
-  const leavesLaterDay = parts.date > content.context.sightseeingDate;
-  if (!leavesLaterDay && parts.hour < 18) {
-    return {
-      available: false,
-      reason: `Not included - your return flight leaves at ${String(parts.hour).padStart(2, "0")}:00 local time, before the dinner window.`,
-    };
+  if (departure.date > content.context.sightseeingDate) {
+    return { available: true, reason: null };
   }
-  return { available: true, reason: null };
+  const feasible = dinnerOffers.some((offer) => {
+    const start = parseClock(offer.windowStart);
+    return (
+      start !== null && departure.minutes >= start + offer.durationMinutes + AIRPORT_BUFFER_MINUTES
+    );
+  });
+  if (feasible) {
+    return { available: true, reason: null };
+  }
+  const minutes = Math.floor(departure.minutes);
+  const clock = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  return {
+    available: false,
+    reason: `Not included - your return flight leaves at ${clock} local time, too early to finish dinner and reach the airport.`,
+  };
 }
 
 async function recordRecommendation(
-  client: Pick<PoolClient, "query">,
+  queryable: Queryable,
   input: {
     readonly tripId: string;
     readonly serviceKey: string;
     readonly snapshotId: string;
     readonly rankedOfferIds: readonly string[];
+    readonly explanation?: string | null;
   },
 ): Promise<void> {
-  await client.query(
+  await queryable.query(
     `INSERT INTO odft_app.recommendation_artifacts
        (id, trip_id, service_key, input_fingerprint, snapshot_refs, ranked_offers, explanation)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)`,
@@ -193,7 +244,7 @@ async function recordRecommendation(
       contentFingerprint({ service: input.serviceKey, snapshotId: input.snapshotId }),
       JSON.stringify([input.snapshotId]),
       JSON.stringify(input.rankedOfferIds),
-      "Deterministic serial research (Phase 07).",
+      input.explanation ?? "Deterministic serial research (Phase 07).",
     ],
   );
 }
@@ -202,106 +253,141 @@ export async function researchTripServices(
   pool: Pool,
   tripId: string,
 ): Promise<TripResearchResult> {
-  const client = await pool.connect();
+  const loadClient = await pool.connect();
+  let trip: Awaited<ReturnType<typeof getTrip>>;
+  let snapshotId: string | null | undefined;
+  let content: Awaited<ReturnType<typeof loadSnapshotContent>>;
   try {
-    const trip = await getTrip(client, tripId);
+    trip = await getTrip(loadClient, tripId);
     if (!trip) {
       throw new ServiceSelectionError("NOT_FOUND", `trip ${tripId} not found`);
     }
-    const snapshotId = trip.activeScenarioSnapshotId;
+    snapshotId = trip.activeScenarioSnapshotId;
     if (!snapshotId) {
       throw new ServiceSelectionError("CONFLICT", "trip has no active scenario snapshot");
     }
-    const content = await loadSnapshotContent(client, snapshotId);
-    if (!content) {
-      throw new ServiceSelectionError("CONFLICT", `snapshot ${snapshotId} is not materialized`);
-    }
-    const source = new PostgresSnapshotSource(pool);
-    const accommodation = new SyntheticAccommodationSearchProvider(source);
-    const restaurant = new SyntheticRestaurantSearchProvider(source);
-    const attractions = new SyntheticAttractionsProvider(source);
-
-    let partial = false;
-    const hotelResult = await accommodation.search({
-      snapshotId,
-      level: effectiveLevel(trip.preferences, "hotel"),
-      adults: trip.adults,
-      dates: nightDates(trip.sightseeingDate, trip.travelVariant),
-    });
-    const hotelOffers = hotelResult.status === "ok" ? hotelResult.value : [];
-    if (hotelResult.status !== "ok") {
-      partial = true;
-    }
-
-    const mealOfferIds: Record<ResearchMeal, string[]> = { breakfast: [], lunch: [], dinner: [] };
-    const mealDefaults: Record<ResearchMeal, string | null> = {
-      breakfast: null,
-      lunch: null,
-      dinner: null,
-    };
-    for (const meal of MEALS) {
-      const result = await restaurant.search({
-        snapshotId,
-        meal,
-        level: effectiveLevel(trip.preferences, meal),
-        adults: trip.adults,
-      });
-      const offers = result.status === "ok" ? result.value : [];
-      if (result.status !== "ok") {
-        partial = true;
-      }
-      mealOfferIds[meal] = offers.map((offer) => offer.id);
-      mealDefaults[meal] = pickDefault(offers);
-      await recordRecommendation(client, {
-        tripId,
-        serviceKey: meal,
-        snapshotId,
-        rankedOfferIds: mealOfferIds[meal],
-      });
-    }
-
-    const attractionResult = await attractions.list({ snapshotId, cityId: trip.destinationCityId });
-    const activities = attractionResult.status === "ok" ? attractionResult.value : [];
-    if (attractionResult.status !== "ok") {
-      partial = true;
-    }
-
-    await recordRecommendation(client, {
-      tripId,
-      serviceKey: "hotel",
-      snapshotId,
-      rankedOfferIds: hotelOffers.map((offer) => offer.id),
-    });
-    await recordRecommendation(client, {
-      tripId,
-      serviceKey: "activities",
-      snapshotId,
-      rankedOfferIds: activities.map((activity) => activity.id),
-    });
-
-    let dinnerNotIncludedReason: string | null = null;
-    if (mealOfferIds.dinner.length === 0) {
-      mealDefaults.dinner = null;
-      dinnerNotIncludedReason = "Not included - no dinner offers are available for this trip.";
-    } else {
-      const slot = await dinnerSlotAvailable(client, tripId, content);
-      if (!slot.available) {
-        mealDefaults.dinner = null;
-        dinnerNotIncludedReason = slot.reason;
-      }
-    }
-
-    return {
-      status: partial ? "partial" : "ok",
-      hotelOfferIds: hotelOffers.map((offer) => offer.id),
-      mealOfferIds,
-      activityIds: activities.map((activity) => activity.id),
-      mealDefaults,
-      dinnerNotIncludedReason,
-    };
+    content = await loadSnapshotContent(loadClient, snapshotId);
   } finally {
-    client.release();
+    loadClient.release();
   }
+  if (!content) {
+    throw new ServiceSelectionError("CONFLICT", `snapshot ${snapshotId} is not materialized`);
+  }
+
+  // Providers acquire and release their own pooled connections per query; we must
+  // not hold one here (see the module note).
+  const source = new PostgresSnapshotSource(pool);
+  const accommodation = new SyntheticAccommodationSearchProvider(source);
+  const restaurant = new SyntheticRestaurantSearchProvider(source);
+  const attractions = new SyntheticAttractionsProvider(source);
+
+  let partial = false;
+  const hotelResult = await accommodation.search({
+    snapshotId,
+    level: effectiveLevel(trip.preferences, "hotel"),
+    adults: trip.adults,
+    dates: nightDates(trip.sightseeingDate, trip.travelVariant),
+  });
+  let hotelOffers = hotelResult.status === "ok" ? hotelResult.value : [];
+  if (hotelResult.status !== "ok") {
+    partial = true;
+  }
+  // The one-night variant needs luggage storage after checkout during the
+  // sightseeing day; budget hotels without it are not offerable.
+  if (trip.travelVariant === "one_night") {
+    hotelOffers = hotelOffers.filter((offer) => offer.luggageStorage);
+  }
+
+  const mealOfferIds: Record<ResearchMeal, string[]> = { breakfast: [], lunch: [], dinner: [] };
+  const offersByMeal: Record<ResearchMeal, readonly { id: string; partyTotalMinor: number }[]> = {
+    breakfast: [],
+    lunch: [],
+    dinner: [],
+  };
+  for (const meal of MEALS) {
+    const result = await restaurant.search({
+      snapshotId,
+      meal,
+      level: effectiveLevel(trip.preferences, meal),
+      adults: trip.adults,
+    });
+    const offers = result.status === "ok" ? result.value : [];
+    if (result.status !== "ok") {
+      partial = true;
+    }
+    mealOfferIds[meal] = offers.map((offer) => offer.id);
+    offersByMeal[meal] = offers;
+  }
+
+  const attractionResult = await attractions.list({ snapshotId, cityId: trip.destinationCityId });
+  const activities = attractionResult.status === "ok" ? attractionResult.value : [];
+  if (attractionResult.status !== "ok") {
+    partial = true;
+  }
+
+  const dinnerSlot = await dinnerSlotAvailable(pool, tripId, content);
+  const mealDefaults: Record<ResearchMeal, string | null> = {
+    breakfast: pickDefault(offersByMeal.breakfast),
+    lunch: pickDefault(offersByMeal.lunch),
+    dinner: dinnerSlot.available ? pickDefault(offersByMeal.dinner) : null,
+  };
+  const dinnerNotIncludedReason = dinnerSlot.available ? null : dinnerSlot.reason;
+
+  for (const meal of MEALS) {
+    await recordRecommendation(pool, {
+      tripId,
+      serviceKey: meal,
+      snapshotId,
+      rankedOfferIds: mealOfferIds[meal],
+      explanation: meal === "dinner" ? (dinnerNotIncludedReason ?? "") : undefined,
+    });
+  }
+  await recordRecommendation(pool, {
+    tripId,
+    serviceKey: "hotel",
+    snapshotId,
+    rankedOfferIds: hotelOffers.map((offer) => offer.id),
+  });
+  await recordRecommendation(pool, {
+    tripId,
+    serviceKey: "activities",
+    snapshotId,
+    rankedOfferIds: activities.map((activity) => activity.id),
+  });
+
+  return {
+    status: partial ? "partial" : "ok",
+    hotelOfferIds: hotelOffers.map((offer) => offer.id),
+    mealOfferIds,
+    activityIds: activities.map((activity) => activity.id),
+    mealDefaults,
+    dinnerNotIncludedReason,
+  };
+}
+
+/** Confirmed flight/hotel progress used to resume a preference change at the right step. */
+export async function loadTripProgress(pool: Pool, tripId: string): Promise<TripProgress> {
+  const result = await pool.query<{ service_key: string }>(
+    `SELECT service_key FROM odft_app.reservations
+      WHERE trip_id = $1 AND status = 'confirmed'`,
+    [tripId],
+  );
+  const services = new Set(result.rows.map((row) => row.service_key));
+  return { flightConfirmed: services.has("flights"), hotelConfirmed: services.has("hotel") };
+}
+
+/** Latest persisted program activity preferences (may be empty). */
+export async function loadPreferredActivityIds(pool: Pool, tripId: string): Promise<string[]> {
+  const result = await pool.query<{ ranked_offers: unknown }>(
+    `SELECT ranked_offers FROM odft_app.recommendation_artifacts
+      WHERE trip_id = $1 AND service_key = 'activities' AND explanation LIKE 'User program%'
+      ORDER BY created_at DESC LIMIT 1`,
+    [tripId],
+  );
+  const raw = result.rows[0]?.ranked_offers;
+  return Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === "string")
+    : [];
 }
 
 /**
@@ -360,12 +446,7 @@ export async function planProgramSelections(
 
     const selections: ProgramSelection[] = [];
     const replacements: ProgramPlan["replacements"] = [];
-    const services: readonly ("breakfast" | "lunch" | "dinner")[] = [
-      "breakfast",
-      "lunch",
-      "dinner",
-    ];
-    for (const service of services) {
+    for (const service of MEAL_SERVICES) {
       const selected = input.mealSelections[service];
       if (selected === null) {
         continue;
@@ -417,23 +498,13 @@ export async function recordPreferredActivities(
   if (input.preferredActivityIds.length === 0) {
     return;
   }
-  const client = await pool.connect();
-  try {
-    await client.query(
-      `INSERT INTO odft_app.recommendation_artifacts
-         (id, trip_id, service_key, input_fingerprint, snapshot_refs, ranked_offers, explanation)
-       VALUES ($1, $2, 'activities', $3, '[]'::jsonb, $4::jsonb, $5)`,
-      [
-        randomUUID(),
-        input.tripId,
-        contentFingerprint({ preferred: [...input.preferredActivityIds].sort() }),
-        JSON.stringify(input.preferredActivityIds),
-        "User program activity preferences (Phase 07).",
-      ],
-    );
-  } finally {
-    client.release();
-  }
+  await recordRecommendation(pool, {
+    tripId: input.tripId,
+    serviceKey: "activities",
+    snapshotId: "preferred",
+    rankedOfferIds: input.preferredActivityIds,
+    explanation: "User program activity preferences (Phase 07).",
+  });
 }
 
 /** Persist compatible unbooked selections (idempotent upsert). */
@@ -477,7 +548,8 @@ export async function upsertProgramSelections(
 
 /**
  * Deterministic selected-logistics check: the confirmed hotel's airport transfer
- * must be within the policy bound. It never edits a reservation.
+ * must be within the policy bound and confirmed meal windows must not run past
+ * the return departure. It never edits a reservation.
  */
 export async function validateTripLogistics(
   pool: Pool,
@@ -545,7 +617,7 @@ export async function validateTripLogistics(
     // Confirmed meal windows must not run past the return departure on the day.
     const returnFirst = flight?.inbound.segments[0];
     const returnDeparture = returnFirst
-      ? localParts(
+      ? localMinutes(
           returnFirst.departureInstant,
           returnFirst.departureZone || content.context.cityZone,
         )
@@ -563,10 +635,10 @@ export async function validateTripLogistics(
           continue;
         }
         const windowEnd = parseClock(mealOffer.windowEnd);
-        if (windowEnd !== null && windowEnd > returnDeparture.clock) {
+        if (windowEnd !== null && windowEnd > returnDeparture.minutes) {
           return {
             status: "conflict",
-            reason: `The confirmed ${meal.service_key} window ends at ${mealOffer.windowEnd}, after your return flight leaves at ${returnDeparture.clock}.`,
+            reason: `The confirmed ${meal.service_key} window ends at ${mealOffer.windowEnd}, after your return flight leaves.`,
           };
         }
       }
@@ -578,12 +650,8 @@ export async function validateTripLogistics(
   }
 }
 
-function parseClock(value: string): string | null {
-  return /^\d{2}:\d{2}$/.test(value) ? value : null;
-}
-
 async function loadAirportAnchor(
-  client: Pick<PoolClient, "query">,
+  client: Queryable,
   airportId: string,
 ): Promise<{ lat: number; lon: number } | undefined> {
   const result = await client.query<{ lat: number; lon: number }>(

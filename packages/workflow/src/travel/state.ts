@@ -50,6 +50,8 @@ export const travelDecisionKindSchema = z.enum([
   "hotel_choice",
   "program_choices",
   "booking_confirmation",
+  "replacement_confirmation",
+  "recovery",
 ]);
 export type TravelDecisionKind = z.infer<typeof travelDecisionKindSchema>;
 
@@ -110,6 +112,12 @@ export const travelStateFields = {
   lastOfferId: z.string().nullable().default(null),
   lastProposalId: z.string().nullable().default(null),
   lastDecisionId: z.string().nullable().default(null),
+  lastOptionId: z.string().nullable().default(null),
+  /** True while a staged proposal is a replacement for a confirmed service. */
+  pendingReplacement: z.boolean().default(false),
+  /** Confirmed-progress flags so a preference change resumes at the right step. */
+  hasConfirmedFlight: z.boolean().default(false),
+  hasConfirmedHotel: z.boolean().default(false),
 
   // Booking
   reservationId: z.string().nullable().default(null),
@@ -206,4 +214,6 @@ export const DECISION_KIND_FOR_STAGE: Readonly<Record<TravelDecisionKind, Decisi
   hotel_choice: "hotel_choice",
   program_choices: "program_choices",
   booking_confirmation: "booking_confirmation",
+  replacement_confirmation: "replacement_confirmation",
+  recovery: "recovery",
 };

@@ -12,6 +12,8 @@ import { useTripEvents } from "@/lib/use-sse";
 import { BookingConfirmationDialog } from "@/components/booking/BookingConfirmationDialog";
 import { ConfirmationResult } from "@/components/booking/ConfirmationResult";
 import { ProposalReview } from "@/components/booking/ProposalReview";
+import { RecoveryCard } from "@/components/booking/RecoveryCard";
+import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
 import { ProgramChoices } from "@/components/program/ProgramChoices";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
@@ -155,59 +157,103 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
     );
   }
 
-  const mealService = proposal?.serviceKey;
-  if (
-    pendingDecision?.kind === "booking_confirmation" &&
-    proposal &&
-    (mealService === "breakfast" || mealService === "lunch" || mealService === "dinner")
-  ) {
+  if (pendingDecision?.kind === "recovery") {
     return (
       <div className="flex flex-col gap-6">
         {banner}
-        <ProposalReview
-          title={`Confirm your ${mealService} reservation`}
-          description="Restaurant reservations are optional. Confirm to create the simulated reservation, or choose a different option."
-          proposal={proposal}
-          reviewLabel="Review reservation"
-          busy={busy}
-          onReview={() => setDialogOpen(true)}
-          onReject={() =>
-            void submitResponse(pendingDecision.id, projection.trip.revision, {
-              action: "reject_proposal",
-              proposalId: proposal.id,
-            })
-          }
-        />
-        <BookingConfirmationDialog
-          open={dialogOpen}
-          heading="Confirm this simulated restaurant booking"
+        <RecoveryCard
+          decision={pendingDecision}
           busy={busy}
           error={actionError}
-          onCancel={() => setDialogOpen(false)}
-          onReject={() => {
-            setDialogOpen(false);
+          onChoose={(optionId) =>
             void submitResponse(pendingDecision.id, projection.trip.revision, {
-              action: "reject_proposal",
-              proposalId: proposal.id,
-            });
-          }}
-          rejectLabel="Choose a different option"
-          onConfirm={() =>
-            void submitResponse(pendingDecision.id, projection.trip.revision, {
-              action: "confirm_booking",
-              proposalId: proposal.id,
-              acceptedDemoDisclaimer: true,
+              action: "choose_option",
+              optionId,
             })
-          }
-          summary={
-            <p className="text-sm">
-              {mealOfferLabel(meals, proposal.offerId)} —{" "}
-              <span className="font-semibold">{formatEuroMinor(proposal.partyTotalMinor)}</span>
-            </p>
           }
         />
       </div>
     );
+  }
+
+  const mealService = proposal?.serviceKey;
+  const isMealService =
+    mealService === "breakfast" || mealService === "lunch" || mealService === "dinner";
+  if (
+    (pendingDecision?.kind === "booking_confirmation" ||
+      pendingDecision?.kind === "replacement_confirmation") &&
+    pendingDecision
+  ) {
+    const staleProposalId = proposal?.id ?? pendingDecision.proposalId;
+    if (!proposal || proposal.expired) {
+      return (
+        <div className="flex flex-col gap-6">
+          {banner}
+          <StaleProposalNotice
+            serviceLabel={isMealService && mealService ? mealService : "meal"}
+            busy={busy}
+            canReselect={Boolean(staleProposalId)}
+            onReselect={() => {
+              if (staleProposalId) {
+                void submitResponse(pendingDecision.id, projection.trip.revision, {
+                  action: "reject_proposal",
+                  proposalId: staleProposalId,
+                });
+              }
+            }}
+          />
+        </div>
+      );
+    }
+    if (isMealService && mealService) {
+      return (
+        <div className="flex flex-col gap-6">
+          {banner}
+          <ProposalReview
+            title={`Confirm your ${mealService} reservation`}
+            description="Restaurant reservations are optional. Confirm to create the simulated reservation, or choose a different option."
+            proposal={proposal}
+            reviewLabel="Review reservation"
+            busy={busy}
+            onReview={() => setDialogOpen(true)}
+            onReject={() =>
+              void submitResponse(pendingDecision.id, projection.trip.revision, {
+                action: "reject_proposal",
+                proposalId: proposal.id,
+              })
+            }
+          />
+          <BookingConfirmationDialog
+            open={dialogOpen}
+            heading="Confirm this simulated restaurant booking"
+            busy={busy}
+            error={actionError}
+            onCancel={() => setDialogOpen(false)}
+            onReject={() => {
+              setDialogOpen(false);
+              void submitResponse(pendingDecision.id, projection.trip.revision, {
+                action: "reject_proposal",
+                proposalId: proposal.id,
+              });
+            }}
+            rejectLabel="Choose a different option"
+            onConfirm={() =>
+              void submitResponse(pendingDecision.id, projection.trip.revision, {
+                action: "confirm_booking",
+                proposalId: proposal.id,
+                acceptedDemoDisclaimer: true,
+              })
+            }
+            summary={
+              <p className="text-sm">
+                {mealOfferLabel(meals, proposal.offerId)} —{" "}
+                <span className="font-semibold">{formatEuroMinor(proposal.partyTotalMinor)}</span>
+              </p>
+            }
+          />
+        </div>
+      );
+    }
   }
 
   if (program || confirmedMeals.length > 0) {

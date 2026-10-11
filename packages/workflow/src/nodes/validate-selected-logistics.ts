@@ -20,5 +20,7 @@ export async function validateSelectedLogisticsNode(
     logisticsStatus: result.status,
     logisticsReason: result.reason,
     gate: result.status === "conflict" ? "logistics_conflict" : state.gate,
+    // A conflict opens a typed recovery decision (never an edit).
+    ...(result.status === "conflict" ? { nextDecisionKind: "recovery" } : {}),
   };
 }

@@ -444,6 +444,31 @@ export async function buildTripProjection(
     selectionResult.rows.map((row) => [row.service_key, row.offer_id]),
   );
 
+  // Latest deterministic research reason for dinner (empty = a slot exists) and
+  // the persisted program activity preferences.
+  const dinnerReasonResult = await pool.query<{ explanation: string | null }>(
+    `SELECT explanation FROM odft_app.recommendation_artifacts
+      WHERE trip_id = $1 AND service_key = 'dinner'
+      ORDER BY created_at DESC LIMIT 1`,
+    [tripId],
+  );
+  const dinnerReasonRaw = dinnerReasonResult.rows[0]?.explanation ?? null;
+  const dinnerNotIncludedReason =
+    dinnerReasonRaw && dinnerReasonRaw.length > 0 && !dinnerReasonRaw.startsWith("Deterministic")
+      ? dinnerReasonRaw
+      : null;
+  const preferredResult = await pool.query<{ ranked_offers: unknown }>(
+    `SELECT ranked_offers FROM odft_app.recommendation_artifacts
+      WHERE trip_id = $1 AND service_key = 'activities' AND explanation LIKE 'User program%'
+      ORDER BY created_at DESC LIMIT 1`,
+    [tripId],
+  );
+  const preferredActivityIds = Array.isArray(preferredResult.rows[0]?.ranked_offers)
+    ? (preferredResult.rows[0]?.ranked_offers as unknown[]).filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+
   // Phase 07: hotel/meal offers, effective levels, and program choices.
   const serviceLevels: PublicServiceLevels = {
     hotel: levelState(trip.preferences, "hotel"),
@@ -469,7 +494,8 @@ export async function buildTripProjection(
           (offer) =>
             offer.level === serviceLevels.hotel.level &&
             offer.adults === trip.adults &&
-            offer.nights === nights,
+            offer.nights === nights &&
+            (trip.travelVariant !== "one_night" || offer.luggageStorage),
         )
         .map(toPublicHotel);
       meals = content.restaurants
@@ -492,14 +518,15 @@ export async function buildTripProjection(
           mealDefaults: {
             breakfast: defaultBreakfast,
             lunch: defaultLunch,
-            dinner: pickDefaultId(dinnerOffers),
+            dinner: dinnerNotIncludedReason ? null : pickDefaultId(dinnerOffers),
           },
           selectedMeals: {
             breakfast: selectedByMeal.get("breakfast") ?? null,
             lunch: selectedByMeal.get("lunch") ?? null,
             dinner: selectedByMeal.get("dinner") ?? null,
           },
-          dinnerNotIncludedReason: null,
+          dinnerNotIncludedReason,
+          preferredActivityIds,
           activities,
         };
       }

@@ -41,6 +41,10 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     lastOfferId: null,
     lastProposalId: null,
     lastDecisionId: null,
+    lastOptionId: null,
+    pendingReplacement: false,
+    hasConfirmedFlight: false,
+    hasConfirmedHotel: false,
     // Booking
     reservationId: null,
     demoReference: null,

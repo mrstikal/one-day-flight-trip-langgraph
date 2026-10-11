@@ -21,6 +21,24 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
       gate: "awaiting_booking",
     };
   }
+  if (state.nextDecisionKind === "replacement_confirmation") {
+    return {
+      decisionKind: "replacement_confirmation",
+      proposalId: state.proposalId,
+      allowedOfferIds: state.selectedOfferId ? [state.selectedOfferId] : [],
+      allowedOptionIds: [],
+      gate: "awaiting_booking",
+    };
+  }
+  if (state.nextDecisionKind === "recovery") {
+    return {
+      decisionKind: "recovery",
+      proposalId: null,
+      allowedOfferIds: [],
+      allowedOptionIds: ["change_hotel", "change_meals"],
+      gate: "logistics_conflict",
+    };
+  }
   if (state.nextDecisionKind === "hotel_choice") {
     return {
       decisionKind: "hotel_choice",

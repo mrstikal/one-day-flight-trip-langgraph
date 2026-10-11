@@ -3,7 +3,9 @@ import { BookingService, fingerprint } from "@odft/domain";
 import {
   applyTripCommand,
   evaluateAndPersistRoute,
+  getActiveReservation,
   getTrip,
+  loadTripProgress,
   materializeFlightSnapshot,
   planProgramSelections,
   PostgresBookingStore,
@@ -108,6 +110,29 @@ export function createTravelPortsFactory(
       });
     },
 
+    async replace(input) {
+      const trip = await getTrip(pool, input.tripId);
+      if (!trip) {
+        throw new Error(`trip ${input.tripId} not found while confirming a replacement`);
+      }
+      const active = await getActiveReservation(pool, input.tripId, input.service);
+      if (!active) {
+        throw new Error(`no active ${input.service} reservation to replace`);
+      }
+      return booking.replaceConfirmed({
+        tripId: input.tripId,
+        sessionId: trip.sessionId,
+        proposalId: input.proposalId,
+        decisionId: input.decisionId,
+        operationId: input.operationId,
+        acceptedRevision: input.acceptedRevision,
+        confirmationKey: input.confirmationKey,
+        acceptedDemoDisclaimer: true,
+        affectedReservationId: active.id,
+        fencingToken: ctx.fencingToken,
+      });
+    },
+
     async ensureDomains(tripId) {
       const manifest = await scenarios.ensureDomains(tripId, [...PHASE07_DOMAINS]);
       return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
@@ -122,37 +147,58 @@ export function createTravelPortsFactory(
         tripId: input.tripId,
         mealSelections: input.mealSelections,
       });
+      let firstReplacement: {
+        proposalId: string;
+        service: (typeof plan.replacements)[number]["serviceKey"];
+        sourceFingerprint: string;
+      } | null = null;
       for (const replacement of plan.replacements) {
         const trip = await getTrip(pool, input.tripId);
         if (!trip) {
           throw new Error(`trip ${input.tripId} not found while staging a meal replacement`);
         }
-        await booking.propose({
+        const sourceFingerprint = fingerprint({
+          kind: "replacement_confirmation",
+          tripId: input.tripId,
+          operationId: input.operationId,
+          service: replacement.serviceKey,
+          offerId: replacement.offerId,
+        });
+        const proposal = await booking.propose({
           tripId: input.tripId,
           sessionId: trip.sessionId,
           service: replacement.serviceKey,
           offerId: replacement.offerId,
           operationId: input.operationId,
-          sourceFingerprint: fingerprint({
-            kind: "replacement_confirmation",
-            tripId: input.tripId,
-            operationId: input.operationId,
-            service: replacement.serviceKey,
-            offerId: replacement.offerId,
-          }),
+          sourceFingerprint,
           fencingToken: ctx.fencingToken,
         });
+        firstReplacement ??= {
+          proposalId: proposal.proposalId,
+          service: replacement.serviceKey,
+          sourceFingerprint,
+        };
       }
       await upsertProgramSelections(pool, input.tripId, plan.selections);
       await recordPreferredActivities(pool, {
         tripId: input.tripId,
         preferredActivityIds: input.preferredActivityIds,
       });
-      return { applied: true, replacementStaged: plan.replacements.length > 0 };
+      return {
+        applied: true,
+        replacementStaged: firstReplacement !== null,
+        replacementProposalId: firstReplacement?.proposalId ?? null,
+        replacementService: firstReplacement?.service ?? null,
+        replacementSourceFingerprint: firstReplacement?.sourceFingerprint ?? null,
+      };
     },
 
     async validateSelectedLogistics(input) {
       return validateTripLogistics(pool, input.tripId);
+    },
+
+    async loadProgress(tripId) {
+      return loadTripProgress(pool, tripId);
     },
   });
 }

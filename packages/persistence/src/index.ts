@@ -11,7 +11,12 @@ export type { CreatePoolOptions } from "./pool.js";
 export { listMigrationVersions, MIGRATION_VERSIONS, runMigrations } from "./migrate.js";
 export type { MigrationResult } from "./migrate.js";
 
-export { CHECKPOINT_SCHEMA, CHECKPOINT_TABLES, setupCheckpointer, verifyCheckpointerSetup } from "./checkpointer-setup.js";
+export {
+  CHECKPOINT_SCHEMA,
+  CHECKPOINT_TABLES,
+  setupCheckpointer,
+  verifyCheckpointerSetup,
+} from "./checkpointer-setup.js";
 
 export { createWorkerIdentity, writeWorkerHeartbeat } from "./heartbeat.js";
 export type { WorkerIdentity } from "./heartbeat.js";
@@ -78,7 +83,12 @@ export {
   supersedeReservation,
 } from "./reservations.js";
 
-export { insertDecision, getPendingDecisionForTrip, loadDecision, resolveDecision } from "./decisions.js";
+export {
+  insertDecision,
+  getPendingDecisionForTrip,
+  loadDecision,
+  resolveDecision,
+} from "./decisions.js";
 export type { InsertDecisionInput } from "./decisions.js";
 
 export { PostgresBookingStore } from "./booking-store.js";
@@ -93,8 +103,18 @@ export {
 } from "./operations/claim.js";
 export type { ClaimedOperation, ClaimedOperationKind, ClaimOptions } from "./operations/claim.js";
 
-export { finalizeConflict, finalizeFailure, finalizeSuccess, finalizeWaiting } from "./operations/finalize.js";
-export type { FailureSpec, FinalizeFence, SuccessSpec, WaitingSpec } from "./operations/finalize.js";
+export {
+  finalizeConflict,
+  finalizeFailure,
+  finalizeSuccess,
+  finalizeWaiting,
+} from "./operations/finalize.js";
+export type {
+  FailureSpec,
+  FinalizeFence,
+  SuccessSpec,
+  WaitingSpec,
+} from "./operations/finalize.js";
 
 export { completeOperation, releaseClaim, renewLease } from "./operations/lease.js";
 export type { CompleteOperationInput } from "./operations/lease.js";
@@ -110,10 +130,7 @@ export {
 export type { OperationFencingContext, OperationOwnership } from "./operations/fencing.js";
 
 export { retryOperation, setRecoveryRequired } from "./operations/control.js";
-export type {
-  RetryOperationOptions,
-  RetryOperationResult,
-} from "./operations/control.js";
+export type { RetryOperationOptions, RetryOperationResult } from "./operations/control.js";
 
 export { GRAPH_VERSION, admitOperation, admitResume, createTrip, withEffect } from "./admission.js";
 export type {
@@ -125,7 +142,12 @@ export type {
   CreateTripResult,
 } from "./admission.js";
 
-export { buildRouteInputs, buildSnapshotContext, HUB_IATAS, TRANSFER_POLICY } from "./scenario/route-inputs.js";
+export {
+  buildRouteInputs,
+  buildSnapshotContext,
+  HUB_IATAS,
+  TRANSFER_POLICY,
+} from "./scenario/route-inputs.js";
 
 export { materializeFlightSnapshot } from "./scenario/flight-materialization.js";
 export type { MaterializedFlightSnapshot } from "./scenario/flight-materialization.js";
@@ -168,6 +190,9 @@ export type { ApplyTripCommandResult } from "./trip-commands.js";
 
 export {
   dinnerSlotAvailable,
+  loadPreferredActivityIds,
+  loadTripProgress,
+  parseClock,
   planProgramSelections,
   recordPreferredActivities,
   researchTripServices,
@@ -180,5 +205,6 @@ export type {
   ProgramSelection,
   ResearchMeal,
   TripLogisticsResult,
+  TripProgress,
   TripResearchResult,
 } from "./scenario/trip-services.js";

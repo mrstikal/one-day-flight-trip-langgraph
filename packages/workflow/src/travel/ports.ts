@@ -48,6 +48,14 @@ export interface TravelResearchResult {
 export interface TravelProgramResult {
   readonly applied: boolean;
   readonly replacementStaged: boolean;
+  readonly replacementProposalId: string | null;
+  readonly replacementService: BookableKey | null;
+  readonly replacementSourceFingerprint: string | null;
+}
+
+export interface TravelProgress {
+  readonly flightConfirmed: boolean;
+  readonly hotelConfirmed: boolean;
 }
 
 export interface TravelLogisticsResult {
@@ -88,6 +96,16 @@ export interface TravelPorts {
     acceptedRevision: number;
     confirmationKey: string;
   }): Promise<ReservationResult>;
+  /** Replace a confirmed reservation with a staged replacement proposal. */
+  replace(input: {
+    tripId: string;
+    operationId: string;
+    service: BookableKey;
+    proposalId: string;
+    decisionId: string;
+    acceptedRevision: number;
+    confirmationKey: string;
+  }): Promise<ReservationResult>;
 
   /** Phase 07: idempotently materialize hotels/breakfast/lunch/dinner/activities. */
   ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;
@@ -102,6 +120,8 @@ export interface TravelPorts {
   }): Promise<TravelProgramResult>;
   /** Phase 07: deterministic hotel/airport transfer and confirmed-meal window check. */
   validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;
+  /** Confirmed flight/hotel progress so a preference change resumes at the right step. */
+  loadProgress(tripId: string): Promise<TravelProgress>;
 }
 
 export type { ProposalStatus };

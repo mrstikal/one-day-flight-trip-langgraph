@@ -65,19 +65,29 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       submittedActivityIds: response.preferredActivityIds,
     };
   }
-  if (kind === "booking_confirmation") {
+  if (kind === "booking_confirmation" || kind === "replacement_confirmation") {
     if (response.action === "confirm_booking") {
       return {
         ...base,
         lastAction: "confirm_booking",
         lastProposalId: response.proposalId,
         selectedOfferId: state.selectedOfferId,
+        pendingReplacement: kind === "replacement_confirmation",
       };
     }
     if (response.action === "reject_proposal") {
       return { ...base, lastAction: "reject_proposal", lastProposalId: response.proposalId };
     }
     throw new InvalidUpdateError("booking confirmation accepts confirm_booking or reject_proposal");
+  }
+  if (kind === "recovery") {
+    if (
+      response.action !== "choose_option" ||
+      !state.allowedOptionIds.includes(response.optionId)
+    ) {
+      throw new InvalidUpdateError("recovery accepts one of the offered options");
+    }
+    return { ...base, lastAction: "choose_option", lastOptionId: response.optionId };
   }
   return { ...base, lastAction: response.action };
 }

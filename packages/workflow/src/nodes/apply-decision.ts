@@ -9,6 +9,20 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "commit" };
     case "submit_program":
       return { pendingStage: "program" };
+    case "choose_option": {
+      // Recovery decision: re-open the affected choice step without editing data.
+      const kind = state.lastOptionId === "change_meals" ? "program_choices" : "hotel_choice";
+      return {
+        pendingStage: "reselection",
+        nextDecisionKind: kind,
+        proposalId: null,
+        selectedOfferId: null,
+        decisionFingerprint: null,
+        bookingService: null,
+        logisticsStatus: "pending",
+        logisticsReason: null,
+      };
+    }
     case "reject_proposal": {
       // An optional meal reservation is a standalone review: rejecting it ends the
       // run. Flight/hotel rejections return to that service's choice step.

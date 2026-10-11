@@ -8,6 +8,7 @@ import { validateSchedulesNode } from "../nodes/validate-schedules.js";
 import { ensureDomainsNode } from "../nodes/ensure-domains.js";
 import { researchServicesNode } from "../nodes/research-services.js";
 import { validateSelectedLogisticsNode } from "../nodes/validate-selected-logistics.js";
+import { detectProgressNode } from "../nodes/detect-progress.js";
 import { prepareDecisionNode } from "../nodes/prepare-decision.js";
 import { awaitDecisionNode } from "../nodes/await-decision.js";
 import { applyDecisionNode } from "../nodes/apply-decision.js";
@@ -56,9 +57,22 @@ export function routeAfterSchedules(state: TravelState): string {
   return "prepare_decision";
 }
 
-/** A `propose_selection` command skips feasibility and opens a confirmation. */
+/** A `propose_selection` command skips feasibility and opens a confirmation; a
+ * `set_program` command applies the program directly. Everything else first reads
+ * the confirmed progress so a preference change resumes at the relevant step. */
 export function routeAfterApplyCommands(state: TravelState): string {
-  return state.commandType === "propose_selection" ? "stage_command_proposal" : "validate_route";
+  if (state.commandType === "propose_selection") {
+    return "stage_command_proposal";
+  }
+  if (state.commandType === "set_program") {
+    return "apply_program";
+  }
+  return "detect_progress";
+}
+
+/** With a confirmed flight, re-derive the non-flight steps; otherwise run feasibility. */
+export function routeAfterDetectProgress(state: TravelState): string {
+  return state.hasConfirmedFlight ? "ensure_domains" : "validate_route";
 }
 
 export function routeAfterApplyDecision(state: TravelState): string {
@@ -98,9 +112,16 @@ export function routeAfterApplyProgram(): string {
 
 export function routeAfterLogistics(state: TravelState): string {
   if (state.logisticsStatus === "conflict") {
-    return "publish_summary";
+    return "prepare_decision";
   }
-  return state.nextDecisionKind === "program_choices" ? "prepare_decision" : "publish_summary";
+  if (
+    state.nextDecisionKind === "program_choices" ||
+    state.nextDecisionKind === "replacement_confirmation" ||
+    state.nextDecisionKind === "recovery"
+  ) {
+    return "prepare_decision";
+  }
+  return "publish_summary";
 }
 
 export interface BuildTravelGraphOptions {
@@ -111,6 +132,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
   const builder = new StateGraph(travelStateSchema)
     .addNode("load_context", loadContextNode)
     .addNode("apply_commands", applyCommandsNode)
+    .addNode("detect_progress", detectProgressNode)
     .addNode("validate_route", validateRouteNode)
     .addNode("generate_flights", generateFlightsNode)
     .addNode("validate_schedules", validateSchedulesNode)
@@ -129,6 +151,11 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
     .addEdge("load_context", "apply_commands")
     .addConditionalEdges("apply_commands", routeAfterApplyCommands, [
       "stage_command_proposal",
+      "apply_program",
+      "detect_progress",
+    ])
+    .addConditionalEdges("detect_progress", routeAfterDetectProgress, [
+      "ensure_domains",
       "validate_route",
     ])
     .addConditionalEdges("validate_route", routeAfterValidation, [

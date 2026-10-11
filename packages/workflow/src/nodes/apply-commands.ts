@@ -27,5 +27,13 @@ export async function applyCommandsNode(
       command: parsed.data,
     }),
   );
+  if (parsed.data.type === "set_program") {
+    // Carry the admitted program payload into apply_program (a command is a
+    // request, so it applies deterministically just like submit_program).
+    return {
+      submittedMealSelections: parsed.data.mealOfferIds,
+      submittedActivityIds: parsed.data.preferredActivityIds,
+    };
+  }
   return {};
 }
