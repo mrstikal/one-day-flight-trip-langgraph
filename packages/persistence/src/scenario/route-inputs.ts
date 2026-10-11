@@ -10,6 +10,7 @@ import {
   type RouteHub,
   type RouteInputs,
   type RouteIslandException,
+  type SnapshotContext,
   type TripRecord,
 } from "@odft/contracts";
 import {
@@ -294,4 +295,48 @@ export async function buildRouteInputs(
     adults: trip.adults,
     transfer: TRANSFER_POLICY,
   } satisfies RouteInputs;
+}
+
+/** Deterministic city size factor used by synthetic generation (05 section 8). */
+const CURATED_CITY_FACTORS: Readonly<Record<string, number>> = {
+  Paris: 1.3,
+  Barcelona: 1.1,
+};
+
+/**
+ * Build the snapshot generation context from the live trip and its route inputs.
+ * Reads the reference city row for the display name, coverage, and size factor.
+ */
+export async function buildSnapshotContext(
+  client: Queryable,
+  trip: Pick<
+    TripRecord,
+    | "destinationCityId"
+    | "destinationCountryKey"
+    | "sightseeingDate"
+    | "travelVariant"
+    | "adults"
+  >,
+  inputs: RouteInputs,
+): Promise<SnapshotContext> {
+  const cityResult = await client.query<{ name: string; coverage_flag: string }>(
+    `SELECT name, coverage_flag FROM odft_app.reference_cities WHERE id = $1`,
+    [trip.destinationCityId],
+  );
+  const row = cityResult.rows[0];
+  const cityZone = inputs.destination.zone ?? "UTC";
+  return {
+    destinationCityId: trip.destinationCityId,
+    countryKey: trip.destinationCountryKey,
+    cityName: row?.name ?? "City",
+    center: { lat: inputs.destination.lat, lon: inputs.destination.lon },
+    envelopeRadiusKm: 16,
+    cityZone,
+    cityFactor: CURATED_CITY_FACTORS[row?.name ?? ""] ?? 1.0,
+    sightseeingDate: trip.sightseeingDate,
+    travelVariant: trip.travelVariant,
+    adults: trip.adults,
+    isCurated: row?.coverage_flag === "curated_landmarks",
+    referenceVersion: REFERENCE_VERSION,
+  };
 }

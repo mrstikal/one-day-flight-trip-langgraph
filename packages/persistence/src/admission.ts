@@ -448,6 +448,24 @@ export async function admitResume(
       await client.query("ROLLBACK");
       return error("STALE_DECISION", "the selected option is not offered by the pending decision");
     }
+    // `choose_offer` must select a combination/offer the decision actually offered.
+    if (
+      request.response.action === "choose_offer" &&
+      Array.isArray(decision.allowedOfferIds) &&
+      !decision.allowedOfferIds.includes(request.response.offerId)
+    ) {
+      await client.query("ROLLBACK");
+      return error("STALE_DECISION", "the selected offer is not offered by the pending decision");
+    }
+    // A confirmation must target the proposal the pending decision is bound to.
+    if (
+      request.response.action === "confirm_booking" &&
+      decision.proposalId &&
+      decision.proposalId !== request.response.proposalId
+    ) {
+      await client.query("ROLLBACK");
+      return error("STALE_DECISION", "the confirmation does not match the pending proposal");
+    }
 
     const operation = await insertOperation(client, {
       tripId,

@@ -32,5 +32,7 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    // The end-to-end suite must run in deterministic fixture mode (AC-06-10).
+    env: { AI_MODE: "fixture" },
   },
 });

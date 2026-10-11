@@ -14,9 +14,10 @@ import {
   type ClaimedOperation,
   type ServerConfig,
 } from "@odft/persistence";
-import { buildHarnessGraph } from "@odft/workflow";
+import { buildHarnessGraph, buildTravelGraph, buildTravelStartInput, chooseInvocation, TRAVEL_GRAPH_VERSION } from "@odft/workflow";
 import type { OperationDriver } from "../../../apps/worker/src/driver.js";
 import { createOperationDriver } from "../../../apps/worker/src/driver.js";
+import { createTravelPortsFactory } from "../../../apps/worker/src/travel/ports.js";
 import { createFixtureSession } from "../../fixtures/session.js";
 import { fixtureCreationInput } from "../../fixtures/trip.js";
 import { requireTestDatabaseUrl } from "../booking/_setup.js";
@@ -92,6 +93,36 @@ export function createHarnessDriver(pools: WorkerPools): OperationDriver {
     buildGraph: (checkpointer) => buildHarnessGraph({ checkpointer }) as never,
     buildSaver: () => new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA }),
   });
+}
+
+/** Production travel-graph driver over the given worker pools (Phase 06). */
+export function createTravelDriver(pools: WorkerPools): OperationDriver {
+  return createOperationDriver({
+    operationsPool: pools.operations,
+    guardPool: pools.guard,
+    saverPool: pools.saver,
+    lockPool: pools.lock,
+    workerId: "test-worker",
+    leaseMs: 30_000,
+    graphVersion: TRAVEL_GRAPH_VERSION,
+    logger: (record) => {
+      if (record.level === "warn" || record.level === "error") {
+        process.stderr.write(`[driver] ${JSON.stringify(record)}\n`);
+      }
+    },
+    buildGraph: (checkpointer) => buildTravelGraph({ checkpointer }) as never,
+    portsFactory: (ctx) => createTravelPortsFactory(pools.operations)(ctx),
+    chooseInvocation: (state, operation, options) =>
+      chooseInvocation(state, operation, { ...options, buildStartInput: buildTravelStartInput }),
+    buildSaver: () => new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA }),
+  });
+}
+
+/** Read the persisted travel-graph checkpoint state for a trip (no writes). */
+export async function readTravelState(pools: WorkerPools, tripId: string) {
+  const saver = new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA });
+  const graph = buildTravelGraph({ checkpointer: saver });
+  return graph.getState({ configurable: { thread_id: tripId } });
 }
 
 /** Claim the next ready operation, failing the test if none is available. */

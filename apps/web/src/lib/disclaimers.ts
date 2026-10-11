@@ -3,5 +3,3 @@ export const DEMO_DISCLAIMER =
 
 export const CONFIRMATION_DISCLAIMER =
   "Simulated booking - not valid for travel, accommodation, or restaurant admission.";
-
-export const SCAFFOLD_STATUS = "Scaffold - travel planning is not implemented yet";

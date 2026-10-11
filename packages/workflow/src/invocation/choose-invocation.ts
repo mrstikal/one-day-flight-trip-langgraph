@@ -1,4 +1,6 @@
 import {
+  DECISION_ALLOWED_ACTIONS,
+  decisionKindSchema,
   graphResumeEnvelopeSchema,
   resumeRequestSchema,
   type GraphResumeEnvelope,
@@ -41,6 +43,11 @@ export type InvocationChoice =
 export interface ChooseInvocationOptions {
   /** The decision id of the trip's current pending decision, if any. */
   readonly pendingDecisionId?: string;
+  /**
+   * Graph-specific plain start-input builder (never a resume). Defaults to the
+   * Phase 05 harness shape; the production travel graph injects its own.
+   */
+  readonly buildStartInput?: (operation: InvocationOperation) => Record<string, unknown>;
 }
 
 const DEFAULT_HARNESS_DOMAINS: HarnessDomain[] = ["hotel", "dinner", "attractions"];
@@ -51,7 +58,7 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function buildStartInput(operation: InvocationOperation): Record<string, unknown> {
+function buildHarnessStartInput(operation: InvocationOperation): Record<string, unknown> {
   const payload = asRecord(operation.payload);
   const requested = Array.isArray(payload.requiredDomains) ? payload.requiredDomains : undefined;
   const parsed = requested
@@ -92,6 +99,7 @@ export function chooseInvocation(
   operation: InvocationOperation,
   options: ChooseInvocationOptions = {},
 ): InvocationChoice {
+  const buildStartInput = options.buildStartInput ?? buildHarnessStartInput;
   // No checkpoint (new thread, or crash before the first invoke): run the
   // original persisted input exactly once under the same operation effect keys.
   if (!hasPersistedState(state) || state === null) {
@@ -111,6 +119,23 @@ export function chooseInvocation(
       }
       if (options.pendingDecisionId && envelope.decisionId !== options.pendingDecisionId) {
         return { kind: "conflict", message: "resume does not match the current pending decision" };
+      }
+      // A single run may hold two sequential interrupts (e.g. flight_choice then
+      // booking_confirmation). Until the driver commits the new wait, the DB may
+      // still hold the previous decision, so replaying the stored envelope
+      // against the *current* interrupt must be refused when its action cannot
+      // answer that kind — restore the waiting projection instead.
+      const currentKind = decisionKindSchema.safeParse(
+        (state.interrupts[0]?.value as { kind?: unknown } | undefined)?.kind,
+      );
+      if (
+        currentKind.success &&
+        !DECISION_ALLOWED_ACTIONS[currentKind.data].includes(envelope.response.action)
+      ) {
+        return {
+          kind: "waiting",
+          reason: "stored resume cannot answer the current interrupt; restore the waiting projection",
+        };
       }
       return { kind: "resume", envelope };
     }

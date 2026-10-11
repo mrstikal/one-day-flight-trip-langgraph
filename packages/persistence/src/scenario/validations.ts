@@ -3,14 +3,16 @@ import type { Pool, PoolClient } from "pg";
 import {
   routeValidationSchema,
   scheduleValidationSchema,
+  SCHEDULE_RULE_VERSION,
   type FeasibleRouteApproval,
   type RouteValidation,
   type ScheduleValidation,
   type TripRecord,
 } from "@odft/contracts";
-import { computeRouteFingerprint, validateRoute } from "@odft/data";
+import { computeRouteFingerprint, validateRoute, validateSchedules } from "@odft/data";
 import { getTrip } from "../trips.js";
 import { buildRouteInputs } from "./route-inputs.js";
+import { loadSnapshotContent, loadSnapshotManifest } from "./snapshots.js";
 
 /**
  * Persistence for the two feasibility stages (04-domain-model section 4).
@@ -258,4 +260,57 @@ export async function evaluateAndPersistRoute(
   const result = validateRoute(inputs);
   const id = await persistRouteValidation(pool, tripId, result);
   return { id, result: { ...result, id } };
+}
+
+/**
+ * Stage B for the production graph: re-read the persisted snapshot and approval,
+ * run the independent schedule validator, and persist the result as the trip's
+ * current schedule validation. Returns `undefined` when prerequisites are gone.
+ */
+export async function validateAndPersistSchedules(
+  pool: Pool,
+  tripId: string,
+  snapshotId: string,
+): Promise<ScheduleValidation | undefined> {
+  const client = await pool.connect();
+  let inputs: Awaited<ReturnType<typeof buildRouteInputs>>;
+  let approval: FeasibleRouteApproval | undefined;
+  let content: Awaited<ReturnType<typeof loadSnapshotContent>>;
+  let manifest: Awaited<ReturnType<typeof loadSnapshotManifest>>;
+  try {
+    const trip = await getTrip(client, tripId);
+    if (!trip) {
+      return undefined;
+    }
+    inputs = await buildRouteInputs(client, trip);
+    if (!inputs) {
+      return undefined;
+    }
+    approval = await loadFeasibleRouteApproval(client, tripId);
+    if (!approval) {
+      return undefined;
+    }
+    content = await loadSnapshotContent(client, snapshotId);
+    manifest = await loadSnapshotManifest(client, snapshotId);
+  } finally {
+    client.release();
+  }
+  if (!content) {
+    return undefined;
+  }
+  const result = validateSchedules({
+    approval,
+    combinations: content.flights,
+    scenarioKey: content.scenarioKey,
+    flightDomainVersion: manifest.domainVersions.flights,
+    flightDomainHash: manifest.domainContentHashes.flights,
+    scheduleRuleVersion: SCHEDULE_RULE_VERSION,
+    sightseeingDate: inputs.sightseeingDate,
+    travelVariant: inputs.travelVariant,
+    destinationZone: inputs.destination.zone as string,
+    destinationTransferMinutes: approval.approvedPairDetails[0]?.destinationTransferMinutes ?? 0,
+    routeValidationId: approval.routeValidationId,
+  });
+  const id = await persistScheduleValidation(pool, { tripId, snapshotId, result });
+  return { ...result, id };
 }

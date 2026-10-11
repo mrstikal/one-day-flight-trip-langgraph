@@ -224,6 +224,50 @@ export interface ExtensionInput {
   readonly generatedAt?: string;
 }
 
+/**
+ * Insert a full replacement snapshot as the next version, or reuse the latest
+ * version when its content and route fingerprint already match. Route
+ * revalidation after a route change produces a new version; a crash-replay of an
+ * unchanged generation reuses the existing row instead of appending.
+ */
+export async function persistSnapshotVersion(
+  pool: Pool,
+  input: {
+    readonly tripId: string;
+    readonly scenarioId: string;
+    readonly content: SnapshotContent;
+  },
+): Promise<{ readonly manifest: ScenarioManifest; readonly reused: boolean }> {
+  const content = snapshotContentSchema.parse(input.content);
+  assertSnapshotBounded(content);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const latest = await loadLatestSnapshotRow(client, input.tripId);
+    if (latest) {
+      const latestContent = snapshotContentSchema.parse(latest.inventory);
+      if (
+        latestContent.scenarioKey === content.scenarioKey &&
+        latestContent.routeFingerprint === content.routeFingerprint &&
+        JSON.stringify(latestContent.flights) === JSON.stringify(content.flights)
+      ) {
+        await client.query("COMMIT");
+        return { manifest: scenarioManifestSchema.parse(latest.manifest), reused: true };
+      }
+    }
+    const previous = latest ? scenarioManifestSchema.parse(latest.manifest) : undefined;
+    const manifest = buildManifest(randomUUID(), content, content.routeFingerprint, input.scenarioId, previous);
+    await insertSnapshot(client, input.tripId, content, manifest);
+    await client.query("COMMIT");
+    return { manifest, reused: false };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /** Append a new snapshot version with the given domain additions. */
 export async function extendSnapshot(pool: Pool, input: ExtensionInput): Promise<ScenarioManifest> {
   const client = await pool.connect();

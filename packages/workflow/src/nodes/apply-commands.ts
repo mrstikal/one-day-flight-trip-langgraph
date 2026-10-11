@@ -1,0 +1,31 @@
+import { domainCommandSchema } from "@odft/contracts";
+import type { TravelState, TravelUpdate } from "../travel/state.js";
+import { travelPorts } from "../travel/runtime.js";
+
+/**
+ * Apply the admitted command to the trip's route/preferences. A creation run
+ * already persisted its route inputs, so it has nothing to apply here. The
+ * effect ledger makes a crash-replay re-apply nothing (idempotent values).
+ */
+export async function applyCommandsNode(
+  state: TravelState,
+  runtime: unknown,
+): Promise<TravelUpdate> {
+  if (state.operationKind === "start") {
+    return {};
+  }
+  const parsed = domainCommandSchema.safeParse(state.commandPayload);
+  if (!parsed.success) {
+    // Non-domain payloads (e.g. an unexpected shape) cannot mutate the trip.
+    return {};
+  }
+  const ports = travelPorts(runtime);
+  await ports.runEffect("apply_commands", parsed.data.type, () =>
+    ports.applyCommand({
+      tripId: state.tripId,
+      operationId: state.operationId,
+      command: parsed.data,
+    }),
+  );
+  return {};
+}

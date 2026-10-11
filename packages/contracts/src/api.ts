@@ -4,6 +4,12 @@ import { pendingDecisionSchema, resumeRequestSchema } from "./decisions.js";
 import { operationStatusSchema } from "./enums.js";
 import { uuidSchema } from "./primitives.js";
 import { tripSummarySchema } from "./operations.js";
+import {
+  flightGatingSchema,
+  publicProposalSchema,
+  publicReservationSchema,
+  tripDisplaySchema,
+} from "./projection.js";
 import { admissionAcceptedSchema, commandRequestSchema, creationInputSchema } from "./operations.js";
 
 /** API request/response envelopes shared by the BFF and future handlers. */
@@ -64,7 +70,10 @@ export const publicPendingDecisionSchema = pendingDecisionSchema
     allowedOptionIds: true,
     status: true,
   })
-  .extend({ checkpointId: z.string().min(1).optional() })
+  .extend({
+    checkpointId: z.string().min(1).optional(),
+    proposalId: uuidSchema.optional(),
+  })
   .strict();
 export type PublicPendingDecision = z.infer<typeof publicPendingDecisionSchema>;
 
@@ -84,6 +93,10 @@ export const tripProjectionSchema = z
     trip: tripSummarySchema,
     operations: z.array(operationStatusResponseSchema),
     pendingDecision: publicPendingDecisionSchema.nullable(),
+    flights: flightGatingSchema,
+    proposal: publicProposalSchema.nullable(),
+    reservation: publicReservationSchema.nullable(),
+    display: tripDisplaySchema,
   })
   .strict();
 export type TripProjection = z.infer<typeof tripProjectionSchema>;

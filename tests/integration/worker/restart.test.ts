@@ -9,16 +9,16 @@ import {
   createHarnessTrip,
   createWorkerPools,
   endWorkerPools,
-  readHarnessState,
+  readTravelState,
   requireTestDatabaseUrl,
   resetGraphDatabase,
   type WorkerPools,
 } from "../graph/_setup.js";
 
 /**
- * T-IT-FLT-05: a real new OS process continues a streamed thread across a
- * SIGKILL without duplicating business effects. The thread is durable in the
- * official checkpointer; the fenced worker is only an executor.
+ * T-IT-FLT-05: a real new OS process continues the production travel-graph
+ * thread across a SIGKILL without duplicating business effects. The thread is
+ * durable in the official checkpointer; the fenced worker is only an executor.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
@@ -28,10 +28,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor<T>(
-  probe: () => Promise<T | undefined>,
-  timeoutMs = 20_000,
-): Promise<T> {
+async function waitFor<T>(probe: () => Promise<T | undefined>, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await probe();
@@ -55,13 +52,12 @@ function spawnWorker(): ChildProcess {
     AI_MODE: "fixture",
     WORKER_CONCURRENCY: "1",
   };
-  const child = spawn(TSX, ["--tsconfig", "tsconfig.json", "apps/worker/src/main.ts"], {
+  return spawn(TSX, ["--tsconfig", "tsconfig.json", "apps/worker/src/main.ts"], {
     cwd: REPO_ROOT,
     env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
-  return child;
 }
 
 async function killWorker(child: ChildProcess): Promise<void> {
@@ -78,7 +74,18 @@ async function killWorker(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 }
 
-describe("worker restart across processes", () => {
+async function waitForDecisionKind(
+  pools: WorkerPools,
+  tripId: string,
+  kind: string,
+): Promise<string> {
+  return waitFor(async () => {
+    const decision = await getPendingDecisionForTrip(pools.operations, tripId);
+    return decision && decision.kind === kind ? decision.id : undefined;
+  });
+}
+
+describe("worker restart across processes (travel graph)", () => {
   let pool: Pool;
   let pools: WorkerPools;
 
@@ -94,49 +101,61 @@ describe("worker restart across processes", () => {
   });
 
   it(
-    "continues a thread in a new process without duplicating effects",
+    "continues a travel-graph thread in new processes without duplicating the reservation",
     async () => {
       const { tripId, sessionId } = await createHarnessTrip(pool);
 
-      // First process: drive the creation to the interrupt, then SIGKILL.
+      // First process: drive the creation to the flight-choice interrupt, then SIGKILL.
       const first = spawnWorker();
       try {
-        await waitFor(async () => {
-          const result = await pools.operations.query<{ status: string; id: string }>(
-            `SELECT id, status FROM odft_app.workflow_operations
-              WHERE trip_id = $1 AND kind = 'creation' LIMIT 1`,
-            [tripId],
-          );
-          return result.rows[0]?.status === "waiting" ? result.rows[0] : undefined;
-        });
+        await waitForDecisionKind(pools, tripId, "flight_choice");
       } finally {
         await killWorker(first);
       }
 
-      const firstState = await readHarnessState(pools, tripId);
-      const firstResearch = (firstState.values as Record<string, unknown>).researchResults as Record<
-        string,
-        unknown
-      >;
-      expect(Object.keys(firstResearch)).toHaveLength(3);
-
       const decision = await getPendingDecisionForTrip(pools.operations, tripId);
-      expect(decision).toBeDefined();
+      expect(decision?.allowedOfferIds.length).toBeGreaterThanOrEqual(1);
+      const offerId = decision?.allowedOfferIds[0] as string;
 
-      const admitted = await admitResume(pool, {
+      const chosen = await admitResume(pool, {
         tripId,
         sessionId,
         request: {
           requestId: randomUUID(),
           expectedRevision: 1,
           decisionId: decision?.id ?? "",
-          response: { action: "choose_option", optionId: "continue" },
+          response: { action: "choose_offer", offerId },
         },
       });
-      expect("operationId" in admitted).toBe(true);
+      expect("operationId" in chosen).toBe(true);
 
-      // Second process: continue the same thread to completion.
+      // Second process: stage the proposal and stop at the booking confirmation.
       const second = spawnWorker();
+      try {
+        await waitForDecisionKind(pools, tripId, "booking_confirmation");
+      } finally {
+        await killWorker(second);
+      }
+
+      const confirmation = await getPendingDecisionForTrip(pools.operations, tripId);
+      const confirmed = await admitResume(pool, {
+        tripId,
+        sessionId,
+        request: {
+          requestId: randomUUID(),
+          expectedRevision: 1,
+          decisionId: confirmation?.id ?? "",
+          response: {
+            action: "confirm_booking",
+            proposalId: confirmation?.proposalId as string,
+            acceptedDemoDisclaimer: true,
+          },
+        },
+      });
+      expect("operationId" in confirmed).toBe(true);
+
+      // Third process: commit the booking to completion.
+      const third = spawnWorker();
       try {
         await waitFor(async () => {
           const result = await pools.operations.query<{ workflow_status: string }>(
@@ -146,25 +165,19 @@ describe("worker restart across processes", () => {
           return result.rows[0]?.workflow_status === "ready" ? result.rows[0] : undefined;
         });
       } finally {
-        await killWorker(second);
+        await killWorker(third);
       }
 
-      const finalState = await readHarnessState(pools, tripId);
-      expect((finalState.values as Record<string, unknown>).lastOutcome).toBe("success");
-      const finalResearch = (finalState.values as Record<string, unknown>).researchResults as Record<
-        string,
-        unknown
-      >;
-      // Exactly the three keys, no duplicated domain effects across restarts.
-      expect(Object.keys(finalResearch).sort()).toEqual(Object.keys(firstResearch).sort());
+      const finalState = await readTravelState(pools, tripId);
+      expect(finalState.values.gate).toBe("booked");
 
-      const succeeded = await pools.operations.query<{ count: string }>(
-        `SELECT count(*)::text AS count FROM odft_app.workflow_operations
-          WHERE trip_id = $1 AND status = 'succeeded'`,
+      const reservations = await pools.operations.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM odft_app.reservations
+          WHERE trip_id = $1 AND status = 'confirmed'`,
         [tripId],
       );
-      expect(succeeded.rows[0]?.count).toBe("1");
+      expect(reservations.rows[0]?.count).toBe("1");
     },
-    60_000,
+    90_000,
   );
 });

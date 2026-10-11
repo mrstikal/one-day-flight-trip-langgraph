@@ -38,3 +38,19 @@ export type {
 
 export { reconcileCompleted } from "./invocation/reconcile.js";
 export type { ReconciliationResult } from "./invocation/reconcile.js";
+
+// Production travel graph (Phase 06).
+export {
+  DECISION_KIND_FOR_STAGE,
+  TRAVEL_GRAPH_VERSION,
+  TRAVEL_SCHEMA_VERSION,
+  travelGateSchema,
+  travelStageSchema,
+  travelStartInputSchema,
+  travelStateSchema,
+} from "./travel/state.js";
+export type { TravelGate, TravelStage, TravelStartInput, TravelState, TravelUpdate } from "./travel/state.js";
+export { buildTravelGraph, routeAfterApplyDecision, routeAfterGeneration, routeAfterSchedules, routeAfterValidation } from "./travel/graph.js";
+export type { BuildTravelGraphOptions } from "./travel/graph.js";
+export { buildTravelStartInput } from "./travel/start-input.js";
+export type { TravelMaterializedFlights, TravelPorts, TravelTripContext } from "./travel/ports.js";

@@ -1,49 +1,36 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { startWorker, stopWorker, resetRateLimits } from "./_worker.js";
 
 /**
- * Minimal Phase 05 end-to-end flow: session issuance, a trip whose creation the
- * real worker drives to an interrupt, a command admitted as 202, and the SSE
- * stream opening. It spawns the actual worker process (tsx) against the same
- * PostgreSQL database the web server uses.
- *
- * The SIGKILL restart recipe is covered by the integration worker restart test
- * (`tests/integration/worker/restart.test.ts`), which observes real OS processes.
+ * Production worker end-to-end: session issuance, a trip the real worker drives
+ * through route feasibility, flight generation, and schedule validation to the
+ * flight-choice interrupt, live SSE, and the flight-choice resume. The SIGKILL
+ * restart recipe is covered by the integration worker restart test.
  */
 
-const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const TSX = `${REPO_ROOT}/node_modules/.bin/tsx`;
-const ORIGIN = process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
+const ORIGIN = process.env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000";
+const ORIGIN_AIRPORT = "ourairports:4408"; // PRG
+const DESTINATION_CITY = "geonames:3169070"; // Rome
+const DESTINATION_COUNTRY = "IT";
 
 let worker: ChildProcess | undefined;
 
-test.beforeAll(() => {
-  worker = spawn(TSX, ["--tsconfig", "tsconfig.json", "apps/worker/src/main.ts"], {
-    cwd: REPO_ROOT,
-    env: { ...process.env, AI_MODE: "fixture", WORKER_CONCURRENCY: "1" },
-    stdio: ["ignore", "inherit", "inherit"],
-    detached: true,
-  });
+test.beforeAll(async () => {
+  await resetRateLimits();
+  worker = startWorker();
 });
 
-test.afterAll(() => {
-  if (worker?.pid && worker.exitCode === null && worker.signalCode === null) {
-    try {
-      // Kill the whole process group so the tsx child does not linger.
-      process.kill(-worker.pid, "SIGKILL");
-    } catch {
-      worker.kill("SIGKILL");
-    }
-  }
+test.afterAll(async () => {
+  await stopWorker(worker);
 });
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-test("session, worker-driven interrupt, command admission (202), and SSE stream", async ({
+test("worker drives PRG -> Rome to a flight choice and the resume is admitted", async ({
   request,
   baseURL,
 }) => {
@@ -52,57 +39,45 @@ test("session, worker-driven interrupt, command admission (202), and SSE stream"
   const session = (await sessionRes.json()) as { sessionId: string; csrfToken: string };
   const cookie = sessionRes.headers()["set-cookie"]?.split(";")[0] ?? "";
 
-  const countries = (await (await request.get("/api/reference/countries")).json()) as {
-    items: Array<{ countryKey: string }>;
-  };
-  expect(countries.items.length).toBeGreaterThan(0);
-  const countryKey = countries.items[0]?.countryKey as string;
-
-  const cities = (await (
-    await request.get(`/api/reference/cities?country=${countryKey}`)
-  ).json()) as { items: Array<{ id: string }> };
-  expect(cities.items.length).toBeGreaterThan(0);
-
-  const airports = (await (await request.get("/api/reference/airports")).json()) as {
-    items: Array<{ id: string }>;
-  };
-  expect(airports.items.length).toBeGreaterThan(0);
-
   const created = await request.post("/api/trips", {
     headers: { origin: ORIGIN, "x-csrf-token": session.csrfToken },
     data: {
       creationRequestId: randomUUID(),
       userName: "E2E Traveller",
-      adults: 1,
-      originAirportId: airports.items[0]?.id,
-      destinationCityId: cities.items[0]?.id,
-      destinationCountryKey: countryKey,
+      adults: 2,
+      originAirportId: ORIGIN_AIRPORT,
+      destinationCityId: DESTINATION_CITY,
+      destinationCountryKey: DESTINATION_COUNTRY,
       sightseeingDate: "2026-12-01",
-      travelVariant: "one_night",
+      travelVariant: "two_nights",
     },
   });
   expect(created.status()).toBe(201);
   const trip = (await created.json()) as { tripId: string; operationId: string };
 
-  // The worker drives the creation operation to the interrupt (waiting_user).
   let status = "";
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const operationStatus = (await (
       await request.get(`/api/trips/${trip.tripId}/operations/${trip.operationId}`)
     ).json()) as { status: string };
     status = operationStatus.status;
-    if (status === "waiting") {
+    if (status === "waiting" || status === "succeeded") {
       break;
     }
     await sleep(250);
   }
   expect(status).toBe("waiting");
 
-  const command = await request.post(`/api/trips/${trip.tripId}/commands`, {
-    headers: { origin: ORIGIN, "x-csrf-token": session.csrfToken },
-    data: { requestId: randomUUID(), expectedRevision: 1, command: { type: "retry_failed_domains" } },
-  });
-  expect(command.status()).toBe(202);
+  const projection = (await (
+    await request.get(`/api/trips/${trip.tripId}`, { headers: { cookie } })
+  ).json()) as {
+    flights: { routeStatus: string; scheduleStatus: string; offers: Array<{ id: string }> };
+    pendingDecision: { id: string; kind: string } | null;
+  };
+  expect(projection.flights.routeStatus).toBe("FEASIBLE");
+  expect(projection.flights.scheduleStatus).toBe("VALID");
+  expect(projection.flights.offers.length).toBeGreaterThanOrEqual(1);
+  expect(projection.pendingDecision?.kind).toBe("flight_choice");
 
   const controller = new AbortController();
   const streamRes = await fetch(`${baseURL}/api/trips/${trip.tripId}/events`, {
@@ -114,4 +89,17 @@ test("session, worker-driven interrupt, command admission (202), and SSE stream"
   const first = await reader?.read();
   controller.abort();
   expect(new TextDecoder().decode(first?.value)).toContain("connected");
+
+  const resumed = await request.post(`/api/trips/${trip.tripId}/resume`, {
+    headers: { origin: ORIGIN, "x-csrf-token": session.csrfToken },
+    data: {
+      expectedRevision: 1,
+      decisionId: projection.pendingDecision?.id,
+      response: {
+        action: "choose_offer",
+        offerId: projection.flights.offers[0]?.id,
+      },
+    },
+  });
+  expect(resumed.status()).toBe(202);
 });

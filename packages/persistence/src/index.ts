@@ -125,7 +125,10 @@ export type {
   CreateTripResult,
 } from "./admission.js";
 
-export { buildRouteInputs, HUB_IATAS, TRANSFER_POLICY } from "./scenario/route-inputs.js";
+export { buildRouteInputs, buildSnapshotContext, HUB_IATAS, TRANSFER_POLICY } from "./scenario/route-inputs.js";
+
+export { materializeFlightSnapshot } from "./scenario/flight-materialization.js";
+export type { MaterializedFlightSnapshot } from "./scenario/flight-materialization.js";
 
 export {
   currentApprovalGuard,
@@ -135,6 +138,7 @@ export {
   loadScheduleValidation,
   persistRouteValidation,
   persistScheduleValidation,
+  validateAndPersistSchedules,
 } from "./scenario/validations.js";
 export type {
   ApprovalGuardState,
@@ -149,6 +153,7 @@ export {
   loadSnapshotContent,
   loadSnapshotManifest,
   persistSnapshot,
+  persistSnapshotVersion,
   PostgresSnapshotSource,
   ScenarioService,
   scenarioUuid,
@@ -157,3 +162,6 @@ export type { ExtensionInput } from "./scenario/snapshots.js";
 
 export { loadOverlay, upsertFault } from "./scenario/faults.js";
 export type { UpsertFaultInput } from "./scenario/faults.js";
+
+export { applyTripCommand } from "./trip-commands.js";
+export type { ApplyTripCommandResult } from "./trip-commands.js";

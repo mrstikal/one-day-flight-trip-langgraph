@@ -23,7 +23,10 @@ export async function GET(
     return errorResponse("UNAUTHORIZED", "missing or expired session", {}, 401);
   }
   const { id } = await context.params;
-  const projection = await buildTripProjection(deps.pool, id);
+  const projection = await buildTripProjection(deps.pool, id, {
+    aiMode: deps.config.aiMode,
+    demoControlsEnabled: deps.config.demoControlsEnabled,
+  });
   if (!projection || projection.trip.sessionId !== session.sessionId) {
     return notFoundResponse();
   }

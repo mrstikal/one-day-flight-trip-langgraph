@@ -17,11 +17,11 @@ function completedView(operationId?: string): CheckpointView {
   };
 }
 
-function interruptedView(operationId?: string): CheckpointView {
+function interruptedView(operationId?: string, kind = "clarification"): CheckpointView {
   return {
     values: { tripId, ...(operationId ? { operationId } : {}) },
     next: [],
-    interrupts: [{ id: "int-1", value: { kind: "clarification" } }],
+    interrupts: [{ id: "int-1", value: { kind } }],
   };
 }
 
@@ -101,6 +101,37 @@ describe("chooseInvocation", () => {
     const operation = commandOp();
     const choice = chooseInvocation(interruptedView(operation.id), operation);
     expect(choice.kind).toBe("waiting");
+  });
+
+  it("B1 regression: a stored resume that cannot answer the current interrupt restores waiting", () => {
+    // A single travel-graph run holds two sequential interrupts. After a crash
+    // before the driver commits the second wait, the DB still holds the previous
+    // decision while the checkpoint is at the next interrupt. Replaying the old
+    // `choose_offer` envelope against `booking_confirmation` must NOT resume.
+    const operation: InvocationOperation = {
+      id: randomUUID(),
+      tripId,
+      kind: "decision",
+      acceptedRevision: 1,
+      payload: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId: randomUUID(),
+        response: { action: "choose_offer", offerId: "offer-1" },
+      },
+    };
+    const choice = chooseInvocation(interruptedView(operation.id, "booking_confirmation"), operation, {
+      pendingDecisionId: (operation.payload as { decisionId: string }).decisionId,
+    });
+    expect(choice.kind).toBe("waiting");
+  });
+
+  it("resumes when the stored resume action matches the current interrupt kind", () => {
+    const operation = decisionOp();
+    const choice = chooseInvocation(interruptedView(operation.id, "clarification"), operation, {
+      pendingDecisionId: (operation.payload as { decisionId: string }).decisionId,
+    });
+    expect(choice.kind).toBe("resume");
   });
 
   it("rejects a NEW command admitted while an interrupt is pending (never silently swallowed)", () => {

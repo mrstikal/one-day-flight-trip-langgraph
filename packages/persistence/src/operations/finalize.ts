@@ -26,6 +26,10 @@ export interface WaitingSpec {
   readonly allowedOptionIds: readonly string[];
   readonly graphVersion: string;
   readonly createdRevision: number;
+  /** Proposal a confirmation decision is bound to (booking/replacement decisions). */
+  readonly proposalId?: string;
+  /** Offer ids a `choose_offer` response may select. */
+  readonly allowedOfferIds?: readonly string[];
 }
 
 async function transitionOperation(
@@ -75,8 +79,8 @@ export async function finalizeWaiting(
     await client.query(
       `INSERT INTO odft_app.pending_decisions
          (id, trip_id, kind, thread_id, graph_version, created_revision, source_fingerprint,
-          allowed_offer_ids, allowed_option_ids, payload_hash, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, '[]'::jsonb, $8::jsonb, $7, 'pending')
+          proposal_id, allowed_offer_ids, allowed_option_ids, payload_hash, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $7, 'pending')
        ON CONFLICT DO NOTHING`,
       [
         randomUUID(),
@@ -86,6 +90,8 @@ export async function finalizeWaiting(
         spec.graphVersion,
         spec.createdRevision,
         spec.fingerprint,
+        spec.proposalId ?? null,
+        JSON.stringify(spec.allowedOfferIds ?? []),
         JSON.stringify(spec.allowedOptionIds),
       ],
     );

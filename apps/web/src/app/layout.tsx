@@ -1,14 +1,28 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
-import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
+import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
+import { getServerDeps } from "@/lib/server";
 
 export const metadata: Metadata = {
   title: "AI Travel Planner",
   description: "Demo AI travel planner for one sightseeing day in a European city.",
 };
 
+/** Visible AI-mode banner (08 section 1): fixture vs live AI mode. */
+function aiModeBanner(): string | null {
+  try {
+    const { config } = getServerDeps();
+    return config.aiMode === "fixture"
+      ? "Deterministic fixture mode - no live AI calls"
+      : "OpenRouter mode - recommendations may call the configured model";
+  } catch {
+    return null;
+  }
+}
+
 export default function RootLayout({ children }: { readonly children: ReactNode }) {
+  const banner = aiModeBanner();
   return (
     <html lang="en">
       <body className="flex min-h-screen flex-col bg-cream text-ink">
@@ -24,15 +38,23 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
             <p role="note" className="text-sm text-clay">
               {DEMO_DISCLAIMER}
             </p>
+            {banner ? (
+              <p data-testid="ai-mode-banner" role="note" className="text-sm text-ink-muted">
+                {banner}
+              </p>
+            ) : null}
           </div>
         </header>
         <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
           {children}
         </main>
         <footer className="border-t border-border bg-paper">
-          <div className="mx-auto max-w-5xl px-4 py-4">
+          <div className="mx-auto flex max-w-5xl flex-col gap-1 px-4 py-4">
             <p role="note" className="text-sm text-ink-muted">
               {DEMO_DISCLAIMER}
+            </p>
+            <p role="note" className="text-sm text-ink-muted">
+              {CONFIRMATION_DISCLAIMER}
             </p>
           </div>
         </footer>

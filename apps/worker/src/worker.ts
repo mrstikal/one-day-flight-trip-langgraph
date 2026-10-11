@@ -8,20 +8,31 @@ import {
   DEFAULT_LEASE_MS,
   parseServerConfig,
   writeWorkerHeartbeat,
+  type OperationFencingContext,
   type ServerConfig,
 } from "@odft/persistence";
-import { buildHarnessGraph } from "@odft/workflow";
+import {
+  buildTravelGraph,
+  buildTravelStartInput,
+  chooseInvocation,
+  TRAVEL_GRAPH_VERSION,
+  type CheckpointView,
+  type ChooseInvocationOptions,
+  type InvocationChoice,
+  type InvocationOperation,
+} from "@odft/workflow";
 import { runClaimLoop } from "./claim.js";
 import { createOperationDriver, type WorkerGraph } from "./driver.js";
+import { createTravelPortsFactory } from "./travel/ports.js";
 import { createShutdownController, type ShutdownController } from "./shutdown.js";
 
 /**
- * Worker entry orchestration (Phase 05).
+ * Worker entry orchestration (Phase 06).
  *
- * Phase 05 has no business planner yet, so the process drives the deterministic
- * test-only durable harness (`@odft/workflow`). It refuses to claim operations
- * until the database, migrations, official checkpointer schema, and a recent
- * worker heartbeat all pass readiness.
+ * The process drives the production travel graph: route feasibility, flight
+ * materialization, schedule validation, the flight/booking decisions, and the
+ * demo reservation. It refuses to claim operations until the database,
+ * migrations, official checkpointer schema, and a recent heartbeat all pass.
  */
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -29,8 +40,16 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 
 export interface RunWorkerOptions {
   readonly server: ServerConfig;
-  /** Graph factory; defaults to the Phase 05 durable harness. */
+  /** Graph factory; defaults to the production travel graph. */
   readonly buildGraph?: (checkpointer: BaseCheckpointSaver) => WorkerGraph;
+  /** Invocation ports factory; defaults to the travel ports. */
+  readonly portsFactory?: (ctx: OperationFencingContext) => unknown;
+  /** Invocation selection; defaults to the travel start-input chooser. */
+  readonly chooseInvocation?: (
+    state: CheckpointView | null,
+    operation: InvocationOperation,
+    options: ChooseInvocationOptions,
+  ) => InvocationChoice;
   readonly workerId?: string;
   readonly leaseMs?: number;
   readonly pollIntervalMs?: number;
@@ -83,7 +102,16 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
   heartbeat.unref();
 
   const buildGraph: (checkpointer: BaseCheckpointSaver) => WorkerGraph =
-    options.buildGraph ?? ((checkpointer) => buildHarnessGraph({ checkpointer }));
+    options.buildGraph ?? ((checkpointer) => buildTravelGraph({ checkpointer }));
+  const portsFactory =
+    options.portsFactory ?? createTravelPortsFactory(operationsPool);
+  const selectInvocation =
+    options.chooseInvocation ??
+    ((state, operation, invocationOptions) =>
+      chooseInvocation(state, operation, {
+        ...invocationOptions,
+        buildStartInput: buildTravelStartInput,
+      }));
 
   try {
     await writeWorkerHeartbeat(operationsPool, identity);
@@ -104,7 +132,7 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       pid: identity.pid,
       concurrency,
       leaseMs,
-      graph: options.buildGraph ? "custom" : "harness",
+      graph: options.buildGraph ? "custom" : "travel",
     });
     options.onStarted?.();
 
@@ -115,11 +143,13 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       lockPool,
       workerId,
       leaseMs,
-      graphVersion: "harness-graph-v0",
+      graphVersion: TRAVEL_GRAPH_VERSION,
       logger,
       buildGraph,
       buildSaver: () =>
         new PostgresSaver(saverPool, undefined, { schema: CHECKPOINT_SCHEMA }),
+      portsFactory,
+      chooseInvocation: selectInvocation,
       signal: shutdown.signal,
     });
 

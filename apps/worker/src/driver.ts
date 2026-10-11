@@ -26,8 +26,10 @@ import {
   chooseInvocation,
   reconcileCompleted,
   type CheckpointView,
+  type ChooseInvocationOptions,
   type HarnessPorts,
   type InvocationChoice,
+  type InvocationOperation,
 } from "@odft/workflow";
 import { FencedSaver } from "./checkpointer/fenced-saver.js";
 import { startLeaseRenewal } from "./lease.js";
@@ -61,6 +63,18 @@ export interface DriverDeps {
   readonly graphVersion: string;
   readonly buildGraph: (checkpointer: BaseCheckpointSaver) => WorkerGraph;
   readonly buildSaver: () => BaseCheckpointSaver;
+  /**
+   * Build the non-checkpointed invocation context (server-side ports). Defaults
+   * to the Phase 05 harness ports. The production travel graph injects richer
+   * ports here.
+   */
+  readonly portsFactory?: (ctx: OperationFencingContext) => unknown;
+  /** Graph-specific invocation selection. Defaults to the harness chooser. */
+  readonly chooseInvocation?: (
+    state: CheckpointView | null,
+    operation: InvocationOperation,
+    options: ChooseInvocationOptions,
+  ) => InvocationChoice;
   readonly logger?: DriverLogger;
   /** Shutdown signal: aborts local graph work and releases locks immediately. */
   readonly signal?: AbortSignal;
@@ -94,6 +108,12 @@ function isFencingLoss(error: unknown): boolean {
   return error instanceof StaleFencingError;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 function safeErrorCode(error: unknown): string {
   if (error instanceof Error) {
     return error.name === "InvalidUpdateError" ? "REDUCER_CONFLICT" : error.name;
@@ -101,8 +121,58 @@ function safeErrorCode(error: unknown): string {
   return "UNKNOWN";
 }
 
+/**
+ * Build the fenced effect runner for one claimed operation. Exported so richer
+ * graphs (the production travel graph) can reuse the exact same fencing and
+ * advisory-lock semantics as the Phase 05 harness.
+ */
+export function createFencedRunEffect(
+  operationsPool: Pool,
+  ctx: OperationFencingContext,
+): <T>(nodeName: string, effectScope: string, fn: () => Promise<T>) => Promise<T> {
+  return async <T>(nodeName: string, effectScope: string, fn: () => Promise<T>): Promise<T> => {
+    const client = await operationsPool.connect();
+    try {
+      await client.query("BEGIN");
+      // Fence the effect: a stale worker (token rotated) performs no callback.
+      // `FOR SHARE` also blocks a concurrent fencing-token rotation until the
+      // effect transaction commits.
+      const owned = await client.query(
+        `SELECT 1 FROM odft_app.workflow_operations
+          WHERE id = $1 AND trip_id = $2 AND fencing_token = $3::bigint
+          FOR SHARE`,
+        [ctx.operationId, ctx.tripId, ctx.fencingToken],
+      );
+      if (owned.rowCount !== 1) {
+        throw new StaleFencingError(ctx.operationId);
+      }
+      // Serialize concurrent identical effect scopes so the callback runs once.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        `effect:${ctx.operationId}:${nodeName}:${effectScope}`,
+      ]);
+      const result = await withEffect<T>(
+        client,
+        { operationId: ctx.operationId, nodeName, effectScope },
+        fn,
+      );
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Ignore rollback failures; the original error is what matters.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+}
+
 export function createOperationDriver(deps: DriverDeps): OperationDriver {
   const logger = deps.logger ?? (() => {});
+  const selectInvocation = deps.chooseInvocation ?? chooseInvocation;
 
   async function insertFencedEvent(
     ctx: { tripId: string; operationId: string; fencingToken: string },
@@ -125,44 +195,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
   function buildPorts(ctx: OperationFencingContext): HarnessPorts {
     return {
       now: () => new Date(),
-      runEffect: async <T>(nodeName: string, effectScope: string, fn: () => Promise<T>): Promise<T> => {
-        const client = await deps.operationsPool.connect();
-        try {
-          await client.query("BEGIN");
-          // Fence the effect: a stale worker (token rotated) performs no callback.
-          // `FOR SHARE` also blocks a concurrent fencing-token rotation until the
-          // effect transaction commits.
-          const owned = await client.query(
-            `SELECT 1 FROM odft_app.workflow_operations
-              WHERE id = $1 AND trip_id = $2 AND fencing_token = $3::bigint
-              FOR SHARE`,
-            [ctx.operationId, ctx.tripId, ctx.fencingToken],
-          );
-          if (owned.rowCount !== 1) {
-            throw new StaleFencingError(ctx.operationId);
-          }
-          // Serialize concurrent identical effect scopes so the callback runs once.
-          await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-            `effect:${ctx.operationId}:${nodeName}:${effectScope}`,
-          ]);
-          const result = await withEffect<T>(
-            client,
-            { operationId: ctx.operationId, nodeName, effectScope },
-            fn,
-          );
-          await client.query("COMMIT");
-          return result;
-        } catch (error) {
-          try {
-            await client.query("ROLLBACK");
-          } catch {
-            // Ignore rollback failures; the original error is what matters.
-          }
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
+      runEffect: createFencedRunEffect(deps.operationsPool, ctx),
     };
   }
 
@@ -173,14 +206,24 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     const descriptor = (view.interrupts[0]?.value ?? {}) as Record<string, unknown>;
     const kindParsed = decisionKindSchema.safeParse(descriptor.kind);
     const kind: DecisionKind = kindParsed.success ? kindParsed.data : "clarification";
-    const allowedOptionIds = Array.isArray(descriptor.allowedOptionIds)
-      ? descriptor.allowedOptionIds.filter((value): value is string => typeof value === "string")
-      : [];
-    const fingerprint = contentHash({
-      kind,
-      interruptId: view.interrupts[0]?.id ?? null,
-      allowedOptionIds,
-    });
+    const allowedOptionIds = stringArray(descriptor.allowedOptionIds);
+    const allowedOfferIds = stringArray(descriptor.allowedOfferIds);
+    const proposalId =
+      typeof descriptor.proposalId === "string" ? descriptor.proposalId : undefined;
+    // The graph may supply an explicit fingerprint (the booking decision binds
+    // the proposal's source fingerprint); otherwise it derives from the kind,
+    // interrupt identity, offered options/offers, and proposal.
+    const fingerprint =
+      typeof descriptor.sourceFingerprint === "string" &&
+      /^[a-f0-9]{64}$/.test(descriptor.sourceFingerprint)
+        ? descriptor.sourceFingerprint
+        : contentHash({
+            kind,
+            interruptId: view.interrupts[0]?.id ?? null,
+            allowedOptionIds,
+            allowedOfferIds,
+            proposalId: proposalId ?? null,
+          });
     // Operation transition, pending decision, trip projection, and event commit
     // together in one fencing-token-guarded transaction.
     await finalizeWaiting(
@@ -190,6 +233,8 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         kind,
         fingerprint,
         allowedOptionIds,
+        allowedOfferIds,
+        ...(proposalId ? { proposalId } : {}),
         graphVersion: deps.graphVersion,
         createdRevision: claim.acceptedRevision,
       },
@@ -222,6 +267,20 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
   }
 
   async function fail(claim: ClaimedOperation, error: unknown): Promise<void> {
+    // A resume the graph refuses to apply to the current interrupt is a permanent
+    // conflict (the client must refresh its projection), never a retryable error.
+    if (
+      claim.kind === "decision" &&
+      error instanceof Error &&
+      error.name === "InvalidUpdateError"
+    ) {
+      await finalizeConflict(
+        deps.operationsPool,
+        { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+        { code: "STALE_DECISION", message: error.message },
+      );
+      return;
+    }
     const code = safeErrorCode(error);
     const exhausted = claim.autoClaims >= MAX_AUTO_CLAIMS_PER_ROUND;
     const committed = await finalizeFailure(
@@ -247,7 +306,10 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       tripId: claim.tripId,
       fencingToken: claim.fencingToken,
     };
-    const context = { operationId: claim.operationId, ports: buildPorts(ctx) };
+    const context = {
+      operationId: claim.operationId,
+      ports: deps.portsFactory ? deps.portsFactory(ctx) : buildPorts(ctx),
+    };
     const stream = await graph.stream(input, {
       configurable: { thread_id: claim.tripId },
       durability: "sync",
@@ -316,7 +378,7 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       const snapshot = await graph.getState({ configurable: { thread_id: claim.tripId } });
       const view = toCheckpointView(snapshot);
       const pending = await getPendingDecisionForTrip(deps.operationsPool, claim.tripId);
-      const choice: InvocationChoice = chooseInvocation(
+      const choice: InvocationChoice = selectInvocation(
         view,
         {
           id: claim.operationId,
