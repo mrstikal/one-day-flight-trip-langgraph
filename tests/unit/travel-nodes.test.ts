@@ -9,6 +9,7 @@ import {
   routeAfterApplyDecision,
   routeAfterCommit,
   routeAfterDetectProgress,
+  routeAfterIntentResult,
   routeAfterLogistics,
   routeAfterReviewItinerary,
   routeAfterSchedules,
@@ -148,6 +149,25 @@ describe("prepare_decision phase 07 kinds", () => {
     expect(recovery.allowedOptionIds).toEqual(["change_hotel", "change_meals"]);
   });
 
+  it("replays the interrupted decision after an unsupported modification", () => {
+    const restored = prepareDecisionNode(
+      state({
+        restoredDecision: {
+          decisionKind: "hotel_choice",
+          proposalId: null,
+          allowedOfferIds: ["h1", "h2"],
+          allowedOptionIds: [],
+          gate: "hotels_ready",
+          pendingReplacement: false,
+        },
+      }),
+    );
+    expect(restored.decisionKind).toBe("hotel_choice");
+    expect(restored.allowedOfferIds).toEqual(["h1", "h2"]);
+    expect(restored.gate).toBe("hotels_ready");
+    expect(restored.restoredDecision).toBeNull();
+  });
+
   it("choose_option recovery reopens the affected step without editing (Phase 07)", () => {
     const hotel = applyDecisionNode(
       state({ lastAction: "choose_option", lastOptionId: "change_hotel" }),
@@ -212,6 +232,25 @@ describe("routers", () => {
   it("resumes a preference change at the confirmed progress (Phase 07)", () => {
     expect(routeAfterDetectProgress(state({ hasConfirmedFlight: true }))).toBe("ensure_domains");
     expect(routeAfterDetectProgress(state({ hasConfirmedFlight: false }))).toBe("validate_route");
+  });
+
+  it("an unsupported modification re-presents the decision instead of ending", () => {
+    expect(routeAfterIntentResult(state({ intentStatus: "unsupported" }))).toBe("publish_summary");
+    expect(
+      routeAfterIntentResult(
+        state({
+          intentStatus: "unsupported",
+          restoredDecision: {
+            decisionKind: "flight_choice",
+            proposalId: null,
+            allowedOfferIds: ["f1"],
+            allowedOptionIds: [],
+            gate: "flights_ready",
+            pendingReplacement: false,
+          },
+        }),
+      ),
+    ).toBe("prepare_decision");
   });
 
   it("routes confirmed bookings by service and program actions to logistics (Phase 07)", () => {

@@ -137,6 +137,35 @@ export const travelStateFields = {
   lastOptionId: z.string().nullable().default(null),
   /** True while a staged proposal is a replacement for a confirmed service. */
   pendingReplacement: z.boolean().default(false),
+  /**
+   * Kind and gate of the decision a `modify` resume interrupted, captured before
+   * the operation-local state reset. ONLY an unsupported modification replays it
+   * (a supported modification presents its own new decision).
+   */
+  interruptedDecision: z
+    .object({
+      decisionKind: decisionKindSchema,
+      gate: travelGateSchema,
+    })
+    .nullable()
+    .default(null),
+  /**
+   * Full descriptor of the interrupted decision, built only when the intent of a
+   * modification is unsupported (no command to apply): the run re-presents the
+   * exact decision instead of ending without one, which would strand the trip at
+   * an incomplete step with nothing for the user to answer.
+   */
+  restoredDecision: z
+    .object({
+      decisionKind: decisionKindSchema,
+      proposalId: z.string().nullable(),
+      allowedOfferIds: z.array(z.string().min(1)),
+      allowedOptionIds: z.array(z.string().min(1)),
+      gate: travelGateSchema,
+      pendingReplacement: z.boolean(),
+    })
+    .nullable()
+    .default(null),
   /** Confirmed-progress flags so a preference change resumes at the right step. */
   hasConfirmedFlight: z.boolean().default(false),
   hasConfirmedHotel: z.boolean().default(false),

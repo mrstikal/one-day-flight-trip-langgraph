@@ -114,6 +114,16 @@ export const tripProjectionSchema = z
     meals: z.array(publicMealOfferSchema),
     program: publicProgramChoicesSchema.nullable(),
     serviceLevels: publicServiceLevelsSchema,
+    /**
+     * Phase 11: the objective of the assistant search that produced the current
+     * hotel offers (null for the plain category ranking).
+     */
+    hotelSearch: z
+      .object({
+        objective: z.enum(["cheaper", "better_location", "higher_rating"]),
+      })
+      .strict()
+      .nullable(),
     /** Phase 09: latest per-domain research outcomes (safe, events-derived). */
     research: publicResearchStateSchema.nullable(),
     proposal: publicProposalSchema.nullable(),

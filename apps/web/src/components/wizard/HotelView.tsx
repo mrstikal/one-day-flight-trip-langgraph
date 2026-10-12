@@ -5,7 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { PublicDecisionResponse, PublicHotelOffer } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
-import { submitDecision } from "@/lib/decision-client";
+import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
 import { useTripProjection } from "@/lib/use-trip-projection";
@@ -17,7 +17,7 @@ import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
-import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
+import { HotelLevelSelect } from "@/components/preferences/HotelLevelSelect";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
@@ -89,6 +89,29 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     [projection],
   );
 
+  // The trip can be left at the hotel step without a waiting decision when an
+  // earlier chat operation ended without one. Nothing is preparing then, so the
+  // user needs an explicit way to re-derive the offers and continue the step.
+  const showHotelOptions = useCallback(async (): Promise<void> => {
+    if (!projection) {
+      return;
+    }
+    setBusy(true);
+    setActionError(undefined);
+    try {
+      await submitCommand(tripId, {
+        requestId: crypto.randomUUID(),
+        expectedRevision: projection.trip.revision,
+        command: { type: "find_alternatives", target: "hotel", objective: "match_preferences" },
+      });
+      refresh();
+    } catch (caught) {
+      handleError(caught);
+    } finally {
+      setBusy(false);
+    }
+  }, [handleError, projection, refresh, tripId]);
+
   if (!projection) {
     if (error) {
       return <ErrorPanel message={error.message} onRetry={refresh} />;
@@ -149,11 +172,13 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
             Simulated offers in EUR. Selecting a card starts a review; nothing is booked yet.
           </p>
         </header>
-        <p className="text-sm text-ink-muted" data-testid="hotel-level">
-          Hotel category: <span className="capitalize">{serviceLevels.hotel.level}</span> (
-          {serviceLevels.hotel.inherited ? "using the global default" : "explicit choice"}). A
-          pending choice must be answered before preferences can change.
-        </p>
+        <HotelLevelSelect
+          tripId={tripId}
+          revision={projection.trip.revision}
+          levelState={serviceLevels.hotel}
+          customObjective={projection.hotelSearch?.objective ?? null}
+          onChanged={refresh}
+        />
         <SimulatedFailureNote state={hotelResearch} />
         {hotel.length === 0 ? (
           <p className="text-sm text-ink-muted">
@@ -282,12 +307,11 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           nextLabel="Continue to meals"
         />
         {pendingDecision === null ? (
-          <ServiceLevelControl
+          <HotelLevelSelect
             tripId={tripId}
             revision={projection.trip.revision}
-            service="hotel"
-            label="Hotel"
             levelState={serviceLevels.hotel}
+            customObjective={projection.hotelSearch?.objective ?? null}
             onChanged={refresh}
           />
         ) : null}
@@ -315,12 +339,11 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           disabled={activeWork}
           onRetried={refresh}
         />
-        <ServiceLevelControl
+        <HotelLevelSelect
           tripId={tripId}
           revision={projection.trip.revision}
-          service="hotel"
-          label="Hotel"
           levelState={serviceLevels.hotel}
+          customObjective={projection.hotelSearch?.objective ?? null}
           onChanged={refresh}
         />
         <p className="text-sm">
@@ -338,6 +361,27 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
       <StatusPanel
         message={activeWork ? "Accepted - preparing hotel offers…" : "Preparing hotel options…"}
       />
+      {!activeWork ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-ink-muted">
+            No hotel decision is waiting for you. Re-derive the offers to continue this step.
+          </p>
+          <button
+            type="button"
+            data-testid="show-hotel-options"
+            disabled={busy}
+            onClick={() => void showHotelOptions()}
+            className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
+          >
+            {busy ? "Preparing…" : "Show hotel options"}
+          </button>
+        </div>
+      ) : null}
+      {actionError ? (
+        <p role="alert" className="text-sm text-clay">
+          {actionError}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -173,6 +173,33 @@ describe("interpret_intent node (Phase 08 CR fixes)", () => {
     expect(applied.calls).toBe(0);
     expect(update.intentStatus).toBe("unsupported");
     expect(update.gate).toBe("chat_done");
+    expect(update.restoredDecision).toBeUndefined();
+  });
+
+  it("re-presents the interrupted decision when an unsupported chat modified it", async () => {
+    const applied = { commands: [] as readonly unknown[], calls: 0 };
+    const update = await interpretIntentNode(
+      state({
+        tripId: "t",
+        operationId: "op",
+        chatMessage: "moon flight",
+        interruptedDecision: { decisionKind: "program_choices", gate: "program_ready" },
+        allowedOfferIds: ["b1", "l1"],
+        allowedOptionIds: ["a1"],
+        pendingReplacement: false,
+      }),
+      runtime({ kind: "unsupported", explanation: "not supported" }, applied),
+    );
+    expect(applied.calls).toBe(0);
+    expect(update.intentStatus).toBe("unsupported");
+    expect(update.restoredDecision).toEqual({
+      decisionKind: "program_choices",
+      proposalId: undefined,
+      allowedOfferIds: ["b1", "l1"],
+      allowedOptionIds: ["a1"],
+      gate: "program_ready",
+      pendingReplacement: false,
+    });
   });
 
   it("applies exactly the chosen clarification option's commands", async () => {

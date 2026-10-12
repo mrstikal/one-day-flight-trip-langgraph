@@ -43,7 +43,7 @@ export function ConfirmationResult({
         <dt className="text-ink-muted">Party total</dt>
         <dd>{formatEuroMinor(reservation.partyTotalMinor)}</dd>
       </dl>
-      <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
+      <p role="note" className="rounded bg-info p-3 text-sm text-clay">
         {CONFIRMATION_DISCLAIMER}
       </p>
       <div className="flex flex-wrap gap-3">

@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import Link from "next/link";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
-import { nextTripStep } from "@/lib/trip-step";
+import { hasSavedProgram, nextTripStep } from "@/lib/trip-step";
 import { ExecutionGraph } from "./execution-graph";
 import { SimulationControls } from "./simulation-controls";
 
@@ -61,8 +61,10 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
     nextTripStep({
       tripId,
       reservations: projection.reservations,
-      hasProgram: projection.program !== null,
+      hasProgram: hasSavedProgram(projection.program),
       hasItinerary: projection.itinerary !== null,
+      pendingDecisionKind: projection.pendingDecision?.kind ?? null,
+      proposalServiceKey: projection.proposal?.serviceKey ?? null,
     })?.href ?? `/trips/${tripId}/itinerary`;
   if (!inspector) {
     return (

@@ -125,7 +125,7 @@ function DialogBody({
           {heading}
         </h2>
         {summary}
-        <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
+        <p role="note" className="rounded bg-info p-3 text-sm text-clay">
           {CONFIRMATION_DISCLAIMER}
         </p>
         <p role="note" className="text-xs text-ink-muted">

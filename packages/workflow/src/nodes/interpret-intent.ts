@@ -203,11 +203,28 @@ export async function interpretIntentNode(
   });
 
   if (result.kind === "unsupported") {
+    const interrupted = state.interruptedDecision;
     return {
       intentStatus: "unsupported",
       intentInterpretation: result.explanation,
       gate: "chat_done",
       pendingStage: "end",
+      // A modification must not strand the trip: when this operation interrupted
+      // a pending decision and nothing could be applied, re-present that exact
+      // decision (its descriptor is still in the operation-local state) so the
+      // step stays answerable instead of ending without a decision.
+      ...(interrupted
+        ? {
+            restoredDecision: {
+              decisionKind: interrupted.decisionKind,
+              proposalId: state.proposalId,
+              allowedOfferIds: state.allowedOfferIds,
+              allowedOptionIds: state.allowedOptionIds,
+              gate: interrupted.gate,
+              pendingReplacement: state.pendingReplacement,
+            },
+          }
+        : {}),
     };
   }
 

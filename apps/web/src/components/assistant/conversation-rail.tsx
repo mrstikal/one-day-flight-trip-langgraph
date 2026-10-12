@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api-client";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
+import { hasSavedProgram, nextTripStep } from "@/lib/trip-step";
 import { ClarificationOptions } from "./clarification-options";
 import { MessageList } from "./message-list";
 import { RouteChangeCard } from "./route-change-card";
@@ -24,10 +26,18 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
   const { projection, error, refresh } = useTripProjection(tripId);
   const onEvent = useCallback(() => refresh(), [refresh]);
   useTripEvents(tripId, onEvent);
+  const router = useRouter();
+  const pathname = usePathname();
 
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>();
+  // The operation started by the last chat message: when it settles at a NEW
+  // decision, the rail opens the step that presents it (no extra click).
+  const awaitingOperationRef = useRef<{
+    readonly operationId: string;
+    readonly previousDecisionId: string | null;
+  } | null>(null);
 
   const activeWork = useMemo(
     () =>
@@ -65,11 +75,15 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     setBusy(true);
     setActionError(undefined);
     try {
-      await submitCommand(tripId, {
+      const { operationId } = await submitCommand(tripId, {
         requestId: crypto.randomUUID(),
         expectedRevision: projection.trip.revision,
         chat: message,
       });
+      awaitingOperationRef.current = {
+        operationId,
+        previousDecisionId: projection.pendingDecision?.id ?? null,
+      };
       setDraft("");
       refresh();
     } catch (caught) {
@@ -136,8 +150,60 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     projection?.pendingDecision?.kind === "route_change_confirmation"
       ? (projection.routeChange ?? null)
       : null;
+  // Decisions rendered in the rail itself (clarification, route change) need no
+  // link; every other pending decision is presented on its step page, so the
+  // rail points there instead of leaving "alternatives are ready" dangling.
+  const pendingStep =
+    projection?.pendingDecision && !pendingClarification && !routeChange
+      ? nextTripStep({
+          tripId,
+          reservations: projection.reservations,
+          hasProgram: hasSavedProgram(projection.program),
+          hasItinerary: projection.itinerary !== null,
+          pendingDecisionKind: projection.pendingDecision.kind,
+          proposalServiceKey: projection.proposal?.serviceKey ?? null,
+        })
+      : null;
   const inspectorHref =
     projection?.display.demoControlsEnabled === true ? `/trips/${tripId}/inspector` : null;
+
+  // Show the result of a rail-initiated change immediately: once the operation
+  // settles at a decision presented elsewhere, open that step instead of leaving
+  // the user on a page without the fresh offers. The decision's own page then
+  // renders the refreshed list (the rail never claims unconfirmed success).
+  useEffect(() => {
+    const awaiting = awaitingOperationRef.current;
+    if (!awaiting || !projection) {
+      return;
+    }
+    const operation = projection.operations.find(
+      (entry) => entry.operationId === awaiting.operationId,
+    );
+    if (!operation || operation.status === "queued" || operation.status === "running") {
+      return;
+    }
+    awaitingOperationRef.current = null;
+    const pending = projection.pendingDecision;
+    if (
+      !pending ||
+      pending.id === awaiting.previousDecisionId ||
+      pending.kind === "clarification" ||
+      pending.kind === "route_change_confirmation"
+    ) {
+      return;
+    }
+    const step = nextTripStep({
+      tripId,
+      reservations: projection.reservations,
+      hasProgram: hasSavedProgram(projection.program),
+      hasItinerary: projection.itinerary !== null,
+      pendingDecisionKind: pending.kind,
+      proposalServiceKey: projection.proposal?.serviceKey ?? null,
+    });
+    if (step && step.href !== pathname) {
+      router.push(step.href);
+    }
+  }, [pathname, projection, router, tripId]);
 
   return (
     <aside
@@ -186,6 +252,19 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
             void confirmRouteChange();
           }}
         />
+      ) : null}
+
+      {pendingStep ? (
+        <p className="text-sm text-ink-muted">
+          Next step:{" "}
+          <Link
+            href={pendingStep.href}
+            className="text-teal underline"
+            data-testid="pending-step-link"
+          >
+            {pendingStep.open}
+          </Link>
+        </p>
       ) : null}
 
       {actionError ? (

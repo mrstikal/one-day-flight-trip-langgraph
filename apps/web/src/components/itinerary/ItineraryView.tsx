@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { formatLocalDate } from "@/lib/format/datetime";
-import { nextTripStep } from "@/lib/trip-step";
+import { hasSavedProgram, nextTripStep } from "@/lib/trip-step";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
@@ -140,8 +140,10 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
     const step = nextTripStep({
       tripId,
       reservations: projection.reservations,
-      hasProgram: projection.program !== null,
+      hasProgram: hasSavedProgram(projection.program),
       hasItinerary: false,
+      pendingDecisionKind: projection.pendingDecision?.kind ?? null,
+      proposalServiceKey: projection.proposal?.serviceKey ?? null,
     });
     return (
       <section className="flex flex-col gap-4">

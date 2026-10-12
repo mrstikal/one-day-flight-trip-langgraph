@@ -46,11 +46,17 @@ async function selectCombobox(page: Page, label: string, query: string): Promise
   await input.press("Enter");
 }
 
-async function createTrip(page: Page): Promise<string> {
+async function createTrip(
+  page: Page,
+  options: { readonly serviceLevel?: "budget" | "standard" | "luxury" } = {},
+): Promise<string> {
   await page.goto("/");
   await page.getByLabel("Your name").fill("Ada Lovelace");
   await selectCombobox(page, "Origin airport", "PRG");
   await page.getByLabel("Sightseeing date").fill("2026-12-01");
+  if (options.serviceLevel) {
+    await page.getByLabel("Default service level (provisional)").selectOption(options.serviceLevel);
+  }
   await page.getByRole("button", { name: "Continue to destination" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Choose your destination");
   await selectCombobox(page, "Country", "Italy");
@@ -103,6 +109,22 @@ async function driveToProgramSaved(
   await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
     timeout: 60_000,
   });
+}
+
+/** The confirmed hotel's demo reference, read from the projection API. */
+async function readHotelReference(page: Page, tripId: string): Promise<string> {
+  const response = await page.request.get(`/api/trips/${tripId}`, {
+    headers: { origin: ORIGIN },
+  });
+  expect(response.status()).toBe(200);
+  const projection = (await response.json()) as {
+    reservations: { serviceKey: string; status: string; demoReference: string }[];
+  };
+  return (
+    projection.reservations.find(
+      (reservation) => reservation.serviceKey === "hotel" && reservation.status === "confirmed",
+    )?.demoReference ?? ""
+  );
 }
 
 /** Approve the pending itinerary draft from the itinerary page. */
@@ -177,21 +199,7 @@ test("scenario H: a cheaper hotel search keeps bookings and replaces only on con
   // Record the confirmed hotel reference from the projection, then ask for a
   // cheaper hotel.
   await page.goto(`/trips/${tripId}/hotel`);
-  const readHotel = async (): Promise<string> => {
-    const response = await page.request.get(`/api/trips/${tripId}`, {
-      headers: { origin: ORIGIN },
-    });
-    expect(response.status()).toBe(200);
-    const projection = (await response.json()) as {
-      reservations: { serviceKey: string; status: string; demoReference: string }[];
-    };
-    return (
-      projection.reservations.find(
-        (reservation) => reservation.serviceKey === "hotel" && reservation.status === "confirmed",
-      )?.demoReference ?? ""
-    );
-  };
-  const hotelReference = await readHotel();
+  const hotelReference = await readHotelReference(page, tripId);
   expect(hotelReference).toContain("DEMO-HTL-");
   await page.getByLabel("Ask for a change").fill("Find a cheaper hotel");
   await page.getByRole("button", { name: "Send" }).click();
@@ -204,15 +212,86 @@ test("scenario H: a cheaper hotel search keeps bookings and replaces only on con
     { timeout: 120_000 },
   );
   // The old hotel is still active until the replacement is confirmed.
-  expect(await readHotel()).toBe(hotelReference);
+  expect(await readHotelReference(page, tripId)).toBe(hotelReference);
   await cheaperCard.getByRole("button", { name: "Choose this hotel" }).click();
   await page.getByRole("button", { name: "Review booking" }).click();
   await confirmDialog(page, "DEMO-HTL-");
   await page.waitForTimeout(12_000);
   // The replacement is committed asynchronously; wait for the new reference.
-  await expect.poll(readHotel, { timeout: 120_000, intervals: [2_000, 3_000, 5_000] }).not.toBe(
-    hotelReference,
+  await expect
+    .poll(() => readHotelReference(page, tripId), { timeout: 120_000, intervals: [2_000, 3_000, 5_000] })
+    .not.toBe(hotelReference);
+});
+
+test("a chat refresh from another page opens the step with the fresh offers", async ({ page }) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+  await driveToProgramSaved(page, { hotelPosition: "last" });
+  await approveItinerary(page, tripId);
+
+  // Ask for a change from the summary, away from the hotel step.
+  await page.goto(`/trips/${tripId}/summary`);
+  const hotelReference = await readHotelReference(page, tripId);
+  expect(hotelReference).toContain("DEMO-HTL-");
+  await page.getByLabel("Ask for a change").fill("Find a cheaper hotel");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  // The rail opens the hotel step by itself, so the fresh list is visible
+  // immediately; nothing is replaced before the explicit confirmation.
+  await expect(page).toHaveURL(new RegExp(`/trips/${tripId}/hotel$`), { timeout: 120_000 });
+  const cheaperCard = page.getByTestId("hotel-offer").first();
+  await expect(cheaperCard).toBeVisible({ timeout: 120_000 });
+  expect(await readHotelReference(page, tripId)).toBe(hotelReference);
+  // The rail also points at the step while the decision is pending.
+  await expect(page.getByTestId("pending-step-link")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/hotel`,
   );
+});
+
+test("the summary hotel row offers a direct change action", async ({ page }) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+  await driveToProgramSaved(page, { hotelPosition: "last" });
+  await page.goto(`/trips/${tripId}/summary`);
+  const hotelReference = await readHotelReference(page, tripId);
+  expect(hotelReference).toContain("DEMO-HTL-");
+
+  // The confirmed-hotel row stages the same replacement search the assistant
+  // runs and opens the step that presents the refreshed choice.
+  await page.getByTestId("change-hotel").click();
+  await expect(page).toHaveURL(new RegExp(`/trips/${tripId}/hotel$`), { timeout: 60_000 });
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 120_000 });
+  // Nothing is replaced before the explicit confirmation.
+  expect(await readHotelReference(page, tripId)).toBe(hotelReference);
+});
+
+test("the hotel category select follows the global default and locks for a custom search", async ({
+  page,
+}) => {
+  const tripId = await createTrip(page, { serviceLevel: "luxury" });
+  expect(tripId).not.toBe("");
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 90_000 });
+
+  // The value defaults to the global level chosen on the first step.
+  const select = page.getByTestId("hotel-level-select");
+  await expect(select).toHaveValue("luxury");
+  await expect(select).toBeEnabled();
+
+  // An objective-driven assistant search is no plain category: the select shows
+  // "Custom request" and locks.
+  const rail = page.getByTestId("assistant-rail");
+  await rail.getByLabel("Ask for a change").fill("better hotel");
+  await rail.getByRole("button", { name: "Send" }).click();
+  await rail.getByRole("button", { name: "Better location" }).click();
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 120_000 });
+  await expect(select).toHaveValue("custom");
+  await expect(select).toBeDisabled();
+  await expect(page.getByText("from your assistant request")).toBeVisible();
 });
 
 test("an unbooked route change applies directly and yields a fresh flight choice", async ({

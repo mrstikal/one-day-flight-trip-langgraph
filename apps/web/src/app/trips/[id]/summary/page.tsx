@@ -4,10 +4,11 @@ import { notFound } from "next/navigation";
 import { getServerDeps } from "@/lib/server";
 import { resolveSession } from "@/lib/session";
 import { buildTripProjection } from "@/lib/projection";
+import { ChangeHotelButton } from "@/components/booking/ChangeHotelButton";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
-import { nextTripStep } from "@/lib/trip-step";
+import { hasSavedProgram, nextTripStep } from "@/lib/trip-step";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +40,10 @@ export default async function SummaryPage({
   const nextStep = nextTripStep({
     tripId: id,
     reservations,
-    hasProgram: program !== null,
+    hasProgram: hasSavedProgram(program),
     hasItinerary: itinerary !== null,
+    pendingDecisionKind: projection.pendingDecision?.kind ?? null,
+    proposalServiceKey: projection.proposal?.serviceKey ?? null,
   });
 
   return (
@@ -81,6 +84,9 @@ export default async function SummaryPage({
                   <dt className="text-ink-muted">Party total</dt>
                   <dd>{formatEuroMinor(reservation.partyTotalMinor)}</dd>
                 </dl>
+                {reservation.serviceKey === "hotel" ? (
+                  <ChangeHotelButton tripId={id} revision={trip.revision} />
+                ) : null}
               </li>
             ))}
           </ul>

@@ -136,3 +136,36 @@ test("assistant rail interprets a chat request and applies a clarification choic
     timeout: 60_000,
   });
 });
+
+test("an unsupported chat explains itself and keeps the pending decision answerable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Your name").fill("Grace Hopper");
+  await selectCombobox(page, "Origin airport", "PRG");
+  await page.getByLabel("Sightseeing date").fill("2026-12-01");
+  await page.getByRole("button", { name: "Continue to destination" }).click();
+  await selectCombobox(page, "Country", "Italy");
+  await selectCombobox(page, "City", "Rome");
+  await page.getByRole("button", { name: "Create trip" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 90_000 });
+
+  // A request the interpreter cannot map: the assistant says so…
+  const rail = page.getByTestId("assistant-rail");
+  await rail.getByLabel("Ask for a change").fill("moon flight");
+  await rail.getByRole("button", { name: "Send" }).click();
+  await expect(rail.getByTestId("conversation-messages")).toContainText(
+    "scripted fixture response",
+    { timeout: 60_000 },
+  );
+
+  // …and the exact hotel choice is re-presented: the step stays answerable
+  // instead of hanging on a "preparing…" state with no decision.
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: "Choose this hotel" }).first()).toBeEnabled();
+});

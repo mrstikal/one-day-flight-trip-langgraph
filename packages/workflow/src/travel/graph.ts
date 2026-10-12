@@ -95,12 +95,14 @@ export function routeAfterApplyCommands(state: TravelState): string {
   return routeForCommandType(state) ?? routeByNextWork(state) ?? "detect_progress";
 }
 
-/** Route a validated intent result: unsupported ends, clarification interrupts,
- * program/proposal commands reuse their existing stages, and preference/search
- * commands continue through the invalidation-matrix dispatch. */
+/** Route a validated intent result: an unsupported modification re-presents the
+ * decision it interrupted (the trip must never be left without one), plain
+ * unsupported chats end, clarification interrupts, program/proposal commands
+ * reuse their existing stages, and preference/search commands continue through
+ * the invalidation-matrix dispatch. */
 export function routeAfterIntentResult(state: TravelState): string {
   if (state.intentStatus === "unsupported") {
-    return "publish_summary";
+    return state.restoredDecision ? "prepare_decision" : "publish_summary";
   }
   if (state.intentStatus === "clarification") {
     return "prepare_decision";

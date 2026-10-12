@@ -78,6 +78,9 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       ...OPERATION_LOCAL_RESETS,
       lastAction: "modify",
       modificationOperationId: response.commandOperationId,
+      // Capture what was interrupted (kind + gate). Only an unsupported
+      // modification replays it; a supported one presents its own decision.
+      interruptedDecision: { decisionKind: kind, gate: state.gate },
     };
   }
 

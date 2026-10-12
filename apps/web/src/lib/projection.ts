@@ -46,6 +46,26 @@ import {
   type TripSummary,
 } from "@odft/contracts";
 
+/** Objective of the assistant search recorded on a ranking artifact (Phase 11). */
+export type CustomHotelSearchObjective = "cheaper" | "better_location" | "higher_rating";
+
+/**
+ * Phase 11: an assistant `find_alternatives` search records its objective on the
+ * ranking artifact it writes ("... ; custom search: better_location"). The hotel
+ * page uses it to show that the offers follow a custom request instead of a plain
+ * category, in which case the level select is locked. Plain rankings (and the
+ * neutral `match_preferences` refresh) carry no marker.
+ */
+export function parseCustomSearchObjective(
+  explanation: string | null,
+): CustomHotelSearchObjective | null {
+  const match = /custom search: (cheaper|better_location|higher_rating)\b/.exec(explanation ?? "");
+  const objective = match?.[1];
+  return objective === "cheaper" || objective === "better_location" || objective === "higher_rating"
+    ? objective
+    : null;
+}
+
 /**
  * Read projection for a trip (FR-UI-4). Assembled from the durable tables; it is
  * always safe to serve (no secrets, no internal hashes, no provider payloads)
@@ -726,6 +746,7 @@ export async function buildTripProjection(
     dinner: levelState(trip.preferences, "dinner"),
   };
   let hotel: PublicHotelOffer[] = [];
+  let hotelSearch: TripProjection["hotelSearch"] = null;
   let meals: PublicMealOffer[] = [];
   let program: PublicProgramChoices | null = null;
   let activeContent: SnapshotContent | null = null;
@@ -751,6 +772,12 @@ export async function buildTripProjection(
           (trip.travelVariant !== "one_night" || offer.luggageStorage),
         toPublicHotel,
       );
+      // Phase 11: did an assistant search (not a plain category) rank these offers?
+      const hotelOutcome = researchOutcomeFor("hotel");
+      const hotelArtifact =
+        hotelOutcome?.status === "ok" ? artifactFor("hotel", hotelOutcome.fingerprint) : undefined;
+      const hotelSearchObjective = parseCustomSearchObjective(hotelArtifact?.explanation ?? null);
+      hotelSearch = hotelSearchObjective === null ? null : { objective: hotelSearchObjective };
       meals = domainOffers(
         "breakfast",
         "breakfast",
@@ -877,6 +904,7 @@ export async function buildTripProjection(
     meals,
     program,
     serviceLevels,
+    hotelSearch,
     research,
     proposal,
     reservation,

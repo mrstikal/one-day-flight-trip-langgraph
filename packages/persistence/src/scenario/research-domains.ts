@@ -737,6 +737,11 @@ export async function rankTripRecommendations(
               domain.domain === "dinner"
             ? mealOfferIds[domain.domain]
             : [];
+    // A targeted assistant search records its objective: the UI can then show
+    // that the offers follow a custom request instead of a plain category
+    // (match_preferences is the neutral refresh and stays unmarked).
+    const objective = objectiveFor(domain.domain);
+    const customSearch = objective !== null && objective !== "match_preferences" ? objective : null;
     await recordRecommendationArtifact(
       pool,
       {
@@ -748,7 +753,7 @@ export async function rankTripRecommendations(
         explanation:
           domain.domain === "dinner"
             ? (dinnerNotIncludedReason ?? "")
-            : `Deterministic ranking (Phase 09, ${domain.domain}).`,
+            : `Deterministic ranking (Phase 09, ${domain.domain}${customSearch ? `; custom search: ${customSearch}` : ""}).`,
       },
       fence,
     );

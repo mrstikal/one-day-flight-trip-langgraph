@@ -13,6 +13,21 @@ import type { TravelState, TravelUpdate } from "../travel/state.js";
  * Only ids are stored, never offer content; the projection renders the content.
  */
 export function prepareDecisionNode(state: TravelState): TravelUpdate {
+  if (state.restoredDecision) {
+    // A `modify` resume whose intent turned out unsupported must not strand the
+    // trip: replay the exact decision it interrupted (its descriptor was captured
+    // before the operation-local state was reset) instead of deriving a new one.
+    const restored = state.restoredDecision;
+    return {
+      decisionKind: restored.decisionKind,
+      proposalId: restored.proposalId,
+      allowedOfferIds: restored.allowedOfferIds,
+      allowedOptionIds: restored.allowedOptionIds,
+      gate: restored.gate,
+      pendingReplacement: restored.pendingReplacement,
+      restoredDecision: null,
+    };
+  }
   if (state.nextDecisionKind === "itinerary_approval") {
     return {
       decisionKind: "itinerary_approval",

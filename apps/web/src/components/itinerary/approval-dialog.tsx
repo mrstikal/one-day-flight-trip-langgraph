@@ -126,7 +126,7 @@ function DialogBody({
           <dt className="text-ink-muted">Party total</dt>
           <dd>{formatEuroMinor(itinerary.costs.totalMinor)}</dd>
         </dl>
-        <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
+        <p role="note" className="rounded bg-info p-3 text-sm text-clay">
           You are approving version {itinerary.version} of this plan. A later change creates a new
           draft; the approved version stays preserved. Nothing is booked or paid by approving.
         </p>
