@@ -2,7 +2,7 @@ import { getServerDeps } from "@/lib/server";
 import { clientIp, errorResponse, notFoundResponse } from "@/lib/http";
 import { resolveSession } from "@/lib/session";
 import { consumeRateLimit, scopeHash } from "@/lib/rate-limit";
-import { listTripEvents } from "@odft/persistence";
+import { listTripEvents, projectSafeEvent } from "@odft/persistence";
 
 /**
  * GET /api/trips/[id]/events — server-sent event stream with replay from a
@@ -68,7 +68,10 @@ export async function GET(
   }
 
   const url = new URL(request.url);
-  let cursor = request.headers.get("last-event-id") ?? url.searchParams.get("after") ?? "0";
+  const requestedCursor = request.headers.get("last-event-id") ?? url.searchParams.get("after") ?? "0";
+  // Decimal-string cursors only: a malformed value replays from the beginning
+  // (deduped client-side by event id) instead of being interpreted loosely.
+  let cursor = /^\d+$/.test(requestedCursor) ? requestedCursor : "0";
   const encoder = new TextEncoder();
   const signal = request.signal;
   const cookieHeader = request.headers.get("cookie");
@@ -77,7 +80,7 @@ export async function GET(
     async start(controller) {
       const deadline = Date.now() + MAX_STREAM_MS;
       let lastHeartbeat = Date.now();
-      controller.enqueue(encoder.encode(": connected\n\n"));
+      controller.enqueue(encoder.encode("retry: 3000\n: connected\n\n"));
       while (!signal.aborted && Date.now() < deadline) {
         try {
           // Re-authorize on every poll: an expired session cannot keep reading.
@@ -92,7 +95,10 @@ export async function GET(
             const data = JSON.stringify({
               type: event.type,
               operationId: event.operationId,
-              payload: event.payload,
+              // Read-side defense in depth: even a row written before the
+              // allowlist existed (or by a direct insert) is projected before it
+              // leaves the server.
+              payload: projectSafeEvent(event.type, event.payload),
               at: event.createdAt,
             });
             controller.enqueue(encoder.encode(`id: ${event.id}\nevent: ${event.type}\ndata: ${data}\n\n`));

@@ -2,12 +2,28 @@ import { z } from "zod";
 import {
   activityPaceSchema,
   activityTagSchema,
+  serviceKeySchema,
   serviceLevelSchema,
   travelVariantSchema,
 } from "./enums.js";
 import { moneyMinorSchema, nonEmptyStringSchema } from "./primitives.js";
 
 /** Trip preferences and meal selections (04-domain-model.md section 2). */
+
+/**
+ * Phase 11: the operation-scoped search intent of a `find_alternatives` request.
+ * An explicit `level` searches that category without changing preferences, and
+ * `cheaper` preserves the selected/confirmed offer's category even when the
+ * global effective preference has since changed.
+ */
+export const researchSearchIntentSchema = z
+  .object({
+    target: z.union([serviceKeySchema, z.literal("activities")]),
+    objective: z.enum(["cheaper", "better_location", "higher_rating", "match_preferences"]),
+    level: serviceLevelSchema.nullable(),
+  })
+  .strict();
+export type ResearchSearchIntent = z.infer<typeof researchSearchIntentSchema>;
 
 export const interestsSchema = z
   .object({

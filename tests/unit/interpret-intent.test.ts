@@ -43,6 +43,33 @@ function runtime(
       return { routeChanged: false, appliedCount };
     },
     loadChatMessage: async () => "follow up",
+    loadTrip: async () => ({
+      trip: {
+        preferences: {
+          defaultServiceLevel: "standard",
+          serviceOverrides: {},
+          activityPace: "relaxed",
+          interests: { culture: 3, relaxation: 2, entertainment: 1 },
+          preferredActivityTags: [],
+          minimumActivityCounts: {},
+          maxBudgetMinor: 50_000,
+        },
+      },
+    }),
+    loadProgress: async () => ({
+      flightConfirmed: true,
+      hotelConfirmed: false,
+      confirmedServices: ["flights"],
+      selectedServices: [],
+      programApplied: false,
+    }),
+    previewRouteChange: async () => ({
+      proposalId: "00000000-0000-4000-8000-000000000000",
+      changedFields: [],
+      from: {},
+      to: {},
+      affectedReservations: [],
+    }),
   };
   return { context: { ports: ports as unknown as TravelPorts } };
 }
@@ -113,7 +140,7 @@ describe("interpret_intent node (Phase 08 CR fixes)", () => {
     expect(update.nextDecisionKind).toBe("clarification");
   });
 
-  it("reports a search-only request instead of re-deriving decisions (P2-2)", async () => {
+  it("routes a search-only request to a targeted refresh, never fake re-derivation (P11-2)", async () => {
     const applied = { commands: [] as readonly unknown[], calls: 0 };
     const update = await interpretIntentNode(
       state({ tripId: "t", operationId: "op", chatMessage: "cheaper hotel" }),
@@ -128,9 +155,13 @@ describe("interpret_intent node (Phase 08 CR fixes)", () => {
       ),
     );
     expect(applied.calls).toBe(1);
-    expect(update.intentStatus).toBe("search_pending");
-    expect(update.gate).toBe("chat_done");
-    expect(update.pendingStage).toBe("end");
+    expect(update.intentStatus).toBe("commands");
+    // Phase 11: the search refreshes only the targeted domain and presents the
+    // refreshed hotel alternatives instead of ending the run.
+    expect(update.nextWork).toBe("research");
+    expect(update.nextDecisionKind).toBe("hotel_choice");
+    expect(update.searchTargetDomains).toEqual(["hotel"]);
+    expect(update.searchIntent).toEqual({ target: "hotel", objective: "cheaper", level: null });
   });
 
   it("ends unsupported input without touching the dispatcher", async () => {

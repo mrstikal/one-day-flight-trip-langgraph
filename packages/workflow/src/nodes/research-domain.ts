@@ -44,6 +44,7 @@ export async function researchDomainNode(
     domain: task.domain,
     attempt: task.attempt,
     inputFingerprint: task.inputFingerprint,
+    searchIntent: task.searchIntent ?? null,
   });
 
   await ports.recordResearchEvent({

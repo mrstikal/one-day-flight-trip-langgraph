@@ -12,9 +12,11 @@ import {
   publicProposalSchema,
   publicResearchStateSchema,
   publicReservationSchema,
+  publicRouteChangePreviewSchema,
   publicServiceLevelsSchema,
   tripDisplaySchema,
 } from "./projection.js";
+import { publicInspectorSchema } from "./inspector.js";
 import {
   publicClarificationSchema,
   publicConversationMessageSchema,
@@ -123,6 +125,10 @@ export const tripProjectionSchema = z
     clarification: publicClarificationSchema.nullable(),
     /** Phase 10: latest immutable itinerary version (draft or approved). */
     itinerary: publicItinerarySchema.nullable(),
+    /** Phase 11: server-built impact preview of a pending route change. */
+    routeChange: publicRouteChangePreviewSchema.nullable(),
+    /** Phase 11: safe execution inspector (demo-controls gated; null otherwise). */
+    inspector: publicInspectorSchema.nullable(),
     display: tripDisplaySchema,
   })
   .strict();

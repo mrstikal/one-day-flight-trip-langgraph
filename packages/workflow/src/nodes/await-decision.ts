@@ -33,6 +33,20 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
             },
           }
         : {}),
+      // Phase 11: the route-change impact preview is persisted with the decision
+      // so the projection can render it. Only the public fields are stored; the
+      // deferred command batch stays in the checkpoint.
+      ...(kind === "route_change_confirmation" && state.routeChangePreview
+        ? {
+            optionPayload: {
+              proposalId: state.routeChangePreview.proposalId,
+              changedFields: state.routeChangePreview.changedFields,
+              from: state.routeChangePreview.from,
+              to: state.routeChangePreview.to,
+              affectedReservations: state.routeChangePreview.affectedReservations,
+            },
+          }
+        : {}),
     },
     { responseSchema: graphResumeEnvelopeSchema },
   );
@@ -48,6 +62,18 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
     planningAttempt: 0,
     itineraryFeedback: [],
   } satisfies Partial<TravelUpdate>;
+
+  // Phase 11: a free-text follow-up is admitted as a modification for EVERY
+  // pending decision kind, not only clarifications. The envelope is built by the
+  // worker (the browser cannot supply `modify`); the old decision is resolved
+  // explicitly by the driver once the new operation succeeds.
+  if (response.action === "modify") {
+    return {
+      ...base,
+      lastAction: "modify",
+      modificationOperationId: response.commandOperationId,
+    };
+  }
 
   if (kind === "flight_choice" || kind === "hotel_choice") {
     if (response.action !== "choose_offer" || !state.allowedOfferIds.includes(response.offerId)) {
@@ -100,6 +126,30 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
     }
     throw new InvalidUpdateError("booking confirmation accepts confirm_booking or reject_proposal");
   }
+  if (kind === "route_change_confirmation") {
+    if (response.action !== "confirm_route_change") {
+      throw new InvalidUpdateError("route change confirmation accepts only confirm_route_change");
+    }
+    if (
+      state.routeChangeProposalId === null ||
+      response.proposalId !== state.routeChangeProposalId
+    ) {
+      throw new InvalidUpdateError("the confirmation does not match the staged route change");
+    }
+    const named = [...response.affectedReservationIds].sort();
+    const preview = [...(state.routeChangePreview?.affectedReservations.map((entry) => entry.id) ?? [])].sort();
+    if (preview.length === 0 || named.join(",") !== preview.join(",")) {
+      throw new InvalidUpdateError(
+        "the confirmation must name exactly the reservations the preview listed",
+      );
+    }
+    return {
+      ...base,
+      lastAction: "confirm_route_change",
+      lastProposalId: response.proposalId,
+      lastAffectedReservationIds: named,
+    };
+  }
   if (kind === "itinerary_approval") {
     if (response.action !== "approve_itinerary") {
       throw new InvalidUpdateError("itinerary approval accepts only approve_itinerary");
@@ -124,14 +174,6 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
         throw new InvalidUpdateError("the chosen clarification option is not offered");
       }
       return { ...base, lastAction: "choose_clarification", lastOptionId: response.optionId };
-    }
-    if (response.action === "modify") {
-      // Worker-constructed only: a browser cannot supply an operation identity.
-      return {
-        ...base,
-        lastAction: "modify",
-        modificationOperationId: response.commandOperationId,
-      };
     }
     throw new InvalidUpdateError("clarification accepts choose_option or a modify follow-up");
   }

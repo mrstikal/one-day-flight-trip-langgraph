@@ -60,6 +60,11 @@ export async function POST(
       retryable: false,
     });
   }
+  if (command?.type === "set_simulation" && !guard.deps.config.demoControlsEnabled) {
+    // Phase 11: simulation controls are owner-protected (the guard above) AND
+    // flag-protected; the inspector never exposes them when the flag is off.
+    return errorResponse("FORBIDDEN", "simulation controls are disabled", {}, 403);
+  }
   if (chat !== undefined) {
     // Chat has its own bucket in addition to the shared command bucket.
     const chatLimit = await consumeRateLimit(guard.deps.pool, {

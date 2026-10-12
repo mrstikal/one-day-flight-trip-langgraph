@@ -42,11 +42,16 @@ export async function stageSelectionNode(
     offerId,
     sourceFingerprint,
   });
+  // Phase 11: choosing a service that already has a confirmed reservation is a
+  // replacement, never a second booking. The confirmed row stays active until the
+  // replacement decision is explicitly confirmed.
+  const progress = await ports.loadProgress(state.tripId);
+  const replacing = progress.confirmedServices.includes(service);
   return {
     proposalId: proposal.proposalId,
     selectedOfferId: offerId,
     decisionFingerprint: sourceFingerprint,
-    nextDecisionKind: "booking_confirmation",
+    nextDecisionKind: replacing ? "replacement_confirmation" : "booking_confirmation",
     bookingService: service,
   };
 }

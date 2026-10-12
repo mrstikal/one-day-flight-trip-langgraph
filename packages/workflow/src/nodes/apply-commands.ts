@@ -1,6 +1,8 @@
 import { chatCommandPayloadSchema, domainCommandSchema } from "@odft/contracts";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
+import { resolveCommandRouting, routingRefs } from "../routing/invalidation-matrix.js";
+import { stageRouteChangeIfImpactful } from "./stage-route-change.js";
 
 /**
  * Apply the admitted command to the trip's route/preferences. A creation run
@@ -9,6 +11,11 @@ import { travelPorts } from "../travel/runtime.js";
  *
  * A chat request carries no direct command: it is forwarded to `interpret_intent`,
  * which runs the intent role and then feeds the same deterministic dispatcher.
+ *
+ * Phase 11: a `set_route` that would invalidate confirmed reservations does not
+ * apply here. It is staged as a `route_change_confirmation` decision carrying the
+ * server-built impact preview (the affected reservation ids and the deferred
+ * command batch); nothing is cancelled until the user confirms.
  */
 export async function applyCommandsNode(
   state: TravelState,
@@ -27,20 +34,81 @@ export async function applyCommandsNode(
     return {};
   }
   const ports = travelPorts(runtime);
-  await ports.runEffect("apply_commands", parsed.data.type, () =>
+  const command = parsed.data;
+
+  // Phase 11: a route change that would invalidate confirmed reservations opens
+  // the impact-confirmation decision instead of applying.
+  const staging = await stageRouteChangeIfImpactful({
+    ports,
+    nodeName: "apply_commands",
+    tripId: state.tripId,
+    operationId: state.operationId,
+    commands: [command],
+  });
+  if (staging.kind === "staged") {
+    return staging.update;
+  }
+  const routeNoop = staging.kind === "noop";
+
+  await ports.runEffect("apply_commands", command.type, () =>
     ports.applyCommands({
       tripId: state.tripId,
       operationId: state.operationId,
-      commands: [parsed.data],
+      commands: [command],
     }),
   );
-  if (parsed.data.type === "set_program") {
+  if (command.type === "set_program") {
     // Carry the admitted program payload into apply_program (a command is a
     // request, so it applies deterministically just like submit_program).
     return {
-      submittedMealSelections: parsed.data.mealOfferIds,
-      submittedActivityIds: parsed.data.preferredActivityIds,
+      submittedMealSelections: command.mealOfferIds,
+      submittedActivityIds: command.preferredActivityIds,
     };
   }
-  return {};
+
+  // Phase 11: resolve the next work item from the invalidation matrix, using the
+  // trip's persisted preferences and confirmed/selected services as the refs.
+  const tripContext = await ports.loadTrip(state.tripId);
+  if (!tripContext) {
+    return {};
+  }
+  const progress = await ports.loadProgress(state.tripId);
+  const routing = resolveCommandRouting({
+    commands: [command],
+    refs: routingRefs({
+      preferences: tripContext.trip.preferences,
+      confirmedServices: progress.confirmedServices,
+      selectedServices: progress.selectedServices,
+      hasConfirmedFlight: progress.flightConfirmed,
+      programApplied: progress.programApplied,
+    }),
+  });
+  // An APPLIED route change (no staged preview: no confirmed reservations, or a
+  // same-value command) always re-runs the feasibility stages and starts a fresh
+  // flight choice — never an empty confirmation.
+  const appliedRouteChange = routing.resolution.routeChange && !routeNoop;
+  return {
+    nextWork: routeNoop ? "progress" : appliedRouteChange ? "route" : routing.nextWork,
+    nextDecisionKind: routeNoop
+      ? state.nextDecisionKind
+      : appliedRouteChange
+        ? "flight_choice"
+        : (routing.resolution.nextDecisionKind ?? state.nextDecisionKind),
+    hasConfirmedFlight: progress.flightConfirmed,
+    hasConfirmedHotel: progress.hotelConfirmed,
+    confirmedServices: [...progress.confirmedServices],
+    selectedServices: [...progress.selectedServices],
+    searchTargetDomains:
+      command.type === "find_alternatives"
+        ? routing.resolution.affectedDomains.slice(0, 1)
+        : [],
+    searchIntent:
+      command.type === "find_alternatives"
+        ? {
+            target: command.target,
+            objective: command.objective,
+            level: command.level ?? null,
+          }
+        : null,
+  };
 }

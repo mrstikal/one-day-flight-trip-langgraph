@@ -32,5 +32,8 @@ export function publishSummaryNode(state: TravelState): TravelUpdate {
   if (state.replacementStaged) {
     return { lastOutcome: "replacement_pending" };
   }
+  if (state.lastOutcome === "route_changed") {
+    return { lastOutcome: "route_changed" };
+  }
   return { lastOutcome: "success" };
 }

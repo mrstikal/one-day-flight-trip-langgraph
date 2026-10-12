@@ -1,6 +1,6 @@
 import { Send } from "@langchain/langgraph";
 import { RESEARCH_DOMAINS } from "@odft/contracts";
-import { computeAffectedDomains, researchRunIdFor } from "@odft/domain";
+import { computeAffectedDomains, latestResultPerDomain, researchRunIdFor } from "@odft/domain";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
 
@@ -23,18 +23,29 @@ export async function dispatchResearchNode(
 ): Promise<TravelUpdate> {
   const ports = travelPorts(runtime);
   await ports.runEffect("dispatch_research", "ensure", () => ports.ensureDomains(state.tripId));
-  const inputs = await ports.loadResearchInputs(state.tripId, state.operationId);
+  const inputs = await ports.loadResearchInputs(
+    state.tripId,
+    state.operationId,
+    state.searchIntent,
+  );
 
   // A retry dispatch sends exactly the retryable domains `join_research` named —
   // never a deterministically unavailable sibling. A normal dispatch recomputes
-  // the affected set from the research input fingerprints.
-  const affected =
+  // the affected set from the research input fingerprints, plus any explicitly
+  // targeted search domain that has no usable result yet (Phase 11).
+  const fingerprintAffected =
     state.failedDomains.length > 0
       ? RESEARCH_DOMAINS.filter((domain) => state.failedDomains.includes(domain))
       : computeAffectedDomains({
           priorResults: state.researchResults,
           currentFingerprints: inputs.fingerprints,
         });
+  const targeted = state.searchTargetDomains.filter(
+    (domain) => latestResultPerDomain(state.researchResults)[domain]?.status !== "ok",
+  );
+  const affected = RESEARCH_DOMAINS.filter(
+    (domain) => fingerprintAffected.includes(domain) || targeted.includes(domain),
+  );
 
   if (affected.length === 0) {
     return {
@@ -84,6 +95,7 @@ export function routeAfterDispatch(state: TravelState): string | Send[] {
         researchRunId: state.researchRunId,
         attempt: state.researchAttempts[domain] ?? 1,
         inputFingerprint: state.researchInputFingerprints[domain],
+        searchIntent: state.searchIntent,
       }),
   );
 }

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { SyntheticRoutingProvider } from "@odft/data";
-import type { ServiceKey } from "@odft/contracts";
+import type { BookableKey, ServiceKey } from "@odft/contracts";
 import { tripPreferencesSchema } from "@odft/contracts";
 import { getTrip } from "../trips.js";
 import { loadSnapshotContent } from "./snapshots.js";
@@ -44,6 +44,12 @@ export interface TripLogisticsResult {
 export interface TripProgress {
   readonly flightConfirmed: boolean;
   readonly hotelConfirmed: boolean;
+  /** Phase 11: every service with an active confirmed reservation. */
+  readonly confirmedServices: readonly BookableKey[];
+  /** Phase 11: every service with an active (unbooked) selection. */
+  readonly selectedServices: readonly BookableKey[];
+  /** Phase 11: true when the meal/activity program has been applied. */
+  readonly programApplied: boolean;
 }
 
 /** A selection that cannot be applied; `code` is a safe terminal conflict code. */
@@ -194,13 +200,33 @@ async function recordRecommendation(
 
 /** Confirmed flight/hotel progress used to resume a preference change at the right step. */
 export async function loadTripProgress(pool: Pool, tripId: string): Promise<TripProgress> {
-  const result = await pool.query<{ service_key: string }>(
-    `SELECT service_key FROM odft_app.reservations
-      WHERE trip_id = $1 AND status = 'confirmed'`,
-    [tripId],
-  );
-  const services = new Set(result.rows.map((row) => row.service_key));
-  return { flightConfirmed: services.has("flights"), hotelConfirmed: services.has("hotel") };
+  const [reservations, selections, program] = await Promise.all([
+    pool.query<{ service_key: string }>(
+      `SELECT service_key FROM odft_app.reservations
+        WHERE trip_id = $1 AND status = 'confirmed'`,
+      [tripId],
+    ),
+    pool.query<{ service_key: string }>(
+      `SELECT service_key FROM odft_app.trip_selections WHERE trip_id = $1`,
+      [tripId],
+    ),
+    pool.query<{ applied: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM odft_app.trip_selections
+          WHERE trip_id = $1 AND service_key IN ('breakfast','lunch')
+       ) AS applied`,
+      [tripId],
+    ),
+  ]);
+  const confirmedServices = reservations.rows.map((row) => row.service_key as BookableKey);
+  const services = new Set(confirmedServices);
+  return {
+    flightConfirmed: services.has("flights"),
+    hotelConfirmed: services.has("hotel"),
+    confirmedServices,
+    selectedServices: selections.rows.map((row) => row.service_key as BookableKey),
+    programApplied: program.rows[0]?.applied ?? false,
+  };
 }
 
 /** Latest persisted program activity preferences (may be empty). */

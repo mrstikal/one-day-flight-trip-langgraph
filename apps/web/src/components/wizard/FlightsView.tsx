@@ -210,7 +210,11 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     );
   }
 
-  if (pendingDecision?.kind === "booking_confirmation" && proposal?.serviceKey === "flights") {
+  if (
+    (pendingDecision?.kind === "booking_confirmation" ||
+      pendingDecision?.kind === "replacement_confirmation") &&
+    proposal?.serviceKey === "flights"
+  ) {
     const proposalUsable = proposal !== null && proposal.status === "proposed" && !proposal.expired;
     if (!proposalUsable) {
       return wrap(

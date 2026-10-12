@@ -35,11 +35,15 @@ export async function stageCommandProposalNode(
     offerId,
     sourceFingerprint,
   });
+  // Phase 11: proposing a service that already has a confirmed reservation is a
+  // replacement; the active row stays until the replacement is confirmed.
+  const progress = await ports.loadProgress(state.tripId);
+  const replacing = progress.confirmedServices.includes(service);
   return {
     proposalId: proposal.proposalId,
     selectedOfferId: offerId,
     decisionFingerprint: sourceFingerprint,
     bookingService: service,
-    nextDecisionKind: "booking_confirmation",
+    nextDecisionKind: replacing ? "replacement_confirmation" : "booking_confirmation",
   };
 }

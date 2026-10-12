@@ -4,6 +4,7 @@ import {
   RESEARCH_DOMAINS,
   researchDomainSchema,
   researchRunKey,
+  researchSearchIntentSchema,
   type ResearchDomain,
 } from "@odft/contracts";
 
@@ -101,6 +102,8 @@ export const researchDomainTaskSchema = z
     researchRunId: z.string().min(1),
     attempt: z.number().int().min(1).max(2),
     inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    /** Phase 11: operation-scoped search intent (level override / cheaper). */
+    searchIntent: researchSearchIntentSchema.nullable().optional(),
   })
   .strict();
 export type ResearchDomainTask = z.infer<typeof researchDomainTaskSchema>;

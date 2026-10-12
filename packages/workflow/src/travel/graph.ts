@@ -1,5 +1,11 @@
 import { END, START, StateGraph, type BaseCheckpointSaver } from "@langchain/langgraph";
-import { TRAVEL_GRAPH_VERSION, travelStateSchema, type TravelState } from "./state.js";
+import { TRAVEL_GRAPH_VERSION, travelStateSchema, type TravelState, type TravelUpdate } from "./state.js";
+import { routeByNextWork } from "../routing/next-work-target.js";
+import {
+  TRAVEL_GRAPH_EDGE_GROUPS,
+  TRAVEL_GRAPH_NODES,
+  type TravelGraphNodeSpec,
+} from "./graph-definition.js";
 import { loadContextNode } from "../nodes/load-context.js";
 import { applyCommandsNode } from "../nodes/apply-commands.js";
 import { validateRouteNode } from "../nodes/validate-route.js";
@@ -18,11 +24,13 @@ import { applyDecisionNode } from "../nodes/apply-decision.js";
 import { stageSelectionNode } from "../nodes/stage-selection.js";
 import { stageCommandProposalNode } from "../nodes/stage-command-proposal.js";
 import { commitBookingNode } from "../nodes/commit-booking.js";
+import { commitRouteChangeNode } from "../nodes/commit-route-change.js";
 import { applyProgramNode } from "../nodes/apply-program.js";
 import {
   interpretIntentNode,
   interpretModificationNode,
   resolveClarificationNode,
+  routeAfterModification,
 } from "../nodes/interpret-intent.js";
 import { publishSummaryNode } from "../nodes/publish-summary.js";
 import { planItineraryNode } from "../nodes/plan-itinerary.js";
@@ -31,34 +39,26 @@ import { reviewItineraryNode } from "../nodes/review-itinerary.js";
 import { approveItineraryNode } from "../nodes/approve-itinerary.js";
 
 /**
- * Production travel graph (Phase 06-10).
+ * Production travel graph (Phase 06-11).
  *
  * START -> load_context -> apply_commands ->
  *   propose_selection -> stage_command_proposal -> prepare_decision
+ *   set_route with confirmed reservations -> prepare_decision
+ *     (route_change_confirmation) -> await_decision -> apply_decision ->
+ *       confirm_route_change -> commit_route_change -> validate_route
  *   build_itinerary -> plan_itinerary
- *   else -> validate_route -> (FEASIBLE) generate_flights -> validate_schedules
- *     -> (VALID) prepare_decision -> await_decision -> apply_decision ->
- *          choose_offer -> stage_selection -> prepare_decision ...
- *          confirm_booking -> commit_booking ->
- *              flights -> ensure_domains -> validate_schedules ->
- *                  dispatch_research -> Send research_domain x N ->
- *                      join_research -> (retry) dispatch_research
- *                                    -> (failed) prepare_decision
- *                                    -> rank_recommendations -> prepare_decision ...
- *              else -> validate_selected_logistics -> plan_itinerary
- *          submit_program -> apply_program -> validate_selected_logistics ->
- *              plan_itinerary -> validate_itinerary ->
- *                  (invalid, attempts < 3) plan_itinerary
- *                  (invalid at bound / budget) prepare_decision
- *                  (valid) review_itinerary ->
- *                      (revise, attempts < 3) plan_itinerary
- *                      (else) prepare_decision (itinerary_approval)
- *          approve_itinerary -> publish_summary -> END
- *     (rejected / no schedule) -> publish_summary -> END
+ *   else -> next-work dispatch (invalidation matrix, Phase 11):
+ *     research -> (flight confirmed) ensure_domains -> validate_schedules ->
+ *         dispatch_research -> Send research_domain x N -> join_research -> ...
+ *     research -> (no flight) validate_route -> ...
+ *     plan -> plan_itinerary
+ *     validate -> validate_selected_logistics
+ *     summary -> publish_summary
+ *   (generic fallback) detect_progress -> ...
  *
- * Stage A/B validation and itinerary assembly/validation are independent and
- * deterministic; the graph never calls an LLM. Domain truth is read and written
- * through the invocation ports.
+ * The topology is defined ONCE in `graph-definition.ts`; this module only binds
+ * handlers and routers, so the persisted `graph.initialized` definition always
+ * matches the compiled graph.
  */
 
 export function routeAfterValidation(state: TravelState): string {
@@ -81,10 +81,11 @@ export function routeAfterSchedules(state: TravelState): string {
   return "prepare_decision";
 }
 
+
 /** A `propose_selection` command skips feasibility and opens a confirmation; a
  * `set_program` command applies the program directly; a chat request is
- * interpreted by the intent role first. Everything else first reads the
- * confirmed progress so a preference change resumes at the relevant step. */
+ * interpreted by the intent role first. Everything else routes by the
+ * invalidation matrix (Phase 11) or falls back to progress detection. */
 export function routeAfterApplyCommands(state: TravelState): string {
   if (state.commandType === "chat") {
     return "interpret_intent";
@@ -98,14 +99,19 @@ export function routeAfterApplyCommands(state: TravelState): string {
   if (state.commandType === "build_itinerary") {
     return "plan_itinerary";
   }
-  return "detect_progress";
+  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
+    // Only a STAGED route change presents the impact confirmation; an applied
+    // (unbooked) route change continues into fresh feasibility.
+    return "prepare_decision";
+  }
+  return routeByNextWork(state) ?? "detect_progress";
 }
 
 /** Route a validated intent result: unsupported ends, clarification interrupts,
  * program/proposal commands reuse their existing stages, and preference/search
- * commands continue through the deterministic progress detection. */
+ * commands continue through the invalidation-matrix dispatch. */
 export function routeAfterIntentResult(state: TravelState): string {
-  if (state.intentStatus === "unsupported" || state.intentStatus === "search_pending") {
+  if (state.intentStatus === "unsupported") {
     return "publish_summary";
   }
   if (state.intentStatus === "clarification") {
@@ -120,7 +126,12 @@ export function routeAfterIntentResult(state: TravelState): string {
   if (state.commandType === "build_itinerary") {
     return "plan_itinerary";
   }
-  return "detect_progress";
+  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
+    // A staged route change presents the impact confirmation; an applied
+    // (unbooked) one continues into fresh feasibility via `nextWork`.
+    return "prepare_decision";
+  }
+  return routeByNextWork(state) ?? "detect_progress";
 }
 
 /** With a confirmed flight, re-derive the non-flight steps; otherwise run feasibility. */
@@ -134,6 +145,8 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "stage_selection";
     case "commit":
       return "commit_booking";
+    case "commit_route":
+      return "commit_route_change";
     case "program":
       return "apply_program";
     case "approve":
@@ -212,130 +225,95 @@ export interface BuildTravelGraphOptions {
   readonly checkpointer: BaseCheckpointSaver;
 }
 
-export function buildTravelGraph(options: BuildTravelGraphOptions) {
-  const builder = new StateGraph(travelStateSchema)
-    .addNode("load_context", loadContextNode)
-    .addNode("apply_commands", applyCommandsNode)
-    .addNode("interpret_intent", interpretIntentNode)
-    .addNode("resolve_clarification", resolveClarificationNode)
-    .addNode("interpret_modification", interpretModificationNode)
-    .addNode("detect_progress", detectProgressNode)
-    .addNode("validate_route", validateRouteNode)
-    .addNode("generate_flights", generateFlightsNode)
-    .addNode("validate_schedules", validateSchedulesNode)
-    .addNode("ensure_domains", ensureDomainsNode)
-    .addNode("dispatch_research", dispatchResearchNode)
-    .addNode("research_domain", researchDomainNode)
-    .addNode("join_research", joinResearchNode)
-    .addNode("rank_recommendations", rankRecommendationsNode)
-    .addNode("validate_selected_logistics", validateSelectedLogisticsNode)
-    .addNode("plan_itinerary", planItineraryNode)
-    .addNode("validate_itinerary", validateItineraryNode)
-    .addNode("review_itinerary", reviewItineraryNode)
-    .addNode("approve_itinerary", approveItineraryNode)
-    .addNode("prepare_decision", prepareDecisionNode)
-    .addNode("await_decision", awaitDecisionNode)
-    .addNode("apply_decision", applyDecisionNode)
-    .addNode("stage_command_proposal", stageCommandProposalNode)
-    .addNode("stage_selection", stageSelectionNode)
-    .addNode("commit_booking", commitBookingNode)
-    .addNode("apply_program", applyProgramNode)
-    .addNode("publish_summary", publishSummaryNode)
-    .addEdge(START, "load_context")
-    .addEdge("load_context", "apply_commands")
-    .addConditionalEdges("apply_commands", routeAfterApplyCommands, [
-      "interpret_intent",
-      "stage_command_proposal",
-      "apply_program",
-      "plan_itinerary",
-      "detect_progress",
-    ])
-    .addConditionalEdges("interpret_intent", routeAfterIntentResult, [
-      "publish_summary",
-      "prepare_decision",
-      "apply_program",
-      "stage_command_proposal",
-      "plan_itinerary",
-      "detect_progress",
-    ])
-    .addConditionalEdges("resolve_clarification", routeAfterIntentResult, [
-      "publish_summary",
-      "prepare_decision",
-      "apply_program",
-      "stage_command_proposal",
-      "plan_itinerary",
-      "detect_progress",
-    ])
-    .addEdge("interpret_modification", "interpret_intent")
-    .addConditionalEdges("detect_progress", routeAfterDetectProgress, [
-      "ensure_domains",
-      "validate_route",
-    ])
-    .addConditionalEdges("validate_route", routeAfterValidation, [
-      "generate_flights",
-      "publish_summary",
-    ])
-    .addConditionalEdges("generate_flights", routeAfterGeneration, [
-      "validate_schedules",
-      "publish_summary",
-    ])
-    .addConditionalEdges("validate_schedules", routeAfterSchedules, [
-      "prepare_decision",
-      "dispatch_research",
-      "publish_summary",
-    ])
-    .addEdge("prepare_decision", "await_decision")
-    .addEdge("await_decision", "apply_decision")
-    .addConditionalEdges("apply_decision", routeAfterApplyDecision, [
-      "stage_selection",
-      "commit_booking",
-      "apply_program",
-      "approve_itinerary",
-      "detect_progress",
-      "prepare_decision",
-      "resolve_clarification",
-      "interpret_modification",
-      "publish_summary",
-    ])
-    .addEdge("stage_command_proposal", "prepare_decision")
-    .addEdge("stage_selection", "prepare_decision")
-    .addConditionalEdges("commit_booking", routeAfterCommit, [
-      "ensure_domains",
-      "validate_selected_logistics",
-    ])
-    .addConditionalEdges("ensure_domains", routeAfterEnsureDomains, ["validate_schedules"])
-    // Phase 09: `dispatch_research` fans out through `Send` (or continues with
-    // retained results); `research_domain` uses one static edge into the single
-    // serial join; the join alone decides retry/recovery/rank.
-    .addConditionalEdges("dispatch_research", routeAfterDispatch)
-    .addEdge("research_domain", "join_research")
-    .addConditionalEdges("join_research", routeAfterJoin, [
-      "dispatch_research",
-      "rank_recommendations",
-      "prepare_decision",
-    ])
-    .addConditionalEdges("rank_recommendations", routeAfterRank, [
-      "prepare_decision",
-      "publish_summary",
-    ])
-    .addConditionalEdges("apply_program", routeAfterApplyProgram, ["validate_selected_logistics"])
-    .addConditionalEdges("validate_selected_logistics", routeAfterLogistics, [
-      "prepare_decision",
-      "plan_itinerary",
-    ])
-    .addEdge("plan_itinerary", "validate_itinerary")
-    .addConditionalEdges("validate_itinerary", routeAfterValidateItinerary, [
-      "review_itinerary",
-      "plan_itinerary",
-      "prepare_decision",
-    ])
-    .addConditionalEdges("review_itinerary", routeAfterReviewItinerary, [
-      "plan_itinerary",
-      "prepare_decision",
-    ])
-    .addEdge("approve_itinerary", "publish_summary")
-    .addEdge("publish_summary", END);
+type NodeHandler = (state: TravelState, runtime: unknown) => TravelUpdate | Promise<TravelUpdate>;
+type Router = (state: TravelState) => string | unknown;
 
+const NODE_HANDLERS: Readonly<Record<string, NodeHandler>> = {
+  load_context: loadContextNode,
+  apply_commands: applyCommandsNode,
+  interpret_intent: interpretIntentNode,
+  resolve_clarification: resolveClarificationNode,
+  interpret_modification: interpretModificationNode,
+  detect_progress: detectProgressNode,
+  validate_route: validateRouteNode,
+  generate_flights: generateFlightsNode,
+  validate_schedules: validateSchedulesNode,
+  ensure_domains: ensureDomainsNode,
+  dispatch_research: dispatchResearchNode,
+  research_domain: researchDomainNode,
+  join_research: joinResearchNode,
+  rank_recommendations: rankRecommendationsNode,
+  validate_selected_logistics: validateSelectedLogisticsNode,
+  plan_itinerary: planItineraryNode,
+  validate_itinerary: validateItineraryNode,
+  review_itinerary: reviewItineraryNode,
+  approve_itinerary: approveItineraryNode,
+  prepare_decision: prepareDecisionNode,
+  await_decision: awaitDecisionNode,
+  apply_decision: applyDecisionNode,
+  stage_command_proposal: stageCommandProposalNode,
+  stage_selection: stageSelectionNode,
+  commit_booking: commitBookingNode,
+  commit_route_change: commitRouteChangeNode,
+  apply_program: applyProgramNode,
+  publish_summary: publishSummaryNode,
+};
+
+const ROUTERS: Readonly<Record<string, Router>> = {
+  apply_commands: routeAfterApplyCommands,
+  interpret_modification: routeAfterModification,
+  interpret_intent: routeAfterIntentResult,
+  resolve_clarification: routeAfterIntentResult,
+  detect_progress: routeAfterDetectProgress,
+  validate_route: routeAfterValidation,
+  generate_flights: routeAfterGeneration,
+  validate_schedules: routeAfterSchedules,
+  apply_decision: routeAfterApplyDecision,
+  commit_booking: routeAfterCommit,
+  dispatch_research: routeAfterDispatch,
+  join_research: routeAfterJoin,
+  rank_recommendations: routeAfterRank,
+  validate_selected_logistics: routeAfterLogistics,
+  validate_itinerary: routeAfterValidateItinerary,
+  review_itinerary: routeAfterReviewItinerary,
+};
+
+function handlerFor(node: TravelGraphNodeSpec): NodeHandler {
+  const handler = NODE_HANDLERS[node.id];
+  if (!handler) {
+    throw new Error(`travel graph registry has no handler for node ${node.id}`);
+  }
+  return handler;
+}
+
+export function buildTravelGraph(options: BuildTravelGraphOptions) {
+  const builder = new StateGraph(travelStateSchema);
+  for (const node of TRAVEL_GRAPH_NODES) {
+    // The registry guarantees valid ids; the builder's generic overloads cannot
+    // express a runtime registry, so the calls are narrowed at this boundary.
+    builder.addNode(node.id as never, handlerFor(node) as never);
+  }
+  for (const group of TRAVEL_GRAPH_EDGE_GROUPS) {
+    const from = (group.from === "__start__" ? START : group.from) as never;
+    if (!group.conditional) {
+      const target = group.targets[0];
+      if (!target) {
+        throw new Error(`travel graph edge group from ${group.from} has no target`);
+      }
+      builder.addEdge(from, (target === "__end__" ? END : target) as never);
+      continue;
+    }
+    const router = ROUTERS[group.from];
+    if (!router) {
+      throw new Error(`travel graph registry has no router for node ${group.from}`);
+    }
+    if (group.dynamic) {
+      // The router itself returns `Send[]`; no static target list is bound.
+      builder.addConditionalEdges(from, router as never);
+    } else {
+      builder.addConditionalEdges(from, router as never, [...group.targets] as never);
+    }
+  }
   return builder.compile({ checkpointer: options.checkpointer });
 }
 

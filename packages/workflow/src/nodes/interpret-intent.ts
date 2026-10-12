@@ -1,8 +1,11 @@
 import { InvalidUpdateError } from "@langchain/langgraph";
 import { fingerprint } from "@odft/domain";
-import type { DomainCommand } from "@odft/contracts";
+import { domainCommandSchema, type DomainCommand } from "@odft/contracts";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
+import { resolveCommandRouting, routingRefs } from "../routing/invalidation-matrix.js";
+import { routeByNextWork } from "../routing/next-work-target.js";
+import { stageRouteChangeIfImpactful } from "./stage-route-change.js";
 
 /**
  * Phase 08 intent pipeline (07-conversation-and-intents.md sections 1-5).
@@ -49,6 +52,13 @@ function routingFor(commands: readonly DomainCommand[]): {
   submittedMealSelections?: TravelUpdate["submittedMealSelections"];
   submittedActivityIds?: string[];
 } {
+  // A route change outranks every other command in a batch: Stage A and Stage B
+  // must re-run before any downstream step (a committed route change also drops
+  // the stale selections the other commands would touch).
+  const route = commands.find((command) => command.type === "set_route");
+  if (route) {
+    return { commandType: "route_change", commandPayload: route };
+  }
   const program = commands.find((command) => command.type === "set_program");
   if (program && program.type === "set_program") {
     return {
@@ -87,6 +97,80 @@ async function applyCommands(
     }),
   );
   return { routing: routingFor(commands), appliedCount: result.appliedCount };
+}
+
+/**
+ * Phase 11: apply an admitted batch through the deterministic dispatcher and
+ * resolve the next work item from the invalidation matrix. A route change that
+ * would invalidate confirmed reservations is staged as a confirmation instead of
+ * being applied; everything else applies atomically as before.
+ */
+async function applyBatchAndRoute(
+  state: TravelState,
+  runtime: unknown,
+  commands: readonly DomainCommand[],
+  effectNode: string,
+): Promise<TravelUpdate> {
+  const ports = travelPorts(runtime);
+  const staging = await stageRouteChangeIfImpactful({
+    ports,
+    nodeName: effectNode,
+    tripId: state.tripId,
+    operationId: state.operationId,
+    commands,
+  });
+  if (staging.kind === "staged") {
+    return staging.update;
+  }
+  const routeNoop = staging.kind === "noop";
+  const { routing } = await applyCommands(state, runtime, commands, effectNode);
+  const tripContext = await ports.loadTrip(state.tripId);
+  if (!tripContext) {
+    return routing;
+  }
+  const progress = await ports.loadProgress(state.tripId);
+  const matrix = resolveCommandRouting({
+    commands,
+    refs: routingRefs({
+      preferences: tripContext.trip.preferences,
+      confirmedServices: progress.confirmedServices,
+      selectedServices: progress.selectedServices,
+      hasConfirmedFlight: progress.flightConfirmed,
+      programApplied: progress.programApplied,
+    }),
+  });
+  const search = commands.find((command) => command.type === "find_alternatives");
+  // An APPLIED route change (the staging helper returned null) must re-run the
+  // feasibility stages and start a fresh flight choice.
+  // A noop `set_route` must not hijack the batch: another actionable command
+  // (program/proposal/itinerary) keeps its own routing.
+  const fallbackRouting = routeNoop
+    ? routingFor(commands.filter((command) => command.type !== "set_route"))
+    : null;
+  const appliedRouteChange = matrix.resolution.routeChange && !routeNoop;
+  return {
+    ...routing,
+    ...(fallbackRouting ?? {}),
+    nextWork: routeNoop ? "progress" : appliedRouteChange ? "route" : matrix.nextWork,
+    nextDecisionKind: routeNoop
+      ? state.nextDecisionKind
+      : appliedRouteChange
+        ? "flight_choice"
+        : (matrix.resolution.nextDecisionKind ?? state.nextDecisionKind),
+    hasConfirmedFlight: progress.flightConfirmed,
+    hasConfirmedHotel: progress.hotelConfirmed,
+    confirmedServices: [...progress.confirmedServices],
+    selectedServices: [...progress.selectedServices],
+    searchTargetDomains: search ? matrix.resolution.affectedDomains.slice(0, 1) : [],
+    searchIntent:
+      search && search.type === "find_alternatives"
+        ? {
+            target: search.target,
+            objective: search.objective,
+            level: search.level ?? null,
+          }
+        : null,
+  };
 }
 
 export async function interpretIntentNode(
@@ -166,25 +250,14 @@ export async function interpretIntentNode(
     }
   }
 
-  const { routing, appliedCount } = await applyCommands(
+  const routed = await applyBatchAndRoute(
     state,
     runtime,
     result.commands,
     "interpret_intent",
   );
-  // A search-only request (find_alternatives) changes nothing yet: report the
-  // limitation instead of re-deriving decisions as if the search had run.
-  if (appliedCount === 0 && result.commands.some((command) => command.type === "find_alternatives")) {
-    return {
-      intentStatus: "search_pending",
-      intentInterpretation: result.interpretation,
-      intentPreserve: result.preserve,
-      gate: "chat_done",
-      pendingStage: "end",
-    };
-  }
   return {
-    ...routing,
+    ...routed,
     intentStatus: "commands",
     intentInterpretation: result.interpretation,
     intentPreserve: result.preserve,
@@ -200,17 +273,15 @@ export async function resolveClarificationNode(
   if (!option) {
     throw new InvalidUpdateError("the chosen clarification option is no longer offered");
   }
-  const { routing, appliedCount } = await applyCommands(
+  const routed = await applyBatchAndRoute(
     state,
     runtime,
     option.commands,
     "resolve_clarification",
   );
   return {
-    ...routing,
-    intentStatus: appliedCount === 0 && option.commands.some((c) => c.type === "find_alternatives")
-      ? "search_pending"
-      : "commands",
+    ...routed,
+    intentStatus: "commands",
     intentInterpretation: option.label,
     clarificationQuestion: null,
     clarificationOptions: [],
@@ -218,7 +289,14 @@ export async function resolveClarificationNode(
   };
 }
 
-/** Load the free-text follow-up admitted while a clarification was pending. */
+/**
+ * Handle the follow-up admitted while a decision was pending (Phase 11).
+ *
+ * A chat message is forwarded to the intent role (the message text is loaded
+ * from the admitted operation). A typed command is applied directly through the
+ * same deterministic dispatcher and matrix routing — it is a modification, so it
+ * never needs an LLM call.
+ */
 export async function interpretModificationNode(
   state: TravelState,
   runtime: unknown,
@@ -227,6 +305,27 @@ export async function interpretModificationNode(
     throw new InvalidUpdateError("a modification requires an admitted command operation");
   }
   const ports = travelPorts(runtime);
+  const payload = await ports.loadOperationPayload(state.modificationOperationId);
+  const command = domainCommandSchema.safeParse(payload);
+  if (command.success) {
+    const routed = await applyBatchAndRoute(
+      state,
+      runtime,
+      [command.data],
+      "interpret_modification",
+    );
+    return {
+      ...routed,
+      // Effects belong to the new admitted operation, not the old checkpoint id.
+      operationId: state.modificationOperationId,
+      chatMessage: null,
+      intentStatus: "commands",
+      intentInterpretation: "Applied the requested change.",
+      clarificationQuestion: null,
+      clarificationOptions: [],
+      clarificationRequestedCommands: [],
+    };
+  }
   const message = await ports.loadChatMessage(state.modificationOperationId);
   if (!message) {
     throw new InvalidUpdateError("the modification operation carries no chat message");
@@ -239,4 +338,22 @@ export async function interpretModificationNode(
     clarificationQuestion: null,
     clarificationOptions: [],
   };
+}
+
+/**
+ * Router after a pending-decision modification: a typed command has already been
+ * applied and continues through the invalidation-matrix work item; a chat
+ * message is interpreted by the intent role.
+ */
+export function routeAfterModification(state: TravelState): string {
+  if (state.intentStatus !== "commands") {
+    return "interpret_intent";
+  }
+  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
+    // A typed `set_route` admitted as a modification that STAGED an impact
+    // preview must present its confirmation; an applied (unbooked) route change
+    // continues into fresh feasibility instead of progress detection.
+    return "prepare_decision";
+  }
+  return routeByNextWork(state) ?? "detect_progress";
 }

@@ -102,5 +102,14 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     clarificationOptions: [],
     clarificationRequestedCommands: [],
     modificationOperationId: null,
+    // Phase 11 invalidation-matrix dispatch and route-change staging
+    nextWork: "none",
+    searchTargetDomains: [],
+    searchIntent: null,
+    confirmedServices: [],
+    selectedServices: [],
+    routeChangeProposalId: null,
+    routeChangePreview: null,
+    lastAffectedReservationIds: [],
   };
 }

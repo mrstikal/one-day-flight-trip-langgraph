@@ -15,6 +15,8 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "clarification_apply" };
     case "modify":
       return { pendingStage: "clarification_modify" };
+    case "confirm_route_change":
+      return { pendingStage: "commit_route" };
     case "choose_option": {
       // Recovery decision: re-open the affected choice step without editing data.
       // A research-failure recovery ends the run instead: the affected page shows

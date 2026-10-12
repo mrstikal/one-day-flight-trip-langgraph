@@ -41,11 +41,28 @@ export async function rankRecommendationsNode(
     tripId: state.tripId,
     operationId: state.operationId,
     domains: candidates,
+    searchIntent: state.searchIntent,
   });
 
   const statuses = RESEARCH_DOMAINS.map((domain) => latest[domain]?.status).filter(
     (status) => status !== undefined,
   );
+  if (state.nextDecisionKind === "hotel_choice" && ranked.hotelOfferIds.length === 0) {
+    // A hotel choice with nothing to choose is a research failure, not an empty
+    // decision card: route to the recovery decision instead of dead-ending.
+    return {
+      hotelOfferIds: [],
+      mealOfferIds: { breakfast: [], lunch: [], dinner: [] },
+      activityIds: [],
+      programDefaults: ranked.mealDefaults,
+      dinnerNotIncludedReason: ranked.dinnerNotIncludedReason,
+      researchStatus: "failed",
+      researchFailedDomains: ["hotel"],
+      researchReason: "No compatible hotel is available for the selected category.",
+      nextDecisionKind: "recovery",
+      gate: "research_failed",
+    };
+  }
   return {
     hotelOfferIds: ranked.hotelOfferIds,
     mealOfferIds: {

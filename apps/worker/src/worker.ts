@@ -15,6 +15,7 @@ import {
   buildTravelGraph,
   buildTravelStartInput,
   chooseInvocation,
+  TRAVEL_GRAPH_DEFINITION,
   TRAVEL_GRAPH_VERSION,
   type CheckpointView,
   type ChooseInvocationOptions,
@@ -149,6 +150,9 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       graphVersion: TRAVEL_GRAPH_VERSION,
       logger,
       buildGraph,
+      // Phase 11: the safe definition comes from the same registry the graph was
+      // built from (custom graphs provide their own, or none).
+      ...(options.buildGraph ? {} : { graphDefinition: TRAVEL_GRAPH_DEFINITION }),
       buildSaver: () =>
         new PostgresSaver(saverPool, undefined, { schema: CHECKPOINT_SCHEMA }),
       portsFactory,

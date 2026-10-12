@@ -1,3 +1,4 @@
+import { InvalidUpdateError } from "@langchain/langgraph";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 
 /**
@@ -37,6 +38,26 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
       allowedOfferIds: state.selectedOfferId ? [state.selectedOfferId] : [],
       allowedOptionIds: [],
       gate: "awaiting_booking",
+      // Presenting a replacement confirmation means the commit must replace the
+      // active reservation, never create a second one for the same service.
+      pendingReplacement: true,
+    };
+  }
+  if (state.nextDecisionKind === "route_change_confirmation") {
+    if (state.routeChangePreview === null || state.routeChangeProposalId === null) {
+      // Cannot happen: the preview and its proposal id are written together by
+      // `apply_commands`. Fail loudly instead of presenting an empty card.
+      throw new InvalidUpdateError("a route-change confirmation requires a staged preview");
+    }
+    return {
+      decisionKind: "route_change_confirmation",
+      // No selection proposal exists for a route change: the impact preview
+      // (persisted with the decision) carries the deterministic proposal id, and
+      // both the graph and the commit validate the confirmation against it.
+      proposalId: null,
+      allowedOfferIds: [],
+      allowedOptionIds: [],
+      gate: "pending",
     };
   }
   if (state.nextDecisionKind === "clarification") {

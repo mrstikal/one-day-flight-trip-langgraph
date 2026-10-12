@@ -16,6 +16,7 @@ import {
   getPendingDecisionForTrip,
   getTrip,
   MAX_AUTO_CLAIMS_PER_ROUND,
+  projectSafeEvent,
   releaseClaim,
   StaleFencingError,
   withEffect,
@@ -70,6 +71,12 @@ export interface DriverDeps {
    * ports here.
    */
   readonly portsFactory?: (ctx: OperationFencingContext, signal?: AbortSignal) => unknown;
+  /**
+   * Phase 11: safe, versioned graph definition persisted as `graph.initialized`
+   * from the same registry that built the graph. The inspector renders it; it
+   * carries labels and topology only.
+   */
+  readonly graphDefinition?: unknown;
   /** Graph-specific invocation selection. Defaults to the harness chooser. */
   readonly chooseInvocation?: (
     state: CheckpointView | null,
@@ -192,7 +199,8 @@ export function createFencedEventWriter(
   return async (ctx, event) => {
     // The fencing token alone identifies the admitted writer: it rotates on every
     // new claim, so a stale worker's events are rejected while the current owner's
-    // events (including post-completion) are accepted.
+    // events (including post-completion) are accepted. Payloads are projected to
+    // the safe allowlist BEFORE storage (Phase 11).
     await operationsPool.query(
       `INSERT INTO odft_app.execution_events (trip_id, operation_id, type, payload)
        SELECT $1, $2, $3, $4::jsonb
@@ -200,7 +208,13 @@ export function createFencedEventWriter(
           SELECT 1 FROM odft_app.workflow_operations
            WHERE id = $2 AND trip_id = $1 AND fencing_token = $5::bigint
         )`,
-      [ctx.tripId, ctx.operationId, event.type, JSON.stringify(event.payload), ctx.fencingToken],
+      [
+        ctx.tripId,
+        ctx.operationId,
+        event.type,
+        JSON.stringify(projectSafeEvent(event.type, event.payload)),
+        ctx.fencingToken,
+      ],
     );
   };
 }
@@ -338,8 +352,19 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     const status = values.intentStatus;
     const interpretation =
       typeof values.intentInterpretation === "string" ? values.intentInterpretation : undefined;
+    const pendingKind = typeof values.nextDecisionKind === "string" ? values.nextDecisionKind : null;
+    // Phase 11: a search that refreshed offers presents them as a decision, and a
+    // route change that would invalidate reservations opens the impact card in
+    // the assistant rail. Neither changed a confirmed reservation.
+    if (status === "commands" && pendingKind === "route_change_confirmation") {
+      return `${interpretation ?? "Your route change was prepared."} Confirm the impact preview in the assistant rail; nothing is cancelled until you confirm.`;
+    }
     if (status === "commands") {
-      return `Applied: ${interpretation ?? "your request"}. No confirmed reservation was changed.`;
+      const refreshed =
+        pendingKind === "hotel_choice" || pendingKind === "program_choices"
+          ? " Refreshed alternatives are ready."
+          : "";
+      return `Applied: ${interpretation ?? "your request"}.${refreshed} No confirmed reservation was changed.`;
     }
     if (status === "unsupported") {
       return interpretation ?? "I could not interpret that request; the graphical controls remain available.";
@@ -490,6 +515,14 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       operationId: claim.operationId,
       ports: deps.portsFactory ? deps.portsFactory(ctx, abort.signal) : buildPorts(ctx),
     };
+    if (deps.graphDefinition !== undefined) {
+      // Persist the definition from the same worker registry before execution so
+      // the inspector can render real nodes/edges even for a failed first run.
+      await insertFencedEvent(ctx, {
+        type: "graph.initialized",
+        payload: deps.graphDefinition as Record<string, unknown>,
+      });
+    }
     const stream = await graph.stream(input, {
       configurable: { thread_id: claim.tripId },
       durability: "sync",

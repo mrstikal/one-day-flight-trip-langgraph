@@ -16,6 +16,7 @@ import { SyntheticRoutingProvider } from "@odft/data";
 import {
   approveItineraryDraft,
   applyTripCommands,
+  commitRouteChange,
   evaluateAndPersistRoute,
   getActiveReservation,
   getOperationPayload,
@@ -32,6 +33,7 @@ import {
   persistItineraryDraft,
   planProgramSelections,
   PostgresBookingStore,
+  previewRouteChange,
   rankTripRecommendations,
   recordFaultOutcome,
   recordPreferredActivities,
@@ -490,8 +492,8 @@ export function createTravelPortsFactory(
       return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
     },
 
-    async loadResearchInputs(tripId, operationId) {
-      return loadTripResearchInputs(pool, tripId, operationId);
+    async loadResearchInputs(tripId, operationId, searchIntent) {
+      return loadTripResearchInputs(pool, tripId, operationId, searchIntent ?? null);
     },
 
     async researchDomain(input) {
@@ -583,6 +585,22 @@ export function createTravelPortsFactory(
       return loadTripProgress(pool, tripId);
     },
 
+    async previewRouteChange(input) {
+      return previewRouteChange(pool, { tripId: input.tripId, commands: input.commands });
+    },
+
+    async commitRouteChange(input) {
+      return commitRouteChange(pool, {
+        tripId: input.tripId,
+        operationId: input.operationId,
+        decisionId: input.decisionId,
+        proposalId: input.proposalId,
+        affectedReservationIds: input.affectedReservationIds,
+        commands: input.commands,
+        fencingToken: ctx.fencingToken,
+      });
+    },
+
     async interpretIntent(input) {
       return ai.interpret({
         tripId: input.tripId,
@@ -597,6 +615,10 @@ export function createTravelPortsFactory(
       const payload = await getOperationPayload(pool, operationId);
       const parsed = chatCommandPayloadSchema.safeParse(payload);
       return parsed.success ? parsed.data.message : undefined;
+    },
+
+    async loadOperationPayload(operationId) {
+      return getOperationPayload(pool, operationId);
     },
 
     async planItinerary(input) {

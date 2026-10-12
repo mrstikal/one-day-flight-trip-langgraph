@@ -247,6 +247,55 @@ export const publicServiceLevelsSchema = z
   .strict();
 export type PublicServiceLevels = z.infer<typeof publicServiceLevelsSchema>;
 
+/* ---- Phase 11 route-change impact preview ----------------------------------- */
+
+export const routeChangeFieldSchema = z.enum([
+  "originAirportId",
+  "destinationCityId",
+  "sightseeingDate",
+  "travelVariant",
+]);
+export type RouteChangeField = z.infer<typeof routeChangeFieldSchema>;
+
+export const publicRouteSummarySchema = z
+  .object({
+    originAirportId: nonEmptyStringSchema,
+    destinationCityId: nonEmptyStringSchema,
+    destinationCountryKey: z.string().regex(/^[A-Z]{2}$/),
+    sightseeingDate: localDateSchema,
+    travelVariant: travelVariantSchema,
+  })
+  .strict();
+export type PublicRouteSummary = z.infer<typeof publicRouteSummarySchema>;
+
+/** One confirmed reservation the pending route change would cancel. */
+export const publicRouteChangeReservationSchema = z
+  .object({
+    id: uuidSchema,
+    serviceKey: bookableKeySchema,
+    offerId: nonEmptyStringSchema,
+    demoReference: nonEmptyStringSchema,
+    partyTotalMinor: moneyMinorSchema,
+  })
+  .strict();
+export type PublicRouteChangeReservation = z.infer<typeof publicRouteChangeReservationSchema>;
+
+/**
+ * Server-built impact preview for an admitted `set_route` that would invalidate
+ * confirmed reservations. It is shown before confirmation; the reservations stay
+ * active until `confirm_route_change` commits the cancellation atomically.
+ */
+export const publicRouteChangePreviewSchema = z
+  .object({
+    proposalId: uuidSchema,
+    changedFields: z.array(routeChangeFieldSchema).min(1),
+    from: publicRouteSummarySchema,
+    to: publicRouteSummarySchema,
+    affectedReservations: z.array(publicRouteChangeReservationSchema),
+  })
+  .strict();
+export type PublicRouteChangePreview = z.infer<typeof publicRouteChangePreviewSchema>;
+
 /* ---- Phase 09 research fan-out state ---------------------------------------- */
 
 /**

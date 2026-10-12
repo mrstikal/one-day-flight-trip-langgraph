@@ -14,6 +14,7 @@ import {
   type Meal,
   type ResearchDomain,
   type ResearchDomainStatus,
+  type ResearchSearchIntent,
   type ScenarioDomain,
   type ServiceLevel,
   type TripPreferences,
@@ -57,6 +58,8 @@ export interface ResearchDomainRequest {
   readonly domain: ResearchDomain;
   readonly attempt: number;
   readonly inputFingerprint: string;
+  /** Phase 11: operation-scoped search intent (level override / cheaper). */
+  readonly searchIntent?: ResearchSearchIntent | null;
 }
 
 export interface ResearchDomainOutcome {
@@ -119,6 +122,76 @@ function effectiveLevel(preferences: TripPreferences, service: Meal | "hotel"): 
   return preferences.serviceOverrides[service] ?? preferences.defaultServiceLevel;
 }
 
+type Queryable = { query: Pool["query"] };
+
+const SEARCH_TARGET_DOMAIN: Readonly<Record<string, ResearchDomain>> = {
+  hotel: "hotel",
+  breakfast: "breakfast",
+  lunch: "lunch",
+  dinner: "dinner",
+  activities: "attractions",
+};
+
+/**
+ * Phase 11 operation-scoped level override for a `find_alternatives` request:
+ *
+ * - an explicit `level` searches that category without changing preferences;
+ * - `cheaper` preserves the SELECTED/CONFIRMED offer's category even when the
+ *   global effective preference has since changed, so a cheaper same-category
+ *   alternative is actually comparable;
+ * - any other objective/domain searches with the effective preference.
+ */
+async function searchLevelOverride(input: {
+  readonly client: Queryable;
+  readonly tripId: string;
+  readonly snapshotId: string | undefined;
+  readonly searchIntent: ResearchSearchIntent | null | undefined;
+  readonly domain: ResearchDomain;
+}): Promise<ServiceLevel | undefined> {
+  const intent = input.searchIntent;
+  if (!intent) {
+    return undefined;
+  }
+  if ((SEARCH_TARGET_DOMAIN[intent.target] ?? null) !== input.domain) {
+    return undefined;
+  }
+  if (intent.level !== null) {
+    return intent.level;
+  }
+  if (intent.objective !== "cheaper" || input.domain === "attractions" || !input.snapshotId) {
+    return undefined;
+  }
+  // Deterministic precedence: the confirmed reservation defines the bound
+  // category; a plain selection is only the fallback.
+  const bound = await input.client.query<{ offer_id: string }>(
+    `SELECT offer_id FROM odft_app.reservations
+      WHERE trip_id = $1 AND service_key = $2 AND status = 'confirmed'
+      UNION ALL
+     SELECT offer_id FROM odft_app.trip_selections
+      WHERE trip_id = $1 AND service_key = $2
+     ORDER BY offer_id`,
+    [input.tripId, input.domain],
+  );
+  const confirmed = await input.client.query<{ offer_id: string }>(
+    `SELECT offer_id FROM odft_app.reservations
+      WHERE trip_id = $1 AND service_key = $2 AND status = 'confirmed'
+      LIMIT 1`,
+    [input.tripId, input.domain],
+  );
+  const offerId = confirmed.rows[0]?.offer_id ?? bound.rows[0]?.offer_id;
+  if (!offerId) {
+    return undefined;
+  }
+  const content = await loadSnapshotContent(input.client as Pool, input.snapshotId);
+  if (!content) {
+    return undefined;
+  }
+  if (input.domain === "hotel") {
+    return content.hotels.find((offer) => offer.id === offerId)?.level;
+  }
+  return content.restaurants.find((offer) => offer.id === offerId)?.level;
+}
+
 function nightsForVariant(variant: "one_night" | "two_nights"): number {
   return variant === "one_night" ? 1 : 2;
 }
@@ -179,11 +252,13 @@ export async function loadTripResearchInputs(
   pool: Pool,
   tripId: string,
   operationId?: string,
+  searchIntent?: ResearchSearchIntent | null,
 ): Promise<TripResearchInputs> {
   const client = await pool.connect();
   let trip: Awaited<ReturnType<typeof getTrip>>;
   let manifest: Awaited<ReturnType<typeof loadSnapshotManifest>>;
   let overlays: Awaited<ReturnType<typeof loadOverlaySummaries>>;
+  let override: { readonly domain: ResearchDomain; readonly level: ServiceLevel } | undefined;
   try {
     trip = await getTrip(client, tripId);
     if (!trip) {
@@ -194,9 +269,25 @@ export async function loadTripResearchInputs(
     }
     manifest = await loadSnapshotManifest(client, trip.activeScenarioSnapshotId);
     overlays = await loadOverlaySummaries(client, tripId, operationId);
+    // One operation-scoped override can only target the searched domain.
+    const overrideDomain = SEARCH_TARGET_DOMAIN[searchIntent?.target ?? ""];
+    if (searchIntent && overrideDomain) {
+      const level = await searchLevelOverride({
+        client,
+        tripId,
+        snapshotId: manifest.snapshotId,
+        searchIntent,
+        domain: overrideDomain,
+      });
+      if (level) {
+        override = { domain: overrideDomain, level };
+      }
+    }
   } finally {
     client.release();
   }
+  const levelFor = (domain: "hotel" | Meal): ServiceLevel =>
+    override && override.domain === domain ? override.level : effectiveLevel(trip.preferences, domain);
   const hashes = manifest.domainContentHashes;
   const preferences = trip.preferences;
   const interests = Object.entries(preferences.interests).sort((a, b) =>
@@ -215,7 +306,7 @@ export async function loadTripResearchInputs(
     fingerprints: {
       hotel: fingerprintFor("hotel", {
         hash: hashes.hotels,
-        level: effectiveLevel(preferences, "hotel"),
+        level: levelFor("hotel"),
         adults: trip.adults,
         variant: trip.travelVariant,
         dates: nightDates(trip.sightseeingDate, trip.travelVariant),
@@ -223,19 +314,19 @@ export async function loadTripResearchInputs(
       }),
       breakfast: fingerprintFor("breakfast", {
         hash: hashes.breakfast,
-        level: effectiveLevel(preferences, "breakfast"),
+        level: levelFor("breakfast"),
         adults: trip.adults,
         overlay: overlayFor("breakfast"),
       }),
       lunch: fingerprintFor("lunch", {
         hash: hashes.lunch,
-        level: effectiveLevel(preferences, "lunch"),
+        level: levelFor("lunch"),
         adults: trip.adults,
         overlay: overlayFor("lunch"),
       }),
       dinner: fingerprintFor("dinner", {
         hash: hashes.dinner,
-        level: effectiveLevel(preferences, "dinner"),
+        level: levelFor("dinner"),
         adults: trip.adults,
         overlay: overlayFor("dinner"),
       }),
@@ -271,15 +362,19 @@ async function callDomainProvider(input: {
   readonly trip: NonNullable<Awaited<ReturnType<typeof getTrip>>>;
   readonly behavior: BehaviorOverlay;
   readonly attempt: number;
+  /** Phase 11: operation-scoped category override for the searched domain. */
+  readonly levelOverride?: ServiceLevel;
 }): Promise<DomainProviderOutcome> {
   const source = new PostgresSnapshotSource(input.pool);
   const trip = input.trip;
+  const levelFor = (service: Meal | "hotel"): ServiceLevel =>
+    input.levelOverride ?? effectiveLevel(trip.preferences, service);
   switch (input.domain) {
     case "hotel": {
       const provider = new SyntheticAccommodationSearchProvider(source, input.behavior);
       const result = await provider.search({
         snapshotId: input.snapshotId,
-        level: effectiveLevel(trip.preferences, "hotel"),
+        level: levelFor("hotel"),
         adults: trip.adults,
         dates: nightDates(trip.sightseeingDate, trip.travelVariant),
         attempt: input.attempt,
@@ -302,7 +397,7 @@ async function callDomainProvider(input: {
       const result = await provider.search({
         snapshotId: input.snapshotId,
         meal: input.domain,
-        level: effectiveLevel(trip.preferences, input.domain),
+        level: levelFor(input.domain),
         adults: trip.adults,
         attempt: input.attempt,
       });
@@ -363,6 +458,28 @@ export async function researchTripDomain(
   const behavior = overlay ?? emptyOverlay("normal");
   const simulated = overlay !== null && overlayTargetsDomain(overlay, scenarioDomain);
 
+  // Phase 11: a `find_alternatives` search may target a different category than
+  // the trip's effective preference (explicit level, or the bound offer's
+  // category for a cheaper search).
+  let levelOverride: ServiceLevel | undefined;
+  if (input.searchIntent) {
+    const overrideDomain = SEARCH_TARGET_DOMAIN[input.searchIntent.target];
+    if (overrideDomain === input.domain) {
+      const client = await pool.connect();
+      try {
+        levelOverride = await searchLevelOverride({
+          client,
+          tripId: input.tripId,
+          snapshotId,
+          searchIntent: input.searchIntent,
+          domain: input.domain,
+        });
+      } finally {
+        client.release();
+      }
+    }
+  }
+
   const result = await callDomainProvider({
     pool,
     domain: input.domain,
@@ -370,6 +487,7 @@ export async function researchTripDomain(
     trip,
     behavior,
     attempt: input.attempt,
+    ...(levelOverride ? { levelOverride } : {}),
   });
 
   if (simulated && overlay) {
@@ -458,6 +576,8 @@ export async function rankTripRecommendations(
   input: {
     readonly tripId: string;
     readonly domains: readonly RankDomainCandidates[];
+    /** Phase 11: operation-scoped level override / cheaper comparison. */
+    readonly searchIntent?: ResearchSearchIntent | null;
   },
   fence?: OperationFencingContext,
 ): Promise<RankedTripServices> {
@@ -465,6 +585,7 @@ export async function rankTripRecommendations(
   let trip: Awaited<ReturnType<typeof getTrip>>;
   let snapshotId: string | undefined;
   let content: Awaited<ReturnType<typeof loadSnapshotContent>>;
+  let override: { readonly domain: ResearchDomain; readonly level: ServiceLevel } | undefined;
   try {
     trip = await getTrip(client, input.tripId);
     if (!trip) {
@@ -475,12 +596,29 @@ export async function rankTripRecommendations(
       throw new Error(`trip ${input.tripId} has no active scenario snapshot`);
     }
     content = await loadSnapshotContent(client, snapshotId);
+    const overrideDomain = SEARCH_TARGET_DOMAIN[input.searchIntent?.target ?? ""];
+    if (input.searchIntent && overrideDomain) {
+      const level = await searchLevelOverride({
+        client,
+        tripId: input.tripId,
+        snapshotId,
+        searchIntent: input.searchIntent,
+        domain: overrideDomain,
+      });
+      if (level) {
+        override = { domain: overrideDomain, level };
+      }
+    }
   } finally {
     client.release();
   }
   if (!content) {
     throw new Error(`trip ${input.tripId} active snapshot is not materialized`);
   }
+  const levelFor = (service: Meal | "hotel"): ServiceLevel =>
+    override && override.domain === service
+      ? override.level
+      : effectiveLevel(trip.preferences, service);
   const byDomain = new Map(input.domains.map((domain) => [domain.domain, domain]));
   const candidateIds = (domain: ResearchDomain): Set<string> =>
     new Set(byDomain.get(domain)?.offerIds ?? []);
@@ -490,7 +628,7 @@ export async function rankTripRecommendations(
   const hotelOffers = content.hotels.filter(
     (offer) =>
       hotelIds.has(offer.id) &&
-      offer.level === effectiveLevel(trip.preferences, "hotel") &&
+      offer.level === levelFor("hotel") &&
       offer.adults === trip.adults &&
       offer.nights === nights &&
       (trip.travelVariant !== "one_night" || offer.luggageStorage),
@@ -509,7 +647,7 @@ export async function rankTripRecommendations(
       (offer) =>
         ids.has(offer.id) &&
         offer.meal === meal &&
-        offer.level === effectiveLevel(trip.preferences, meal) &&
+        offer.level === levelFor(meal) &&
         content.context.adults === trip.adults,
     );
     eligibleMeals[meal] = offers;

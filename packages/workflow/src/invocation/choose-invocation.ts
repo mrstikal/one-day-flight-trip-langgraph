@@ -2,6 +2,7 @@ import {
   chatCommandPayloadSchema,
   DECISION_ALLOWED_ACTIONS,
   decisionKindSchema,
+  domainCommandSchema,
   graphResumeEnvelopeSchema,
   resumeRequestSchema,
   type DecisionKind,
@@ -144,10 +145,12 @@ export function chooseInvocation(
       return { kind: "resume", envelope };
     }
     // A command/creation that is itself the interrupted operation is a recovery of
-    // a still-waiting job. A NEW command admitted while an interrupt is pending
-    // cannot run (it would be silently swallowed), so it conflicts — EXCEPT a chat
-    // request that follows up a clarification, which the worker turns into the
-    // internal `modify` branch of the current interrupt.
+    // a still-waiting job. A NEW operation admitted while an interrupt is pending
+    // cannot run as-is (it would be silently swallowed), so the worker turns it
+    // into the internal `modify` branch of the current interrupt — for a chat
+    // request AND for a typed command (Phase 11). The old decision is resolved
+    // explicitly once the new operation succeeds; a typed command then applies
+    // through the deterministic dispatcher without an LLM call.
     if (state.values.operationId === operation.id) {
       return {
         kind: "waiting",
@@ -155,11 +158,8 @@ export function chooseInvocation(
       };
     }
     const chatPayload = chatCommandPayloadSchema.safeParse(operation.payload);
-    if (
-      chatPayload.success &&
-      options.pendingDecisionKind === "clarification" &&
-      options.pendingDecisionId
-    ) {
+    const commandPayload = domainCommandSchema.safeParse(operation.payload);
+    if (options.pendingDecisionId && (chatPayload.success || commandPayload.success)) {
       return {
         kind: "resume",
         envelope: graphResumeEnvelopeSchema.parse({

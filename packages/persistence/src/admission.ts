@@ -489,12 +489,44 @@ export async function admitResume(
     }
     // A confirmation must target the proposal the pending decision is bound to.
     if (
-      request.response.action === "confirm_booking" &&
+      (request.response.action === "confirm_booking" ||
+        request.response.action === "confirm_route_change") &&
       decision.proposalId &&
       decision.proposalId !== request.response.proposalId
     ) {
       await client.query("ROLLBACK");
       return error("STALE_DECISION", "the confirmation does not match the pending proposal");
+    }
+    // Phase 11: a route-change confirmation carries no selection proposal, so it
+    // is bound to the persisted impact preview: the proposal id must match and
+    // the named reservations must be exactly the previewed ones.
+    if (request.response.action === "confirm_route_change") {
+      const preview = await client.query<{ proposal_id: string | null; affected: unknown }>(
+        `SELECT option_payload->>'proposalId' AS proposal_id,
+                option_payload->'affectedReservations' AS affected
+           FROM odft_app.pending_decisions WHERE id = $1`,
+        [request.decisionId],
+      );
+      const row = preview.rows[0];
+      const affectedIds = Array.isArray(row?.affected)
+        ? (row?.affected as { id?: unknown }[])
+            .map((entry) => (typeof entry?.id === "string" ? entry.id : null))
+            .filter((id): id is string => id !== null)
+            .sort()
+        : [];
+      const named = [...request.response.affectedReservationIds].sort();
+      if (
+        !row ||
+        row.proposal_id !== request.response.proposalId ||
+        affectedIds.length === 0 ||
+        affectedIds.join(",") !== named.join(",")
+      ) {
+        await client.query("ROLLBACK");
+        return error(
+          "STALE_DECISION",
+          "the confirmation does not match the persisted route-change impact preview",
+        );
+      }
     }
 
     const operation = await insertOperation(client, {

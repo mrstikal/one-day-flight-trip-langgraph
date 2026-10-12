@@ -78,6 +78,23 @@ export {
 } from "./travel/graph.js";
 export type { BuildTravelGraphOptions } from "./travel/graph.js";
 export {
+  END_NODE_ID,
+  START_NODE_ID,
+  TRAVEL_GRAPH_DEFINITION,
+  TRAVEL_GRAPH_EDGE_GROUPS,
+  TRAVEL_GRAPH_NODES,
+  TRAVEL_NODE_LABELS,
+} from "./travel/graph-definition.js";
+export type { TravelGraphEdgeGroup, TravelGraphNodeSpec } from "./travel/graph-definition.js";
+export {
+  commandChange,
+  mergeResolutions,
+  nextWorkFor,
+  resolveCommandRouting,
+  routingRefs,
+} from "./routing/invalidation-matrix.js";
+export type { NextWork, ResolvedCommandRouting } from "./routing/invalidation-matrix.js";
+export {
   interpretIntentNode,
   interpretModificationNode,
   resolveClarificationNode,

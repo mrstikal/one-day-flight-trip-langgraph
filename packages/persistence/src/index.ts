@@ -70,7 +70,8 @@ export {
 export type { InsertOperationInput, StoredOperation } from "./operations.js";
 
 export { readEffect, writeEffect } from "./effects.js";
-export { insertEvent, listTripEvents } from "./events.js";
+export { insertEvent, listTripEvents, projectSafeEvent } from "./events.js";
+export { loadPublicInspector } from "./inspector.js";
 export type { ExecutionEventInput, ProjectedEvent } from "./events.js";
 
 export { getProposal, insertProposal, markProposalResolved } from "./proposals.js";
@@ -240,8 +241,19 @@ export type {
   TripResearchInputs,
 } from "./scenario/research-domains.js";
 
-export { applyTripCommand, applyTripCommands, TripCommandError } from "./trip-commands.js";
-export type { ApplyTripCommandResult, ApplyTripCommandsResult } from "./trip-commands.js";
+export {
+  applyTripCommand,
+  applyTripCommands,
+  commitRouteChange,
+  previewRouteChange,
+  TripCommandError,
+} from "./trip-commands.js";
+export type {
+  ApplyTripCommandResult,
+  ApplyTripCommandsResult,
+  RouteChangePreviewResult,
+  RouteChangeReservationPreview,
+} from "./trip-commands.js";
 
 export {
   dinnerSlotAvailable,

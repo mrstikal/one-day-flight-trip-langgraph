@@ -4,10 +4,12 @@ import {
   listConversation,
   loadApprovedItineraryVersion,
   loadLatestItinerary,
+  loadPublicInspector,
 } from "@odft/persistence";
 import {
   publicClarificationSchema,
   publicInterpretationSchema,
+  publicRouteChangePreviewSchema,
   RESEARCH_DOMAINS,
   researchDomainSchema,
   researchDomainStatusSchema,
@@ -32,6 +34,7 @@ import {
   type PublicResearchState,
   type PublicResearchStatus,
   type PublicReservation,
+  type PublicRouteChangePreview,
   type PublicServiceLevels,
   type OperationStatusResponse,
   type ResearchDomain,
@@ -697,7 +700,11 @@ export async function buildTripProjection(
       // format; keep the legacy eligibility filter instead of hiding offers.
       return outcome.fingerprint === null ? offers.filter(eligible).map(toPublic) : [];
     }
-    return offersInRankedOrder(artifact.rankedOfferIds, offers, eligible, toPublic);
+    // The artifact was already filtered and ordered by the deterministic ranking
+    // with the level it was computed for (Phase 11: a cheaper search preserves
+    // the bound category), so re-applying the current preference filter here
+    // would hide exactly the offers the search just refreshed.
+    return offersInRankedOrder(artifact.rankedOfferIds, offers, () => true, toPublic);
   };
   const dinnerOutcome = researchOutcomeFor("dinner");
   const dinnerArtifact =
@@ -818,6 +825,15 @@ export async function buildTripProjection(
     const parsed = publicClarificationSchema.safeParse(decisionRow.option_payload);
     return parsed.success ? parsed.data : null;
   })();
+  // Phase 11: the route-change impact preview persisted with the pending
+  // confirmation decision (safe fields only; the reservations stay active).
+  const routeChange: PublicRouteChangePreview | null = (() => {
+    if (decisionRow?.kind !== "route_change_confirmation" || !decisionRow.option_payload) {
+      return null;
+    }
+    const parsed = publicRouteChangePreviewSchema.safeParse(decisionRow.option_payload);
+    return parsed.success ? parsed.data : null;
+  })();
 
   // Phase 10: latest immutable itinerary version (draft or approved) with the
   // safe marker list derived from the same events plus the confirmed hotel and
@@ -827,6 +843,10 @@ export async function buildTripProjection(
     reservations,
     approvedVersion: await loadApprovedItineraryVersion(pool, tripId),
   });
+
+  // Phase 11: the execution inspector is demo-controls gated and assembled from
+  // safe persisted rows only (never a graph API, never prompts).
+  const inspector = display.demoControlsEnabled ? await loadPublicInspector(pool, tripId) : null;
 
   return {
     trip,
@@ -853,6 +873,8 @@ export async function buildTripProjection(
     conversation,
     clarification,
     itinerary,
+    routeChange,
+    inspector,
     display,
   };
 }

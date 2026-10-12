@@ -194,7 +194,8 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
   }
 
   if (
-    pendingDecision?.kind === "booking_confirmation" &&
+    (pendingDecision?.kind === "booking_confirmation" ||
+      pendingDecision?.kind === "replacement_confirmation") &&
     (proposal === null || proposal.serviceKey === "hotel")
   ) {
     if (proposal === null || proposal.expired) {

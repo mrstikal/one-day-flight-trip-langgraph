@@ -59,6 +59,21 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     return tripPreferencesSchema.parse(result.rows[0]?.preferences);
   }
 
+  /** Confirmed reservation identity, used to prove a search changed nothing. */
+  async function confirmedReservations(
+    tripId: string,
+  ): Promise<{ serviceKey: string; demoReference: string }[]> {
+    const result = await pool.query<{ service_key: string; demo_reference: string }>(
+      `SELECT service_key, demo_reference FROM odft_app.reservations
+        WHERE trip_id = $1 AND status = 'confirmed' ORDER BY service_key`,
+      [tripId],
+    );
+    return result.rows.map((row) => ({
+      serviceKey: row.service_key,
+      demoReference: row.demo_reference,
+    }));
+  }
+
   /** Choose one offered clarification/recovery option and run the resume. */
   async function choosePendingOption(
     tripId: string,
@@ -256,24 +271,22 @@ describe("chat intent pipeline (real PostgreSQL)", () => {
     expect(after.maxBudgetMinor).toBe(before.maxBudgetMinor);
   }, 90_000);
 
-  it("reports a search-only request without re-deriving decisions (P2-2)", async () => {
+  it("runs a search-only request as a targeted refresh of the searched domain (P11-2)", async () => {
     const { tripId, sessionId } = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, tripId, sessionId);
 
+    const reservationsBefore = await confirmedReservations(tripId);
     await sendChat(pool, pools, tripId, sessionId, "Find a cheaper hotel");
 
-    // Nothing changed and no new decision was opened: the result is reported as a
-    // demo-step limitation instead of pretending the search ran.
-    const trip = await pool.query<{ workflow_status: string }>(
-      `SELECT workflow_status FROM odft_app.trips WHERE id = $1`,
-      [tripId],
-    );
-    expect(trip.rows[0]?.workflow_status).toBe("ready");
+    // Phase 11: the search refreshes the searched domain and presents the
+    // refreshed alternatives; no confirmed reservation changed and no booking
+    // was touched (the hotel stays active until an explicit confirmation).
     const decision = await getPendingDecisionForTrip(pools.operations, tripId);
-    expect(decision).toBeUndefined();
+    expect(decision?.kind).toBe("hotel_choice");
+    expect(await confirmedReservations(tripId)).toEqual(reservationsBefore);
     const conversation = await listConversation(pool, tripId, 20);
     const assistant = conversation.find((entry) => entry.role === "assistant");
-    expect(assistant?.content).toContain("not available");
+    expect(assistant?.content).toContain("No confirmed reservation was changed");
   }, 90_000);
 
   it("reuses the validated interpretation effect on replay (no second call)", async () => {

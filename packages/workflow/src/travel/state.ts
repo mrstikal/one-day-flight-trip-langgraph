@@ -5,8 +5,12 @@ import {
   decisionKindSchema,
   domainCommandSchema,
   preservableKeySchema,
+  publicRouteChangeReservationSchema,
+  publicRouteSummarySchema,
   researchDomainSchema,
+  researchSearchIntentSchema,
   routeAlternativeSchema,
+  routeChangeFieldSchema,
   routeReasonEntrySchema,
   routeValidationSchema,
   scheduleValidationSchema,
@@ -22,8 +26,8 @@ import { researchResultsValue } from "../state/research-reducer.js";
  * PostgreSQL and is read through the invocation ports.
  */
 
-export const TRAVEL_SCHEMA_VERSION = "travel-state-v4";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v4";
+export const TRAVEL_SCHEMA_VERSION = "travel-state-v5";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v5";
 
 export const travelGateSchema = z.enum([
   "pending",
@@ -54,6 +58,7 @@ export const travelStageSchema = z.enum([
   "clarification_apply",
   "clarification_modify",
   "approve",
+  "commit_route",
   "end",
 ]);
 export type TravelStage = z.infer<typeof travelStageSchema>;
@@ -65,6 +70,7 @@ export const travelDecisionKindSchema = z.enum([
   "program_choices",
   "booking_confirmation",
   "replacement_confirmation",
+  "route_change_confirmation",
   "itinerary_approval",
   "recovery",
   "clarification",
@@ -238,6 +244,36 @@ export const travelStateFields = {
   clarificationRequestedCommands: z.array(domainCommandSchema).default(() => []),
   /** Internal `modify` reference for a free-text follow-up on a clarification. */
   modificationOperationId: z.string().nullable().default(null),
+
+  // Phase 11: invalidation-matrix dispatch and route-change impact confirmation
+  /** The work item the routing layer selected for this run. */
+  nextWork: z
+    .enum(["none", "route", "research", "progress", "plan", "validate", "summary", "decision"])
+    .default("none"),
+  /** Targeted research subset for a search (`find_alternatives`) command. */
+  searchTargetDomains: z.array(researchDomainSchema).default(() => []),
+  /** Operation-scoped search intent (level override / cheaper comparison). */
+  searchIntent: researchSearchIntentSchema.nullable().default(null),
+  /** Confirmed/selected services read from the domain truth for preservation. */
+  confirmedServices: z.array(travelBookingServiceSchema).default(() => []),
+  selectedServices: z.array(travelBookingServiceSchema).default(() => []),
+  /** The proposal id (`uuid`) a route-change confirmation is bound to. */
+  routeChangeProposalId: z.string().nullable().default(null),
+  /** Server-built impact preview; carries the deferred command batch. */
+  routeChangePreview: z
+    .object({
+      proposalId: z.string().uuid(),
+      commands: z.array(domainCommandSchema).min(1).max(4),
+      changedFields: z.array(routeChangeFieldSchema).min(1),
+      from: publicRouteSummarySchema,
+      to: publicRouteSummarySchema,
+      affectedReservations: z.array(publicRouteChangeReservationSchema),
+    })
+    .strict()
+    .nullable()
+    .default(null),
+  /** Reservation ids the confirmed route change named (exact-set check). */
+  lastAffectedReservationIds: z.array(z.string().min(1)).default(() => []),
 };
 
 export const travelStateSchema = new StateSchema(travelStateFields);
@@ -293,6 +329,7 @@ export const DECISION_KIND_FOR_STAGE: Readonly<Record<TravelDecisionKind, Decisi
   program_choices: "program_choices",
   booking_confirmation: "booking_confirmation",
   replacement_confirmation: "replacement_confirmation",
+  route_change_confirmation: "route_change_confirmation",
   itinerary_approval: "itinerary_approval",
   recovery: "recovery",
   clarification: "clarification",

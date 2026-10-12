@@ -13,6 +13,10 @@ import type {
   ProposalStatus,
   TripRecord,
   BookableKey,
+  PublicRouteSummary,
+  PublicRouteChangeReservation,
+  ResearchSearchIntent,
+  RouteChangeField,
 } from "@odft/contracts";
 import type { ItineraryConflictDecision } from "@odft/domain";
 
@@ -103,6 +107,24 @@ export interface TravelProgramResult {
 export interface TravelProgress {
   readonly flightConfirmed: boolean;
   readonly hotelConfirmed: boolean;
+  /** Phase 11: services with an active confirmed reservation. */
+  readonly confirmedServices: readonly BookableKey[];
+  /** Phase 11: services with an active (unbooked) selection. */
+  readonly selectedServices: readonly BookableKey[];
+  /** Phase 11: true when the meal/activity program has been applied. */
+  readonly programApplied: boolean;
+}
+
+/** Phase 11: one confirmed reservation a route change would cancel. */
+export type TravelRouteChangeReservation = PublicRouteChangeReservation;
+
+/** Phase 11: server-built route-change impact preview (safe fields only). */
+export interface TravelRouteChangePreview {
+  readonly proposalId: string;
+  readonly changedFields: readonly RouteChangeField[];
+  readonly from: PublicRouteSummary;
+  readonly to: PublicRouteSummary;
+  readonly affectedReservations: readonly TravelRouteChangeReservation[];
 }
 
 export interface TravelLogisticsResult {
@@ -205,7 +227,11 @@ export interface TravelPorts {
   ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;
   /** Phase 09: deterministic per-domain research input fingerprints (the
    * operation id resolves operation-scoped fault overlays exactly as the task will). */
-  loadResearchInputs(tripId: string, operationId: string): Promise<TravelResearchInputs>;
+  loadResearchInputs(
+    tripId: string,
+    operationId: string,
+    searchIntent?: ResearchSearchIntent | null,
+  ): Promise<TravelResearchInputs>;
   /** Phase 09: research one domain (provider + idempotent artifact write). */
   researchDomain(input: {
     tripId: string;
@@ -213,12 +239,16 @@ export interface TravelPorts {
     domain: ResearchDomain;
     attempt: number;
     inputFingerprint: string;
+    /** Phase 11: operation-scoped level override / cheaper comparison. */
+    searchIntent?: ResearchSearchIntent | null;
   }): Promise<TravelResearchOutcome>;
   /** Phase 09: deterministic re-filter/re-order + artifact persistence. */
   rankRecommendations(input: {
     tripId: string;
     operationId: string;
     domains: readonly TravelRankDomainCandidates[];
+    /** Phase 11: operation-scoped level override / cheaper comparison. */
+    searchIntent?: ResearchSearchIntent | null;
   }): Promise<TravelRankedServices>;
   /** Phase 09: persist one safe domain timing/attempt event. */
   recordResearchEvent(event: TravelResearchEvent): Promise<void>;
@@ -233,6 +263,32 @@ export interface TravelPorts {
   validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;
   /** Confirmed flight/hotel progress so a preference change resumes at the right step. */
   loadProgress(tripId: string): Promise<TravelProgress>;
+
+  /**
+   * Phase 11: compute the impact of a `set_route` batch without applying it.
+   * Returns the confirmed reservations that would be cancelled (empty when the
+   * change is safe to apply directly) and a deterministic proposal id.
+   */
+  previewRouteChange(input: {
+    tripId: string;
+    operationId: string;
+    commands: readonly DomainCommand[];
+  }): Promise<TravelRouteChangePreview>;
+  /**
+   * Phase 11: apply a confirmed route change atomically — the deferred command
+   * batch is applied and the named confirmed reservations are cancelled in one
+   * transaction. The route/schedule validations are re-run from scratch by the
+   * graph afterwards.
+   */
+  commitRouteChange(input: {
+    tripId: string;
+    operationId: string;
+    decisionId: string;
+    acceptedRevision: number;
+    proposalId: string;
+    affectedReservationIds: readonly string[];
+    commands: readonly DomainCommand[];
+  }): Promise<{ cancelledReservationIds: string[] }>;
 
   /**
    * Phase 10: run one bounded planning attempt (planner role or fixture, then
@@ -273,6 +329,9 @@ export interface TravelPorts {
   }): Promise<{ result: IntentResult; mode: "fixture" | "openrouter" }>;
   /** Phase 08: read the admitted chat message of an internal `modify` operation. */
   loadChatMessage(operationId: string): Promise<string | undefined>;
+  /** Phase 11: the admitted operation payload, so a typed modification applies
+   * through the deterministic dispatcher without an LLM call. */
+  loadOperationPayload(operationId: string): Promise<unknown>;
 }
 
 export type { ProposalStatus };
