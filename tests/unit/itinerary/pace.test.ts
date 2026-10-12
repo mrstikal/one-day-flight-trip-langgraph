@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { PACE_PROFILES } from "../../../packages/domain/src/itinerary/taxonomy.js";
-import { fixturePlanner } from "../../../packages/ai/src/fixture-adapter.js";
+import { fixturePlanner, fixtureReviewer } from "../../../packages/ai/src/fixture-adapter.js";
 import { plannerContextSchema, type PlannerContext } from "../../../packages/ai/src/context/role-contexts.js";
+import { tripPreferencesSchema } from "@odft/contracts";
 
 /** 08-frontend-ux.md section 7 pace semantics must survive both implementations. */
 
@@ -129,6 +130,61 @@ describe("pace profiles (08-frontend-ux.md section 7)", () => {
     expect(output.compromises.join(" ")).toContain("above the 240-minute relaxed-pace cap");
     expect(museums.length).toBeGreaterThanOrEqual(PACE_PROFILES.relaxed.targetMin);
     expect(museums.length).toBeLessThan(6);
+  });
+
+  it("preserves the preference-first candidate order instead of re-sorting by id", () => {
+    const preferred = context("relaxed");
+    preferred.minimumActivityCounts = {};
+    // The worker puts explicitly preferred activities first; the fixture must
+    // keep that order (it must not sort by id).
+    const activities = preferred.candidates.filter((candidate) => candidate.kind === "activity");
+    const reordered = activities.slice().reverse();
+    preferred.candidates = [
+      ...preferred.candidates.filter((candidate) => candidate.kind !== "activity"),
+      ...reordered,
+    ];
+    const output = fixturePlanner(preferred);
+    const firstActivity = output.stops.find((stop) => stop.kind === "activity");
+    expect(firstActivity?.refId).toBe(reordered[0]?.id);
+  });
+
+  it("does not double-count walking in the fixture review travel total", () => {
+    const base = {
+      role: "reviewer" as const,
+      events: [],
+      preferences: tripPreferencesSchema.parse({
+        travelVariant: "one_night",
+        defaultServiceLevel: "standard",
+        serviceOverrides: {},
+        activityPace: "relaxed",
+        interests: { culture: 3, relaxation: 2, entertainment: 1 },
+        preferredActivityTags: [],
+        minimumActivityCounts: {},
+      }),
+      requirements: [],
+    };
+    // 110 transfer minutes already include the 100 walking minutes.
+    const included = fixtureReviewer({
+      ...base,
+      metrics: {
+        totalTransferMinutes: 110,
+        totalWalkingMinutes: 100,
+        activityCount: 2,
+        museumCount: 1,
+      },
+    });
+    expect(included.verdict).toBe("acceptable");
+    const excessive = fixtureReviewer({
+      ...base,
+      metrics: {
+        totalTransferMinutes: 160,
+        totalWalkingMinutes: 100,
+        activityCount: 2,
+        museumCount: 1,
+      },
+    });
+    expect(excessive.verdict).toBe("revise");
+    expect(excessive.issues.map((issue) => issue.code)).toContain("excess_travel");
   });
 
   it("reports unavailable candidates instead of inventing them", () => {

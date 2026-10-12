@@ -15,7 +15,7 @@ const ROUTING = {
       return { distanceKm: 3.2, estimatedMinutes: 15, partyTotalMinor: 600, simulated: true as const };
     }
     if (leg.mode === "airport_transfer") {
-      return { distanceKm: 18, estimatedMinutes: 45, partyTotalMinor: 4000, simulated: true as const };
+      return { distanceKm: 18, estimatedMinutes: 20, partyTotalMinor: 4000, simulated: true as const };
     }
     return { distanceKm: 5, estimatedMinutes: 12, partyTotalMinor: 1800, simulated: true as const };
   },
@@ -29,7 +29,7 @@ function input(overrides: Partial<AssembleItineraryInput> = {}): AssembleItinera
         { kind: "activity", refId: "act-museum", startMinute: 9 * 60 + 30, durationMinutes: 90 },
         { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60 + 30, durationMinutes: 90 },
         { kind: "activity", refId: "act-park", startMinute: 14 * 60 + 30, durationMinutes: 60 },
-        { kind: "meal", refId: "meal-dinner", startMinute: 19 * 60, durationMinutes: 120 },
+        { kind: "meal", refId: "meal-dinner", startMinute: 18 * 60 + 30, durationMinutes: 120 },
       ],
     },
     seedScope: "op-1:1",
@@ -235,6 +235,81 @@ describe("itinerary assembly (Phase 10)", () => {
     expect(first.events.map((event) => event.id)).toEqual(second.events.map((event) => event.id));
     const otherScope = assembleItinerary(input({ seedScope: "op-1:2" }));
     expect(otherScope.events[0]?.id).not.toBe(first.events[0]?.id);
+  });
+
+  it("routes a back-to-back pair and reports the impossible transfer", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            // Starts exactly when the museum ends: zero available time.
+            { kind: "activity", refId: "act-park", startMinute: 10 * 60 + 30, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    const gap = result.issues.find((issue) => issue.code === "transfer_gap");
+    expect(gap).toBeDefined();
+    expect(gap?.message).toContain("only 0 are left");
+    // Neither a transfer nor any route cost is fabricated for an impossible leg.
+    expect(result.events.some((event) => event.kind === "transfer")).toBe(false);
+    expect(result.costs.items.some((item) => item.key.startsWith("transfer:"))).toBe(false);
+  });
+
+  it("reports an overlap for a planner-provided break inside a visit", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "break", startMinute: 9 * 60 + 30, durationMinutes: 20 },
+          ],
+        },
+      }),
+    );
+    const overlap = result.issues.find((issue) => issue.code === "overlap");
+    expect(overlap).toBeDefined();
+    expect(overlap?.eventIds).toHaveLength(2);
+  });
+
+  it("never inserts a rhythm break or transfer on top of a planned break", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "break", startMinute: 10 * 60 + 35, durationMinutes: 20 },
+            { kind: "activity", refId: "act-park", startMinute: 11 * 60 + 40, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues).toEqual([]);
+    const breaks = result.events.filter((event) => event.kind === "break");
+    expect(breaks).toHaveLength(1);
+    expect(breaks[0]?.startMinute).toBe(10 * 60 + 35);
+    // The transfer is placed after the planned break, never overlapping it.
+    const transfers = result.events.filter((event) => event.kind === "transfer");
+    expect(transfers).toHaveLength(1);
+    expect(transfers[0]?.startMinute).toBe(10 * 60 + 55);
+    expect(new Set(result.events.map((event) => event.id)).size).toBe(result.events.length);
+  });
+
+  it("accounts for the airport transfer plus the full departure buffer", () => {
+    // Departure 22:40 local: the old 120-minute-only rule would pass (content
+    // ends 20:30 <= 20:40) but the 20-minute airport transfer does not.
+    const result = assembleItinerary(input({ returnDepartureInstant: "2026-07-10T20:40:00Z" }));
+    const bufferIssue = result.issues.find((issue) => issue.code === "airport_buffer");
+    expect(bufferIssue).toBeDefined();
+    expect(bufferIssue?.message).toContain("airport transfer (~20 min)");
+    expect(result.events.some((event) => event.kind === "airport_buffer")).toBe(false);
+  });
+
+  it("labels the airport buffer with the simulated transfer", () => {
+    const result = assembleItinerary(input());
+    const buffer = result.events.find((event) => event.kind === "airport_buffer");
+    expect(buffer?.provenance.join(" ")).toContain("Airport transfer ~20 min");
   });
 
   it("labels injected corruption on every recorded issue", () => {

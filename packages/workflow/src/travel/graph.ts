@@ -139,7 +139,9 @@ export function routeAfterApplyDecision(state: TravelState): string {
     case "approve":
       return "approve_itinerary";
     case "reselection":
-      return "prepare_decision";
+      // Re-derive the affected offers through the research/ranking path instead
+      // of preparing a decision from state that a fresh operation has cleared.
+      return "detect_progress";
     case "clarification_apply":
       return "resolve_clarification";
     case "clarification_modify":
@@ -289,6 +291,7 @@ export function buildTravelGraph(options: BuildTravelGraphOptions) {
       "commit_booking",
       "apply_program",
       "approve_itinerary",
+      "detect_progress",
       "prepare_decision",
       "resolve_clarification",
       "interpret_modification",

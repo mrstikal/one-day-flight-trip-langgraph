@@ -7,6 +7,7 @@ import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
+import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { ApprovalDialog } from "@/components/itinerary/approval-dialog";
 import { CostBreakdown } from "@/components/itinerary/cost-breakdown";
 import { Timeline } from "@/components/itinerary/timeline";
@@ -88,6 +89,30 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
       setBusy(false);
     }
   }, [handleError, projection, refresh, tripId]);
+
+  const chooseRecovery = useCallback(
+    async (optionId: string): Promise<void> => {
+      if (!projection?.pendingDecision) {
+        return;
+      }
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitDecision({
+          tripId,
+          decisionId: projection.pendingDecision.id,
+          expectedRevision: projection.trip.revision,
+          response: { action: "choose_option", optionId },
+        });
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, projection, refresh, tripId],
+  );
 
   const activeWork = useMemo(
     () =>
@@ -174,6 +199,15 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
           The plan has a conflict that needs your decision in the assistant before approval can
           continue.
         </p>
+      ) : null}
+
+      {pending?.kind === "recovery" ? (
+        <RecoveryCard
+          decision={pending}
+          busy={busy}
+          error={actionError}
+          onChoose={(optionId) => void chooseRecovery(optionId)}
+        />
       ) : null}
 
       <ValidationSummary itinerary={itinerary} />

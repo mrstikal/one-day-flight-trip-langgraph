@@ -61,6 +61,7 @@ export type ItineraryErrorCode = z.infer<typeof itineraryErrorCodeSchema>;
 /** Nonblocking warnings; each requires an explicit visible explanation. */
 export const itineraryWarningCodeSchema = z.enum([
   "pace_guideline_deviation",
+  "preferred_activity_missing",
   "review_suggestion",
 ]);
 export type ItineraryWarningCode = z.infer<typeof itineraryWarningCodeSchema>;
@@ -116,16 +117,16 @@ export type ItineraryEvent = z.infer<typeof itineraryEventSchema>;
 
 export const itineraryMetricsSchema = z
   .object({
-    activityCount: z.number().int().min(0).max(24),
+    activityCount: z.number().int().min(0).max(80),
     visitMinutes: z.number().int().min(0).max(1440),
     mealMinutes: z.number().int().min(0).max(1440),
     breakMinutes: z.number().int().min(0).max(1440),
     transferMinutes: z.number().int().min(0).max(1440),
     walkingMinutes: z.number().int().min(0).max(1440),
     walkingKm: z.number().min(0).max(100),
-    museumCount: z.number().int().min(0).max(24),
+    museumCount: z.number().int().min(0).max(80),
     /** Only tags present in the plan are recorded (partial by design). */
-    activityTagCounts: z.partialRecord(activityTagSchema, z.number().int().min(0).max(24)),
+    activityTagCounts: z.partialRecord(activityTagSchema, z.number().int().min(0).max(80)),
     firstContentStartLocal: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
     lastContentEndLocal: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
     totalCostMinor: moneyMinorSchema,
@@ -138,8 +139,10 @@ export type ItineraryMetrics = z.infer<typeof itineraryMetricsSchema>;
 export const itineraryValidationSchema = z
   .object({
     status: z.enum(["valid", "invalid"]),
-    errors: z.array(itineraryIssueSchema).max(32),
-    warnings: z.array(itineraryIssueSchema).max(32),
+    // A 24-stop proposal with inserted transfers/breaks can legitimately exceed
+    // the earlier caps, so the bounds cover the assembled worst case.
+    errors: z.array(itineraryIssueSchema).max(64),
+    warnings: z.array(itineraryIssueSchema).max(64),
     metrics: itineraryMetricsSchema,
     /** Full input+content hash (evidence). */
     fingerprint: fingerprintSchema,
@@ -218,7 +221,7 @@ export const itineraryRecordSchema = z
     adults: z.number().int().min(1).max(6),
     pace: activityPaceSchema,
     travelVariant: travelVariantSchema,
-    events: z.array(itineraryEventSchema).max(48),
+    events: z.array(itineraryEventSchema).max(80),
     validation: itineraryValidationSchema,
     costs: itineraryCostsSchema,
     review: itineraryReviewSchema.nullable(),
@@ -255,12 +258,12 @@ export const publicItinerarySchema = z
     adults: z.number().int().min(1).max(6),
     pace: activityPaceSchema,
     travelVariant: travelVariantSchema,
-    events: z.array(itineraryEventSchema).max(48),
+    events: z.array(itineraryEventSchema).max(80),
     validation: z
       .object({
         status: z.enum(["valid", "invalid"]),
-        errors: z.array(itineraryIssueSchema).max(32),
-        warnings: z.array(itineraryIssueSchema).max(32),
+        errors: z.array(itineraryIssueSchema).max(64),
+        warnings: z.array(itineraryIssueSchema).max(64),
         metrics: itineraryMetricsSchema,
       })
       .strict(),
@@ -270,7 +273,7 @@ export const publicItinerarySchema = z
     simulatedFailureNote: z.string().max(400).nullable(),
     /** Latest approved version of this trip (badge context for a newer draft). */
     approvedVersion: z.number().int().min(1).nullable(),
-    markers: z.array(publicMapMarkerSchema).max(48),
+    markers: z.array(publicMapMarkerSchema).max(80),
   })
   .strict();
 export type PublicItinerary = z.infer<typeof publicItinerarySchema>;

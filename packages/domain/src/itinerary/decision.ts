@@ -97,19 +97,35 @@ export function buildItineraryConflictDecision(
 
     const [limitingTag, requestedCount] = unmetTags[0] ?? [undefined, input.metrics.activityCount];
     if (limitingTag !== undefined && requestedCount !== undefined) {
-      const denominator = Math.max(5, averageVisitMinutes || 5);
-      const feasible = Math.max(
-        1,
-        Math.min(requestedCount - 1, Math.floor(profile.visitCapMinutes / denominator)),
-      );
-      options.push({
-        id: `reduce_${limitingTag}`,
-        label: `Keep the ${input.pace} pace and reduce the minimum ${limitingTag} visits to ${feasible}`,
-        commands: [
-          { type: "set_activity_requirement", tag: limitingTag, minimumCount: feasible },
-          { type: "build_itinerary" },
-        ],
-      });
+      const placed = input.metrics.activityTagCounts[limitingTag] ?? 0;
+      if (placed === 0) {
+        // None of the requested tag was placed, so no reduction can be satisfied:
+        // the only supported change is removing the impossible requirement.
+        options.push({
+          id: `clear_${limitingTag}`,
+          label: `Remove the minimum ${limitingTag} requirement (no ${limitingTag} visits are available)`,
+          commands: [
+            { type: "set_activity_requirement", tag: limitingTag, minimumCount: null },
+            { type: "build_itinerary" },
+          ],
+        });
+      } else {
+        // The reduction is bounded by what this very plan already placed, so the
+        // offered count is always achievable.
+        const denominator = Math.max(5, averageVisitMinutes || 5);
+        const feasible = Math.min(
+          placed,
+          Math.max(1, Math.floor(profile.visitCapMinutes / denominator)),
+        );
+        options.push({
+          id: `reduce_${limitingTag}`,
+          label: `Keep the ${input.pace} pace and reduce the minimum ${limitingTag} visits to ${feasible}`,
+          commands: [
+            { type: "set_activity_requirement", tag: limitingTag, minimumCount: feasible },
+            { type: "build_itinerary" },
+          ],
+        });
+      }
       requested.push({
         type: "set_activity_requirement",
         tag: limitingTag,
@@ -118,9 +134,12 @@ export function buildItineraryConflictDecision(
     }
 
     const requiredCount = Math.max(requestedCount ?? 0, input.metrics.activityCount);
+    const tagAvailable =
+      limitingTag === undefined || (input.metrics.activityTagCounts[limitingTag] ?? 0) > 0;
     if (
       denser &&
       denserProfile &&
+      tagAvailable &&
       requiredCount > 0 &&
       requiredCount * Math.max(5, averageVisitMinutes || 5) <= denserProfile.visitCapMinutes
     ) {

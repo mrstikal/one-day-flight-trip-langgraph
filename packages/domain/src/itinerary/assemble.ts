@@ -12,6 +12,7 @@ import { fingerprint } from "../fingerprints.js";
 import {
   AIRPORT_BUFFER_MINUTES,
   PACE_PROFILES,
+  paceMealDuration,
   physicalDemandForTags,
   simulatedOpeningWindow,
 } from "./taxonomy.js";
@@ -200,7 +201,11 @@ function resolveMeal(
     return null;
   }
   const locked = input.confirmedMealIds.includes(offer.id);
-  const duration = offer.durationMinutes;
+  // Confirmed reservations keep their fixed duration; unbooked slots use the
+  // authoritative pace meal duration (08 section 7).
+  const duration = locked
+    ? offer.durationMinutes
+    : paceMealDuration(input.pace, offer.meal, offer.level);
   const latestStart = Math.max(offer.windowStartMinute, offer.windowEndMinute - duration);
   const start = locked
     ? offer.windowStartMinute
@@ -341,7 +346,10 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
       const gap = entry.startMinute - previousWithRoute.event.endMinute;
       const nextAnchor = anchorFor(stop, input);
       const nextRef = routeRefFor(stop);
-      if (gap > 0 && nextAnchor && nextRef) {
+      // Every consecutive pair of located stops is routed, including a perfectly
+      // back-to-back pair (gap 0) which can never fit a transfer. A negative gap
+      // is already reported as an overlap, so it is not double-reported here.
+      if (gap >= 0 && nextAnchor && nextRef) {
         const distance = haversineKm(previousWithRoute.anchor, nextAnchor);
         const mode = chooseRouteMode(distance, profile.legWalkCapKm);
         const estimate = input.routing.estimate({
@@ -357,22 +365,42 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
           walkingKm += estimate.distanceKm;
         }
         // A transfer is inserted only into a gap that fits the simulated route
-        // estimate plus the pace buffer; a smaller gap is a recorded conflict and
+        // estimate plus the pace buffer, and never on top of a planner-provided
+        // break/free-time block. A smaller free space is a recorded conflict and
         // nothing is inserted, moved, or compressed.
+        const occupied = placed
+          .filter(
+            (candidate) =>
+              candidate.event.endMinute > previousWithRoute.event.endMinute &&
+              candidate.event.startMinute < entry.startMinute,
+          )
+          .sort((a, b) => a.event.startMinute - b.event.startMinute);
+        const lastOccupied = occupied[occupied.length - 1];
+        const freeStart = Math.max(
+          previousWithRoute.event.endMinute,
+          lastOccupied?.event.endMinute ?? previousWithRoute.event.endMinute,
+        );
+        const freeMinutes = entry.startMinute - freeStart;
         const required = estimate.estimatedMinutes + profile.bufferMinutes;
-        if (gap < required) {
+        if (freeMinutes < required) {
+          const available = lastOccupied
+            ? `${freeMinutes} minutes are free after the planned ${lastOccupied.event.kind.replace("_", " ")}`
+            : `only ${freeMinutes} are left`;
           issues.push({
             severity: "error",
             code: "transfer_gap",
-            message: `The simulated ${MODE_LABEL[mode].toLowerCase()} transfer after ${previousWithRoute.event.title} needs about ${estimate.estimatedMinutes} minutes but only ${gap} are left before ${minutesToLocal(entry.startMinute)}.`,
+            message: `The simulated ${MODE_LABEL[mode].toLowerCase()} transfer after ${previousWithRoute.event.title} needs about ${estimate.estimatedMinutes} minutes but ${available} before ${minutesToLocal(entry.startMinute)}.`,
             eventIds: [],
             simulatedFailure: input.simulatedFailure,
           });
         } else {
+          // A rhythm break is only inserted when it does not collide with an
+          // existing planner-provided block.
           const withRhythmBreak =
+            occupied.length === 0 &&
             previousWithRoute.event.kind === "activity" &&
-            gap >= profile.rhythmBreakMinutes + estimate.estimatedMinutes;
-          let transferStart = previousWithRoute.event.endMinute;
+            freeMinutes >= profile.rhythmBreakMinutes + estimate.estimatedMinutes;
+          let transferStart = freeStart;
           if (withRhythmBreak) {
             placed.push({
               event: buildEvent(input, (eventIndex += 1), {
@@ -442,14 +470,37 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
   );
   const sameDayReturn = departureMinuteRaw < 1440;
   const departureMinute = Math.min(1440, departureMinuteRaw);
-  const bufferStart = departureMinute - AIRPORT_BUFFER_MINUTES;
   const contentEvents = placed.filter(
     (entry) => entry.event.kind === "meal" || entry.event.kind === "activity" || entry.event.kind === "free_time",
   );
+  const lastContent = [...contentEvents]
+    .sort((a, b) => a.event.endMinute - b.event.endMinute)
+    .reverse()
+    .find((entry) => entry.event.location !== null);
   const lastContentEnd =
     contentEvents.length === 0
       ? 0
       : Math.max(...contentEvents.map((entry) => entry.event.endMinute));
+
+  // The return leg is the actual airport transfer from the last located stop
+  // (fallback: the confirmed hotel) PLUS the full 120-minute departure buffer;
+  // Stage B approved the flight, not this newly chosen final venue.
+  const airportAnchor = input.destinationAirport?.anchor ?? null;
+  const transferOrigin = lastContent?.event.location ?? input.hotel?.anchor ?? null;
+  const airportTransfer =
+    airportAnchor && transferOrigin
+      ? input.routing.estimate({
+          startRef: lastContent?.event.refId ?? input.hotel?.offerId ?? "final_stop",
+          endRef: input.destinationAirport?.id ?? "airport",
+          mode: "airport_transfer",
+          adults: input.adults,
+          start: transferOrigin,
+          end: airportAnchor,
+          ruleVersion: input.routingRuleVersion,
+        })
+      : null;
+  const requiredBuffer = AIRPORT_BUFFER_MINUTES + (airportTransfer?.estimatedMinutes ?? 0);
+  const bufferStart = departureMinute - requiredBuffer;
   if (sameDayReturn && contentEvents.length > 0 && lastContentEnd <= bufferStart) {
     const title = "Airport buffer";
     placed.push({
@@ -461,7 +512,12 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
         durationMinutes: departureMinute - lastContentEnd,
         refId: null,
         activityTags: [],
-        provenance: ["Return-flight buffer", "Fixed flight window"],
+        provenance: [
+          "Return-flight buffer",
+          ...(airportTransfer
+            ? [`Airport transfer ~${airportTransfer.estimatedMinutes} min (simulated)`, "Fixed flight window"]
+            : ["Fixed flight window"]),
+        ],
         physicalDemand: "low",
         costInclusionKey: null,
         costMinor: 0,
@@ -474,10 +530,13 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
       routeRef: null,
     });
   } else if (sameDayReturn && contentEvents.length > 0) {
+    const transferText = airportTransfer
+      ? `the simulated airport transfer (~${airportTransfer.estimatedMinutes} min) plus the ${AIRPORT_BUFFER_MINUTES}-minute departure buffer`
+      : `the ${AIRPORT_BUFFER_MINUTES}-minute departure buffer`;
     issues.push({
       severity: "error",
       code: "airport_buffer",
-      message: `The plan ends at ${minutesToLocal(lastContentEnd)}, inside the ${AIRPORT_BUFFER_MINUTES}-minute return-flight buffer (departure ${minutesToLocal(departureMinute)}); nothing was moved automatically.`,
+      message: `The plan ends at ${minutesToLocal(lastContentEnd)}, but ${transferText} require content to end by ${minutesToLocal(bufferStart)} (departure ${minutesToLocal(departureMinute)}); nothing was moved automatically.`,
       eventIds: [],
       simulatedFailure: input.simulatedFailure,
     });
@@ -487,18 +546,17 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
     .map((entry) => entry.event)
     .sort((a, b) => a.startMinute - b.startMinute || a.kind.localeCompare(b.kind));
 
-  // Overlap detection over the resolved content events (anchor ids available).
-  const content = events.filter(
-    (event) => event.kind === "meal" || event.kind === "activity" || event.kind === "free_time",
-  );
-  for (let index = 0; index + 1 < content.length; index += 1) {
-    const current = content[index];
-    const next = content[index + 1];
+  // Chronology is validated across the COMPLETE assembled timeline (content,
+  // planner-provided breaks/free time, and inserted transfers/buffers), so a
+  // break placed inside a visit can never pass as a valid rest block.
+  for (let index = 0; index + 1 < events.length; index += 1) {
+    const current = events[index];
+    const next = events[index + 1];
     if (current && next && next.startMinute < current.endMinute) {
       issues.push({
         severity: "error",
         code: "overlap",
-        message: `Two planned stops overlap between ${minutesToLocal(next.startMinute)} and ${minutesToLocal(current.endMinute)}; nothing was moved automatically.`,
+        message: `Two planned events overlap between ${minutesToLocal(next.startMinute)} and ${minutesToLocal(current.endMinute)}; nothing was moved automatically.`,
         eventIds: [current.id, next.id],
         simulatedFailure: input.simulatedFailure,
       });
@@ -637,6 +695,12 @@ function eventFor(
   });
 }
 
+/**
+ * One long break block per paced day (08 section 7). It is inserted into the
+ * first free window (plus a 5-minute margin) anywhere in the day — not only
+ * directly after lunch, where the outgoing transfer usually occupies the gap.
+ * When no window fits, no block is inserted and the validator warns.
+ */
 function appendLongBreakIfRoom(
   input: AssembleItineraryInput,
   placed: PlacedEvent[],
@@ -650,11 +714,7 @@ function appendLongBreakIfRoom(
   for (let index = 0; index + 1 < events.length; index += 1) {
     const current = events[index];
     const next = events[index + 1];
-    if (!current || !next || current.kind !== "meal" || current.refId === null) {
-      continue;
-    }
-    const meal = input.meals.find((candidate) => candidate.id === current.refId);
-    if (meal?.meal !== "lunch") {
+    if (!current || !next) {
       continue;
     }
     const gap = next.startMinute - current.endMinute;

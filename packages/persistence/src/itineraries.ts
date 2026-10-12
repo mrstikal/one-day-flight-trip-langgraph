@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
+  itineraryCostsSchema,
+  itineraryEventSchema,
   itineraryRecordSchema,
+  itineraryReviewSchema,
+  itineraryValidationSchema,
   type ErrorCode,
   type ItineraryCosts,
   type ItineraryEvent,
@@ -192,6 +196,20 @@ export async function persistItineraryDraft(
   input: PersistItineraryDraftInput,
   fence: OperationFence,
 ): Promise<PersistedItineraryRef> {
+  // The persisted contract is enforced BEFORE the insert: a record outside the
+  // schema bounds would make `loadLatestItinerary` throw and break the whole trip
+  // projection, so an out-of-contract draft is rejected as a typed conflict.
+  try {
+    itineraryEventSchema.array().max(80).parse(input.events);
+    itineraryValidationSchema.parse(input.validation);
+    itineraryCostsSchema.parse(input.costs);
+    itineraryReviewSchema.nullable().parse(input.review);
+  } catch {
+    throw new ItineraryPersistenceError(
+      "CONFLICT",
+      "the assembled itinerary is outside the persisted contract bounds; no draft was written",
+    );
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

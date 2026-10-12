@@ -173,6 +173,9 @@ test("renders the validated day, costs, the map fallback, and approves a draft",
       : (await page.getByTestId("dinner-excluded").count()) > 0;
   expect(dinnerOrReason).toBe(true);
   await expect(page.getByTestId("event-lock").first()).toBeVisible();
+  // The return leg reserves the simulated airport transfer plus the full buffer.
+  const buffer = page.locator('[data-event-kind="airport_buffer"]').first();
+  await expect(buffer).toContainText("Airport transfer");
 
   // Costs: a semantic table with a party total and excluded notes.
   const costs = page.getByTestId("cost-breakdown");

@@ -1,16 +1,23 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { PublicMapMarker } from "@odft/contracts";
 
 /**
  * Leaflet canvas (Phase 10 map policy). Tiles come only from the server-configured
- * credential-free template; the first tile must load within five seconds, and any
- * tile error before then reports failure so the parent renders the SVG fallback.
- * The component mounts only in the browser (dynamic import with `ssr: false`).
+ * credential-free template; the first tile must load within five seconds, and
+ * repeated tile failures (also after a successful start) report failure so the
+ * parent renders the SVG fallback. The component mounts only in the browser
+ * (dynamic import with `ssr: false`).
+ *
+ * The effect depends on a stable content key, not the array identity: projection
+ * polling re-creates the markers array every ~1.5s and must not tear the map
+ * down (which would reset pan/zoom and restart the fallback timer).
  */
+const CONSECUTIVE_TILE_FAILURES_BEFORE_FALLBACK = 4;
+
 export default function MapView({
   markers,
   tileUrl,
@@ -25,6 +32,14 @@ export default function MapView({
   const containerRef = useRef<HTMLDivElement>(null);
   const readyRef = useRef(onReady);
   const failureRef = useRef(onFailure);
+  const markersRef = useRef(markers);
+  const markersKey = useMemo(
+    () =>
+      JSON.stringify(
+        markers.map((marker) => [marker.id, marker.kind, marker.label, marker.lat, marker.lon]),
+      ),
+    [markers],
+  );
 
   useEffect(() => {
     readyRef.current = onReady;
@@ -32,11 +47,15 @@ export default function MapView({
   });
 
   useEffect(() => {
+    markersRef.current = markers;
+  }, [markers]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
     }
-    const points = markers.filter(
+    const points = markersRef.current.filter(
       (marker) => Number.isFinite(marker.lat) && Number.isFinite(marker.lon),
     );
     const center: L.LatLngExpression =
@@ -54,21 +73,36 @@ export default function MapView({
     });
     let firstTileLoaded = false;
     let failed = false;
+    let consecutiveFailures = 0;
     const layer = L.tileLayer(tileUrl, {
       maxZoom: 19,
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     });
     layer.on("tileload", () => {
+      consecutiveFailures = 0;
       if (!firstTileLoaded) {
         firstTileLoaded = true;
         readyRef.current();
       }
     });
     layer.on("tileerror", () => {
-      if (!firstTileLoaded && !failed) {
+      if (failed) {
+        return;
+      }
+      if (!firstTileLoaded) {
         failed = true;
         failureRef.current("Tiles could not be loaded; showing the approximate schematic instead.");
+        return;
+      }
+      // A single missing tile at the edge is tolerable; repeated failures after
+      // panning or a connectivity loss must still activate the offline view.
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= CONSECUTIVE_TILE_FAILURES_BEFORE_FALLBACK) {
+        failed = true;
+        failureRef.current(
+          "Map tiles keep failing; showing the approximate schematic instead.",
+        );
       }
     });
     layer.addTo(map);
@@ -100,7 +134,7 @@ export default function MapView({
       window.clearTimeout(timer);
       map.remove();
     };
-  }, [markers, tileUrl]);
+  }, [markersKey, tileUrl]);
 
   return (
     <div
@@ -108,7 +142,7 @@ export default function MapView({
       data-testid="map-canvas"
       role="img"
       aria-label="Map of the itinerary stops with simulated connections"
-      className="h-64 w-full rounded border border-border"
+      className="relative isolate z-0 h-64 w-full rounded border border-border"
     />
   );
 }

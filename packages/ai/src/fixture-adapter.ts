@@ -363,7 +363,6 @@ const FIXTURE_PACE = {
 const TRAVEL_ALLOWANCE = 25;
 const TRAVEL_ALLOWANCE_STEP = 35;
 const TRAVEL_ALLOWANCE_MAX = 150;
-const AIRPORT_LEAD = 140;
 
 type FixtureCandidate = PlannerContext["candidates"][number];
 
@@ -404,9 +403,9 @@ export function fixturePlanner(context: PlannerContext) {
   const breakfast = mealCandidate(context, "breakfast");
   const lunch = mealCandidate(context, "lunch");
   const dinner = mealCandidate(context, "dinner");
-  const activities = context.candidates
-    .filter((candidate) => candidate.kind === "activity")
-    .sort((a, b) => a.id.localeCompare(b.id));
+  // The worker supplies a deterministic, preference-first order; the fixture
+  // must NOT re-sort it, otherwise explicitly preferred activities are lost.
+  const activities = context.candidates.filter((candidate) => candidate.kind === "activity");
 
   // 1. Required tags first: never silently drop a requested minimum.
   const chosen: FixtureCandidate[] = [];
@@ -471,7 +470,9 @@ export function fixturePlanner(context: PlannerContext) {
   const returnWindow = context.fixedWindows.find(
     (window) => window.kind === "airport" && window.refId === "return_flight",
   );
-  const departureMinute = returnWindow?.endMinute ?? null;
+  // `startMinute` is the latest allowed content end (departure minus the airport
+  // transfer and the departure buffer); a later-day return has no window here.
+  const returnContentDeadline = returnWindow?.startMinute ?? null;
 
   const breakfastStart = breakfast ? windowStartFor(breakfast, 8 * 60) : null;
   if (breakfast && breakfastStart !== null) {
@@ -491,6 +492,9 @@ export function fixturePlanner(context: PlannerContext) {
   const remaining = [...chosen];
   const transferGapMentions = context.validationFeedback.filter((feedback) =>
     feedback.includes("transfer_gap"),
+  ).length;
+  const airportBufferMentions = context.validationFeedback.filter((feedback) =>
+    feedback.includes("airport_buffer"),
   ).length;
   const allowance = Math.min(
     TRAVEL_ALLOWANCE_MAX,
@@ -530,8 +534,8 @@ export function fixturePlanner(context: PlannerContext) {
   const afternoonDeadline =
     dinnerStart !== null
       ? dinnerStart - travelGap
-      : departureMinute !== null
-        ? departureMinute - AIRPORT_LEAD
+      : returnContentDeadline !== null
+        ? returnContentDeadline - 20 - 30 * airportBufferMentions
         : null;
   for (const candidate of [...remaining]) {
     const start = Math.max(cursor, candidate.openingStartMinute ?? 0);
@@ -576,7 +580,9 @@ export function fixturePlanner(context: PlannerContext) {
  * `review:` feedback by reducing optional fill, so requirements keep priority.
  */
 export function fixtureReviewer(context: ReviewerContext) {
-  const travelMinutes = context.metrics.totalTransferMinutes + context.metrics.totalWalkingMinutes;
+  // Walking legs are transfer events too, so the transfer total already includes
+  // walking minutes; adding totalWalkingMinutes again would double-count them.
+  const travelMinutes = context.metrics.totalTransferMinutes;
   const issues: { code: string; eventIds: string[]; explanation: string }[] = [];
   if (context.preferences.activityPace === "relaxed" && context.metrics.activityCount >= 4) {
     issues.push({

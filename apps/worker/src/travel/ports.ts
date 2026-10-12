@@ -1,11 +1,13 @@
 import type { Pool } from "pg";
 import {
   BookingService,
+  AIRPORT_BUFFER_MINUTES,
   assembleItinerary,
   buildItineraryConflictDecision,
   computeItinerarySourceFingerprint,
   fingerprint,
   localMinuteOfInstant,
+  paceMealDuration,
   simulatedOpeningWindow,
   validateItinerary,
   type ItinerarySourceFingerprintInput,
@@ -19,6 +21,7 @@ import {
   getOperationPayload,
   getTrip,
   ItineraryPersistenceError,
+  loadItineraryById,
   loadItineraryPlanningData,
   loadLatestItinerary,
   loadOverlay,
@@ -90,6 +93,8 @@ function mealWindowMinutes(offer: { windowStart: string; windowEnd: string }): {
 
 function selectedMealOffers(data: ItineraryPlanningData): AssemblyMealCandidate[] {
   const services: Meal[] = ["breakfast", "lunch", "dinner"];
+  const confirmed = new Set(data.confirmedMealIds);
+  const pace = data.trip.preferences.activityPace;
   const candidates: AssemblyMealCandidate[] = [];
   for (const service of services) {
     const offerId = data.confirmedMeals[service] ?? data.selectedMeals[service];
@@ -108,7 +113,12 @@ function selectedMealOffers(data: ItineraryPlanningData): AssemblyMealCandidate[
       name: offer.name,
       meal: offer.meal,
       level: offer.level,
-      durationMinutes: offer.durationMinutes,
+      // Confirmed reservations keep their fixed duration; unbooked slots follow
+      // the authoritative pace meal durations (08 section 7). Both the planner
+      // context and the assembly read this value, so they always agree.
+      durationMinutes: confirmed.has(offer.id)
+        ? offer.durationMinutes
+        : paceMealDuration(pace, offer.meal, offer.level),
       partyTotalMinor: offer.partyTotalMinor,
       windowStartMinute: window.start,
       windowEndMinute: window.end,
@@ -149,6 +159,53 @@ function returnDepartureInstant(data: ItineraryPlanningData): string | null {
   return flight?.inbound.segments[0]?.departureInstant ?? null;
 }
 
+/** Explicitly selected activities with their display names (bounded to two). */
+function preferredActivityNames(
+  data: ItineraryPlanningData,
+): { id: string; name: string }[] {
+  return data.preferredActivityIds
+    .slice(0, 2)
+    .map((id) => ({
+      id,
+      name: data.content.activities.find((activity) => activity.id === id)?.name ?? id,
+    }));
+}
+
+/**
+ * Latest content end for a same-day return: the simulated airport transfer from
+ * the FARTHEST possible final stop (hotel or any candidate) plus the full
+ * 120-minute departure buffer. The assembly recomputes it from the actual last
+ * venue, so the planner hint is conservative and they can never disagree.
+ */
+function airportLeadMinutes(data: ItineraryPlanningData): number {
+  const airport = data.destinationAirportAnchor;
+  if (!airport) {
+    return AIRPORT_BUFFER_MINUTES;
+  }
+  const hotel = data.confirmedHotelOfferId
+    ? data.content.hotels.find((offer) => offer.id === data.confirmedHotelOfferId)
+    : undefined;
+  const origins = [
+    ...(hotel ? [hotel.anchor] : []),
+    ...data.content.activities.map((activity) => activity.anchor),
+    ...data.content.restaurants.map((restaurant) => restaurant.anchor),
+  ];
+  let maxTransferMinutes = 0;
+  for (const start of origins) {
+    const estimate = ITINERARY_ROUTING.estimate({
+      startRef: "candidate",
+      endRef: data.destinationAirportId ?? "airport",
+      mode: "airport_transfer",
+      adults: data.trip.adults,
+      start,
+      end: airport,
+      ruleVersion: ITINERARY_ROUTING_RULE_VERSION,
+    });
+    maxTransferMinutes = Math.max(maxTransferMinutes, estimate.estimatedMinutes);
+  }
+  return maxTransferMinutes + AIRPORT_BUFFER_MINUTES;
+}
+
 /** Bounded, deterministic planner context (03-langgraph-design.md section 3). */
 function buildPlannerContext(
   data: ItineraryPlanningData,
@@ -178,9 +235,12 @@ function buildPlannerContext(
       ...(sameDayReturn
         ? [
             {
+              // `startMinute` is the latest allowed content end (departure minus
+              // the airport transfer and the departure buffer); `endMinute` is
+              // the departure itself.
               kind: "airport" as const,
               refId: "return_flight",
-              startMinute: Math.min(1439, departureMinuteRaw),
+              startMinute: Math.max(0, Math.min(1439, departureMinuteRaw - airportLeadMinutes(data))),
               endMinute: Math.min(1439, departureMinuteRaw),
             },
           ]
@@ -214,7 +274,19 @@ function buildPlannerContext(
 
 function buildReviewerContext(
   data: ItineraryPlanningData,
-  record: { events: readonly { id: string; kind: string; startMinute: number; durationMinutes: number }[]; validation: { metrics: { walkingMinutes: number; transferMinutes: number; activityCount: number; museumCount: number } } },
+  record: {
+    events: readonly {
+      id: string;
+      kind: string;
+      title: string;
+      refId: string | null;
+      activityTags: readonly string[];
+      startMinute: number;
+      durationMinutes: number;
+      location: { lat: number; lon: number } | null;
+    }[];
+    validation: { metrics: { walkingMinutes: number; transferMinutes: number; activityCount: number; museumCount: number } };
+  },
 ): ReviewerContext {
   const requirements = Object.entries(data.trip.preferences.minimumActivityCounts)
     .filter((entry): entry is [string, number] => typeof entry[1] === "number")
@@ -226,8 +298,14 @@ function buildReviewerContext(
     events: record.events.slice(0, 24).map((event) => ({
       id: event.id,
       kind: event.kind,
+      title: event.title,
+      refId: event.refId,
+      tags: [...event.activityTags],
       startMinute: Math.min(1439, event.startMinute),
       durationMinutes: event.durationMinutes,
+      // Coordinates carry extra display precision fields; the reviewer context is
+      // strict and only needs the two numbers.
+      location: event.location ? { lat: event.location.lat, lon: event.location.lon } : null,
     })),
     metrics: {
       totalWalkingMinutes: record.validation.metrics.walkingMinutes,
@@ -652,19 +730,8 @@ export function createTravelPortsFactory(
           (data.confirmedMeals.dinner ?? data.selectedMeals.dinner) !== null,
         simulatedFailure,
         source,
+        preferredActivities: preferredActivityNames(data),
       });
-
-      const budgetConflict = validation.errors.some((error) => error.code === "budget_exceeded");
-      const conflictDecision =
-        validation.status === "invalid"
-          ? buildItineraryConflictDecision({
-              errors: validation.errors,
-              metrics: validation.metrics,
-              pace: data.trip.preferences.activityPace,
-              minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
-              review: null,
-            })
-          : null;
 
       let persisted: { id: string; version: number } | null = null;
       if (!rejectionIssue) {
@@ -690,6 +757,28 @@ export function createTravelPortsFactory(
         );
       }
 
+      // Replay consistency: `persistItineraryDraft` returns the STORED version
+      // when the attempt's effect already committed, so the graph state and the
+      // review step must read the stored validation — never the freshly computed
+      // one, which could differ from the persisted draft after a crash replay.
+      const stored = persisted ? await loadItineraryById(pool, persisted.id) : undefined;
+      const effectiveValidation = stored?.validation ?? validation;
+      const effectiveSimulatedFailure = stored?.simulatedFailure ?? simulatedFailure;
+      const effectiveSimulatedFailureNote = stored?.simulatedFailureNote ?? simulatedFailureNote;
+      const effectiveBudgetConflict = effectiveValidation.errors.some(
+        (error) => error.code === "budget_exceeded",
+      );
+      const effectiveConflictDecision =
+        effectiveValidation.status === "invalid"
+          ? buildItineraryConflictDecision({
+              errors: effectiveValidation.errors,
+              metrics: effectiveValidation.metrics,
+              pace: data.trip.preferences.activityPace,
+              minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
+              review: null,
+            })
+          : null;
+
       // The fault outcome is recorded only after the corrupted draft committed:
       // a crash before persistence leaves the injection unrecorded, so the next
       // attempt injects once more instead of claiming a corruption that never
@@ -714,10 +803,10 @@ export function createTravelPortsFactory(
         type: "itinerary.attempt_finished",
         payload: {
           attempt: input.attempt,
-          status: validation.status,
-          errorCodes: validation.errors.map((error) => error.code),
-          warningCodes: validation.warnings.map((warning) => warning.code),
-          simulatedFailure,
+          status: effectiveValidation.status,
+          errorCodes: effectiveValidation.errors.map((error) => error.code),
+          warningCodes: effectiveValidation.warnings.map((warning) => warning.code),
+          simulatedFailure: effectiveSimulatedFailure,
           mode: planned.mode,
         },
       });
@@ -725,14 +814,14 @@ export function createTravelPortsFactory(
       return {
         itineraryId: persisted?.id ?? null,
         version: persisted?.version ?? null,
-        status: validation.status,
-        errors: validation.errors,
-        warnings: validation.warnings,
-        metrics: validation.metrics,
-        budgetConflict,
-        conflictDecision,
-        simulatedFailure,
-        simulatedFailureNote,
+        status: effectiveValidation.status,
+        errors: effectiveValidation.errors,
+        warnings: effectiveValidation.warnings,
+        metrics: effectiveValidation.metrics,
+        budgetConflict: effectiveBudgetConflict,
+        conflictDecision: effectiveConflictDecision,
+        simulatedFailure: effectiveSimulatedFailure,
+        simulatedFailureNote: effectiveSimulatedFailureNote,
         mode: planned.mode,
       };
     },
@@ -811,11 +900,26 @@ export function createTravelPortsFactory(
           mode: reviewed.mode,
         },
       });
+      // Suggested order arrives as assembled event ids (unstable across
+      // attempts); map it to the stable candidate refIds the planner recognizes.
+      const eventRefById = new Map(
+        record.events
+          .filter((event) => event.refId !== null)
+          .map((event) => [event.id, event.refId as string]),
+      );
+      const suggestedCandidateOrder = [
+        ...new Set(
+          reviewed.output.suggestedOrder
+            .map((eventId) => eventRefById.get(eventId))
+            .filter((refId): refId is string => typeof refId === "string"),
+        ),
+      ];
       return {
         verdict: reviewed.output.verdict,
         suggestions,
         issueCount: reviewed.output.issues.length,
         suggestedOrder: reviewed.output.suggestedOrder,
+        suggestedCandidateOrder,
         warnings: reviewWarnings,
         conflictDecision,
         mode: reviewed.mode,

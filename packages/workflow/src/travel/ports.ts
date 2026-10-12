@@ -139,6 +139,8 @@ export interface TravelItineraryReviewResult {
   readonly issueCount: number;
   /** Suggested event order (known ids only) passed back to the planner. */
   readonly suggestedOrder: readonly string[];
+  /** Suggested order translated to stable planner candidate refIds. */
+  readonly suggestedCandidateOrder: readonly string[];
   /**
    * Validation warnings appended when nonblocking suggestions were demoted at
    * the attempt bound (empty otherwise).

@@ -263,6 +263,44 @@ describe("itinerary validator taxonomy (Phase 10 section 4)", () => {
     expect(warningCodes).toContain("review_suggestion");
   });
 
+  it("warns when a preferred activity could not be included", () => {
+    const result = validateItinerary(
+      baseInput({
+        preferredActivities: [{ id: "a-missing", name: "Borghese Gallery" }],
+      }),
+    );
+    expect(result.status).toBe("valid");
+    const warning = result.warnings.find((entry) => entry.code === "preferred_activity_missing");
+    expect(warning?.message).toContain("Borghese Gallery");
+    // An included preferred activity produces no warning.
+    const included = validateItinerary(
+      baseInput({ preferredActivities: [{ id: "a-1", name: "Museum" }] }),
+    );
+    expect(included.warnings.some((entry) => entry.code === "preferred_activity_missing")).toBe(
+      false,
+    );
+  });
+
+  it("warns when no long break block fits the paced day", () => {
+    const withoutLongBreak = validDay().filter((entry) => entry.durationMinutes !== 60 || entry.kind !== "break");
+    const result = validateItinerary(baseInput({ events: withoutLongBreak }));
+    expect(result.status).toBe("valid");
+    expect(
+      result.warnings.some(
+        (entry) =>
+          entry.code === "pace_guideline_deviation" && entry.message.includes("long break"),
+      ),
+    ).toBe(true);
+    // The complete relaxed day has its 60-minute block, so no such warning.
+    const complete = validateItinerary(baseInput());
+    expect(
+      complete.warnings.some(
+        (entry) =>
+          entry.code === "pace_guideline_deviation" && entry.message.includes("long break"),
+      ),
+    ).toBe(false);
+  });
+
   it("keeps fingerprints stable per input and sensitive to changes", () => {
     const first = validateItinerary(baseInput());
     const second = validateItinerary(baseInput());

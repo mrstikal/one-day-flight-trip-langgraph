@@ -98,6 +98,8 @@ export interface ValidateItineraryInput {
   readonly source: ItinerarySourceFingerprintInput;
   /** Reviewer `revise` suggestions demoted to visible warnings at the bound. */
   readonly review?: ItineraryReview | null;
+  /** Explicitly selected activities (program preferences) that must be honored. */
+  readonly preferredActivities?: readonly { readonly id: string; readonly name: string }[];
 }
 
 const REQUIRED_MEALS = ["breakfast", "lunch"] as const;
@@ -256,6 +258,40 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
       eventIds: [],
       simulatedFailure: false,
     });
+  }
+
+  // The pace table requires one long break block on paced days; when no window
+  // fits, the day is still approvable but the omission is explained.
+  if (profile.longBreakMinutes > 0 && metrics.activityCount > 0) {
+    const hasLongBreak = input.events.some(
+      (event) => event.kind === "break" && event.durationMinutes >= profile.longBreakMinutes,
+    );
+    if (!hasLongBreak) {
+      warnings.push({
+        severity: "warning",
+        code: "pace_guideline_deviation",
+        message: `No ${profile.longBreakMinutes}-minute long break block fits this ${input.pace} day; only shorter rhythm breaks are planned.`,
+        eventIds: [],
+        simulatedFailure: false,
+      });
+    }
+  }
+
+  // Explicitly selected activities are honored independently of candidate order;
+  // one that did not fit is surfaced instead of silently dropped.
+  for (const preferred of input.preferredActivities ?? []) {
+    const included = input.events.some(
+      (event) => event.kind === "activity" && event.refId === preferred.id,
+    );
+    if (!included) {
+      warnings.push({
+        severity: "warning",
+        code: "preferred_activity_missing",
+        message: `Your preferred activity "${preferred.name}" is not in this plan; it did not fit the pace and timing.`,
+        eventIds: [],
+        simulatedFailure: false,
+      });
+    }
   }
 
   if (input.review?.verdict === "revise" && input.review.suggestionsAsWarnings) {

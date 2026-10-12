@@ -85,8 +85,10 @@ describe("reject_proposal -> reselection (P2-6)", () => {
     expect(update.pendingStage).toBe("reselection");
     expect(update.nextDecisionKind).toBe("flight_choice");
     expect(update.proposalId).toBeNull();
+    // Phase 10: a reselection re-derives its offers through detect_progress
+    // instead of preparing a decision from state a fresh operation cleared.
     expect(routeAfterApplyDecision(state({ pendingStage: "reselection" }))).toBe(
-      "prepare_decision",
+      "detect_progress",
     );
   });
 

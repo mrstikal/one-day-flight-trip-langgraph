@@ -1,4 +1,4 @@
-import type { ActivityPace, ActivityTag } from "@odft/contracts";
+import type { ActivityPace, ActivityTag, ServiceLevel } from "@odft/contracts";
 
 /**
  * Deterministic pace profiles, simulated opening windows, and the error/warning
@@ -69,6 +69,21 @@ export const DENSER_PACE: Readonly<Record<ActivityPace, ActivityPace | null>> = 
   moderate: "intensive",
   intensive: null,
 };
+
+/**
+ * Meal duration for an UNBOOKED slot (08 section 7): the pace table is the
+ * authoritative default ("60 / 90 / 120 min" relaxed etc.), luxury meals use the
+ * same floor plus up to +15 minutes. Confirmed reservations keep the offer's
+ * fixed duration and are never extended or moved to make pace fit.
+ */
+export function paceMealDuration(
+  pace: ActivityPace,
+  meal: "breakfast" | "lunch" | "dinner",
+  level: ServiceLevel,
+): number {
+  const floor = PACE_PROFILES[pace].mealMinutes[meal];
+  return level === "luxury" ? floor + 15 : floor;
+}
 
 /** Airport departure buffer before the return flight (Stage B rule). */
 export const AIRPORT_BUFFER_MINUTES = 120;

@@ -79,8 +79,16 @@ const reviewerEventSchema = z
   .object({
     id: nonEmptyStringSchema,
     kind: z.enum(["meal", "activity", "break", "transfer", "airport_buffer", "free_time"]),
+    title: nonEmptyStringSchema.max(200),
+    refId: nonEmptyStringSchema.nullable(),
+    tags: z.array(activityTagSchema).max(9),
     startMinute: z.number().int().min(0).max(1439),
     durationMinutes: z.number().int().min(0).max(1440),
+    /** Resolved stop coordinates (meal/activity events) for sequence review. */
+    location: z
+      .object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180) })
+      .strict()
+      .nullable(),
   })
   .strict();
 

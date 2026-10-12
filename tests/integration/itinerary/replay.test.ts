@@ -1,7 +1,11 @@
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { approveItineraryDraft, persistItineraryDraft } from "@odft/persistence";
-import { itineraryCostsSchema, itineraryValidationSchema } from "@odft/contracts";
+import {
+  itineraryCostsSchema,
+  itineraryEventSchema,
+  itineraryValidationSchema,
+} from "@odft/contracts";
 import {
   claimNextOrFail,
   createGraphTestPool,
@@ -202,6 +206,68 @@ describe("itinerary persistence replay (real PostgreSQL)", () => {
         fence,
       ),
     ).rejects.toMatchObject({ code: "ITINERARY_NOT_APPROVABLE" });
+  }, 120_000);
+
+  it("rejects an out-of-contract draft instead of corrupting the projection", async () => {
+    const harness: Harness = await createHarnessTrip(pool);
+    const claim = await claimNextOrFail(pools);
+    const fence = {
+      operationId: claim.operationId,
+      tripId: claim.tripId,
+      fencingToken: claim.fencingToken,
+    };
+    const event = itineraryEventSchema.parse({
+      id: "00000000-0000-4000-8000-000000000001",
+      kind: "break",
+      title: "Break",
+      localDate: "2026-12-01",
+      startMinute: 600,
+      endMinute: 620,
+      startLocal: "10:00",
+      endLocal: "10:20",
+      startInstant: "2026-12-01T09:00:00Z",
+      endInstant: "2026-12-01T09:20:00Z",
+      zone: "Europe/Rome",
+      durationMinutes: 20,
+      refId: null,
+      activityTags: [],
+      provenance: ["Test"],
+      physicalDemand: "low",
+      costInclusionKey: null,
+      costMinor: 0,
+      location: null,
+      locked: false,
+      lockReason: null,
+      simulated: false,
+    });
+    await expect(
+      persistItineraryDraft(
+        pool,
+        {
+          tripId: harness.tripId,
+          operationId: claim.operationId,
+          attempt: 1,
+          sightseeingDate: "2026-12-01",
+          zone: "Europe/Rome",
+          adults: 1,
+          pace: "moderate",
+          travelVariant: "one_night",
+          // 81 events exceed the persisted bound by construction.
+          events: Array.from({ length: 81 }, () => event),
+          validation: VALIDATION,
+          costs: COSTS,
+          review: null,
+          simulatedFailure: false,
+          simulatedFailureNote: null,
+        },
+        fence,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const rows = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM odft_app.itineraries WHERE trip_id = $1`,
+      [harness.tripId],
+    );
+    expect(rows.rows[0]?.count).toBe("0");
   }, 120_000);
 
   it("refuses planning before a flight is confirmed with a typed conflict", async () => {

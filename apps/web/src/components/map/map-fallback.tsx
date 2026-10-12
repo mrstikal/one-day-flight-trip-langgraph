@@ -21,14 +21,21 @@ export function MapFallback({
   const points = markers.filter(
     (marker) => Number.isFinite(marker.lat) && Number.isFinite(marker.lon),
   );
+  const hasPoints = points.length > 0;
   const lats = points.map((marker) => marker.lat);
   const lons = points.map((marker) => marker.lon);
-  const minLat = Math.min(...lats, 0);
-  const maxLat = Math.max(...lats, 0);
-  const minLon = Math.min(...lons, 0);
-  const maxLon = Math.max(...lons, 0);
-  const latSpan = Math.max(maxLat - minLat, 0.001);
-  const lonSpan = Math.max(maxLon - minLon, 0.001);
+  const rawMinLat = hasPoints ? Math.min(...lats) : 0;
+  const rawMaxLat = hasPoints ? Math.max(...lats) : 1;
+  const rawMinLon = hasPoints ? Math.min(...lons) : 0;
+  const rawMaxLon = hasPoints ? Math.max(...lons) : 1;
+  // Degenerate bounds (single point or a straight line) are widened so the
+  // projection never divides by zero and the markers stay visible.
+  const latSpan = Math.max(rawMaxLat - rawMinLat, 0.01);
+  const lonSpan = Math.max(rawMaxLon - rawMinLon, 0.01);
+  const centerLat = (rawMinLat + rawMaxLat) / 2;
+  const centerLon = (rawMinLon + rawMaxLon) / 2;
+  const minLon = centerLon - lonSpan / 2;
+  const maxLat = centerLat + latSpan / 2;
   const project = (lat: number, lon: number): { x: number; y: number } => ({
     x: PADDING + ((lon - minLon) / lonSpan) * (WIDTH - 2 * PADDING),
     y: PADDING + ((maxLat - lat) / latSpan) * (HEIGHT - 2 * PADDING),

@@ -24,11 +24,14 @@ export async function reviewItineraryNode(
   });
 
   if (result.verdict === "revise" && !atBound) {
-    // The typed findings and the suggested order go back to the planner as
-    // bounded feedback; they are never applied as a state mutation.
+    // The typed findings and the suggested order (as stable candidate refs) go
+    // back to the planner as bounded feedback; they are never applied as a state
+    // mutation.
     const orderFeedback =
-      result.suggestedOrder.length > 0
-        ? [`review: suggested order: ${result.suggestedOrder.join(" > ")}`.slice(0, 300)]
+      result.suggestedCandidateOrder.length > 0
+        ? [
+            `review: suggested order: ${result.suggestedCandidateOrder.join(" > ")}`.slice(0, 300),
+          ]
         : [];
     return {
       itineraryReviewVerdict: "revise",
