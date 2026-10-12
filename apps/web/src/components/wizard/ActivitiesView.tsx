@@ -199,6 +199,11 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
                 {busy ? "Saving…" : "Save activity preferences"}
               </button>
             </div>
+            <p className="text-sm">
+              <Link href={`/trips/${tripId}/itinerary`} className="underline">
+                Continue to the itinerary
+              </Link>
+            </p>
           </>
         ) : (
           <>

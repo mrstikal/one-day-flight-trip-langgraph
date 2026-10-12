@@ -246,7 +246,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
             Your selected flight is staged as a review proposal. Confirm to create the simulated
             reservation, or choose a different flight.
           </p>
-          <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
+          <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
             {DEMO_DISCLAIMER}
           </p>
           <div className="flex flex-wrap gap-3">
@@ -347,7 +347,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
             Continue to hotel selection
           </Link>
         </p>
-        <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
+        <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
           {DEMO_DISCLAIMER}
         </p>
       </div>

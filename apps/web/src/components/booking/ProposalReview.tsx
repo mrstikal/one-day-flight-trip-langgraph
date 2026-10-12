@@ -49,7 +49,7 @@ export function ProposalReview({
       </dl>
       {children}
       {impactRows && impactRows.length > 0 ? <ImpactPreviewTable rows={impactRows} /> : null}
-      <p role="note" className="rounded bg-cream p-3 text-sm text-clay">
+      <p role="note" className="rounded bg-paper p-3 text-sm text-clay">
         {DEMO_DISCLAIMER}
       </p>
       <div className="flex flex-wrap gap-3">

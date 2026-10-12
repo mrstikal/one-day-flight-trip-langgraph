@@ -90,6 +90,13 @@ test("plans PRG -> Rome and books the demo flight with a reference", async ({ pa
   const reference = page.getByTestId("demo-reference");
   await expect(reference).toBeVisible({ timeout: 60_000 });
   await expect(reference).toContainText("DEMO-FLT-");
+
+  // The summary is a waypoint, not a dead end: it offers the next unfinished step.
+  await page.getByRole("link", { name: "View trip summary" }).click();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Confirmed simulated reservations" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue to hotel selection" })).toBeVisible();
 });
 
 test("going back to steps 1-2 keeps the created trip's values visible and read-only", async ({
