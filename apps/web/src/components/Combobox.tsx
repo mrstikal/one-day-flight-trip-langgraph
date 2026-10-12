@@ -14,6 +14,7 @@ export interface ComboboxProps {
   readonly options: readonly ComboboxOption[];
   readonly value: ComboboxOption | null;
   readonly loading?: boolean;
+  readonly disabled?: boolean;
   readonly onQueryChange: (query: string) => void;
   readonly onSelect: (option: ComboboxOption) => void;
 }
@@ -25,10 +26,15 @@ export interface ComboboxProps {
  */
 export function Combobox(props: ComboboxProps): React.JSX.Element {
   const listId = useId();
-  const [query, setQuery] = useState("");
+  // The visible text is the user's in-progress query while typing; otherwise it
+  // mirrors the bound value, so a remount restores the selected label and a
+  // cleared value (e.g. a draft reset) clears the input.
+  const [typedQuery, setTypedQuery] = useState<string | null>(null);
+  const query = typedQuery ?? props.value?.label ?? "";
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const disabled = props.disabled ?? false;
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent): void {
@@ -44,7 +50,7 @@ export function Combobox(props: ComboboxProps): React.JSX.Element {
 
   function choose(option: ComboboxOption): void {
     props.onSelect(option);
-    setQuery(option.label);
+    setTypedQuery(null);
     setOpen(false);
   }
 
@@ -90,14 +96,19 @@ export function Combobox(props: ComboboxProps): React.JSX.Element {
         className="rounded border border-border bg-paper px-3 py-2 text-ink"
         placeholder={props.placeholder}
         autoComplete="off"
+        disabled={disabled}
         value={query}
         onChange={(event) => {
-          setQuery(event.target.value);
+          setTypedQuery(event.target.value);
           props.onQueryChange(event.target.value);
           setOpen(true);
           setActiveIndex(0);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          if (!disabled) {
+            setOpen(true);
+          }
+        }}
         onKeyDown={onKeyDown}
       />
       {props.value ? <p className="text-xs text-ink-muted">Selected: {props.value.label}</p> : null}
@@ -108,7 +119,7 @@ export function Combobox(props: ComboboxProps): React.JSX.Element {
             : `${props.options.length} results available`
           : ""}
       </p>
-      {open && (props.options.length > 0 || props.loading) ? (
+      {open && !disabled && (props.options.length > 0 || props.loading) ? (
         <ul
           id={listId}
           role="listbox"

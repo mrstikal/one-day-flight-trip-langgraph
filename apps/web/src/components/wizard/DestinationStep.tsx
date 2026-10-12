@@ -9,12 +9,14 @@ import { ApiError, apiPost } from "@/lib/api-client";
 import { searchCities, searchCountries, type CityOption } from "@/lib/reference-client";
 import { ensureSession } from "@/lib/session-client";
 import { buildPreferences } from "@/lib/wizard-form";
+import { TripCreatedNotice } from "./TripCreatedNotice";
 import { useWizardDraft } from "./WizardDraft";
 
 /** Steps 1-2: choose the destination country and city, then create the trip. */
 export function DestinationStep(): React.JSX.Element {
   const { draft, update } = useWizardDraft();
   const router = useRouter();
+  const tripCreated = draft.tripId !== "";
   const [countryOptions, setCountryOptions] = useState<readonly ComboboxOption[]>([]);
   const [cityOptions, setCityOptions] = useState<readonly CityOption[]>([]);
   const [datasetLimitation, setDatasetLimitation] = useState<string | undefined>();
@@ -77,6 +79,9 @@ export function DestinationStep(): React.JSX.Element {
 
   async function onCreate(): Promise<void> {
     setError(undefined);
+    if (tripCreated) {
+      return;
+    }
     if (!draft.originAirportId || !draft.countryKey || !draft.destinationCityId) {
       setError("Choose an origin airport, country, and city first.");
       return;
@@ -109,6 +114,7 @@ export function DestinationStep(): React.JSX.Element {
         parsed.data,
         { "x-csrf-token": csrfToken },
       );
+      update({ creationRequestId, tripId: created.tripId });
       router.push(`/trips/${created.tripId}/flights`);
     } catch (caught) {
       setError(
@@ -130,11 +136,14 @@ export function DestinationStep(): React.JSX.Element {
         </p>
       </header>
 
+      {tripCreated ? <TripCreatedNotice /> : null}
+
       <Combobox
         label="Country"
         placeholder="Type a country name"
         options={countryOptions}
         value={draft.countryKey ? { id: draft.countryKey, label: draft.countryName } : null}
+        disabled={tripCreated}
         onQueryChange={(query) => void onCountryQuery(query)}
         onSelect={(option) => {
           cityRequest.current += 1;
@@ -161,6 +170,7 @@ export function DestinationStep(): React.JSX.Element {
             ? { id: draft.destinationCityId, label: draft.destinationCityLabel }
             : null
         }
+        disabled={tripCreated}
         onQueryChange={(query) => void onCityQuery(query)}
         onSelect={(option) => {
           update({
@@ -201,7 +211,7 @@ export function DestinationStep(): React.JSX.Element {
         <button
           type="button"
           onClick={() => void onCreate()}
-          disabled={submitting}
+          disabled={submitting || tripCreated}
           className="rounded bg-teal px-4 py-2 font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
         >
           {submitting ? "Creating…" : "Create trip"}

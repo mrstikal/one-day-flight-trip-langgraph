@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Roboto } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { WizardDraftProvider } from "@/components/wizard/WizardDraft";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { getServerDeps } from "@/lib/server";
 
@@ -54,7 +55,7 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
           </div>
         </header>
         <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
-          {children}
+          <WizardDraftProvider>{children}</WizardDraftProvider>
         </main>
         <footer className="border-t border-border bg-paper">
           <div className="mx-auto flex max-w-5xl flex-col gap-1 px-4 py-4">

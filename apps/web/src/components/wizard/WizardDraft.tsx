@@ -12,9 +12,12 @@ import {
 /**
  * Browser-only trip draft spanning the welcome and destination steps. It holds
  * no server identifiers: the trip (and its id) does not exist until the city is
- * chosen and `POST /api/trips` is admitted. The provider is mounted in the
- * `(wizard)` layout, so the draft survives client-side navigation between the
- * two steps; a full page reload intentionally starts fresh.
+ * chosen and `POST /api/trips` is admitted. The provider is mounted in the ROOT
+ * layout, so the draft survives client-side navigation across the whole app
+ * (including a trip workspace round trip); a full page reload intentionally
+ * starts fresh. Once `tripId` is set the draft is a read-only record: the
+ * wizard only creates trips, so the draft steps render disabled and edits go
+ * through the trip's own commands.
  */
 
 export interface WizardDraft {
@@ -32,6 +35,7 @@ export interface WizardDraft {
   destinationCityId: string;
   destinationCityLabel: string;
   creationRequestId: string;
+  tripId: string;
 }
 
 function emptyDraft(): WizardDraft {
@@ -50,6 +54,7 @@ function emptyDraft(): WizardDraft {
     destinationCityId: "",
     destinationCityLabel: "",
     creationRequestId: "",
+    tripId: "",
   };
 }
 

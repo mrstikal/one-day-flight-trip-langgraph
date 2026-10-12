@@ -5,12 +5,14 @@ import { useRef, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
 import { searchAirports } from "@/lib/reference-client";
 import { validateWelcomeDraft, type WelcomeErrors } from "@/lib/wizard-form";
+import { TripCreatedNotice } from "./TripCreatedNotice";
 import { useWizardDraft, type WizardDraft } from "./WizardDraft";
 
 /** Step 0-1/2: welcome, party, origin, date, and provisional preferences. */
 export function WelcomeStep(): React.JSX.Element {
   const { draft, update } = useWizardDraft();
   const router = useRouter();
+  const tripCreated = draft.tripId !== "";
   const [airportOptions, setAirportOptions] = useState<readonly ComboboxOption[]>([]);
   const [airportsLoading, setAirportsLoading] = useState(false);
   const [errors, setErrors] = useState<WelcomeErrors>({});
@@ -44,6 +46,9 @@ export function WelcomeStep(): React.JSX.Element {
   }
 
   function onContinue(): void {
+    if (tripCreated) {
+      return;
+    }
     const next = validateWelcomeDraft({
       userName: draft.userName,
       originAirportId: draft.originAirportId,
@@ -74,6 +79,8 @@ export function WelcomeStep(): React.JSX.Element {
         </p>
       </header>
 
+      {tripCreated ? <TripCreatedNotice /> : null}
+
       <div className="flex flex-col gap-1">
         <label htmlFor="user-name" className="text-sm font-medium">
           Your name
@@ -82,6 +89,7 @@ export function WelcomeStep(): React.JSX.Element {
           id="user-name"
           type="text"
           required
+          disabled={tripCreated}
           aria-invalid={errors.userName ? true : undefined}
           aria-describedby={errors.userName ? "user-name-error" : undefined}
           className="rounded border border-border bg-paper px-3 py-2"
@@ -104,6 +112,7 @@ export function WelcomeStep(): React.JSX.Element {
           type="number"
           min={1}
           max={6}
+          disabled={tripCreated}
           className="w-24 rounded border border-border bg-paper px-3 py-2"
           value={draft.adults}
           onChange={(event) =>
@@ -122,6 +131,7 @@ export function WelcomeStep(): React.JSX.Element {
             : null
         }
         loading={airportsLoading}
+        disabled={tripCreated}
         onQueryChange={(query) => void onAirportQuery(query)}
         onSelect={(option) => {
           update({ originAirportId: option.id, originLabel: option.label });
@@ -142,6 +152,7 @@ export function WelcomeStep(): React.JSX.Element {
           id="sightseeing-date"
           type="date"
           required
+          disabled={tripCreated}
           aria-invalid={errors.sightseeingDate ? true : undefined}
           className="w-56 rounded border border-border bg-paper px-3 py-2"
           value={draft.sightseeingDate}
@@ -161,6 +172,7 @@ export function WelcomeStep(): React.JSX.Element {
             type="radio"
             name="travelVariant"
             value="one_night"
+            disabled={tripCreated}
             checked={draft.travelVariant === "one_night"}
             onChange={() => update({ travelVariant: "one_night" })}
           />
@@ -171,6 +183,7 @@ export function WelcomeStep(): React.JSX.Element {
             type="radio"
             name="travelVariant"
             value="two_nights"
+            disabled={tripCreated}
             checked={draft.travelVariant === "two_nights"}
             onChange={() => update({ travelVariant: "two_nights" })}
           />
@@ -182,6 +195,7 @@ export function WelcomeStep(): React.JSX.Element {
         Default service level (provisional)
         <select
           className="w-56 rounded border border-border bg-paper px-3 py-2"
+          disabled={tripCreated}
           value={draft.defaultServiceLevel}
           onChange={(event) =>
             update({
@@ -199,6 +213,7 @@ export function WelcomeStep(): React.JSX.Element {
         Activity pace
         <select
           className="w-56 rounded border border-border bg-paper px-3 py-2"
+          disabled={tripCreated}
           value={draft.activityPace}
           onChange={(event) =>
             update({ activityPace: event.target.value as WizardDraft["activityPace"] })
@@ -215,6 +230,7 @@ export function WelcomeStep(): React.JSX.Element {
         <input
           type="number"
           min={0}
+          disabled={tripCreated}
           className="w-40 rounded border border-border bg-paper px-3 py-2"
           value={draft.maxBudgetEur}
           onChange={(event) => update({ maxBudgetEur: event.target.value })}
@@ -224,7 +240,8 @@ export function WelcomeStep(): React.JSX.Element {
       <div>
         <button
           type="submit"
-          className="rounded bg-teal px-4 py-2 font-medium text-paper hover:bg-teal-strong"
+          disabled={tripCreated}
+          className="rounded bg-teal px-4 py-2 font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
         >
           Continue to destination
         </button>

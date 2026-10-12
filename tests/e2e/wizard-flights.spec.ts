@@ -91,3 +91,41 @@ test("plans PRG -> Rome and books the demo flight with a reference", async ({ pa
   await expect(reference).toBeVisible({ timeout: 60_000 });
   await expect(reference).toContainText("DEMO-FLT-");
 });
+
+test("going back to steps 1-2 keeps the created trip's values visible and read-only", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Your name").fill("Grace Hopper");
+  await selectCombobox(page, "Origin airport", "PRG");
+  await page.getByLabel("Sightseeing date").fill("2026-12-01");
+  await page.getByRole("button", { name: "Continue to destination" }).click();
+
+  await selectCombobox(page, "Country", "Italy");
+  await selectCombobox(page, "City", "Rome");
+  await page.getByRole("button", { name: "Create trip" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+
+  // Step 2 survives the trip round trip: values visible, the wizard read-only.
+  await page.goBack();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Choose your destination");
+  await expect(page.getByRole("combobox", { name: "Country" })).toHaveValue("Italy");
+  await expect(page.getByRole("combobox", { name: "City" })).toHaveValue("Rome");
+  await expect(page.getByRole("combobox", { name: "Country" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "City" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create trip" })).toBeDisabled();
+
+  // Step 1: same, and the entered values are restored.
+  await page.goBack();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Plan one sightseeing day");
+  await expect(page.getByLabel("Your name")).toHaveValue("Grace Hopper");
+  await expect(page.getByLabel("Sightseeing date")).toHaveValue("2026-12-01");
+  await expect(page.getByLabel("Your name")).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Origin airport" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Continue to destination" })).toBeDisabled();
+
+  // Starting a new trip clears the read-only draft.
+  await page.getByRole("button", { name: "Start a new trip" }).click();
+  await expect(page.getByLabel("Your name")).toBeEnabled();
+  await expect(page.getByLabel("Your name")).toHaveValue("");
+});
