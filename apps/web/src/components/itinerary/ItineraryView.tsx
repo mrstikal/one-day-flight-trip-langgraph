@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { formatLocalDate } from "@/lib/format/datetime";
+import { nextTripStep } from "@/lib/trip-step";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
@@ -135,6 +137,12 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
   const blockingErrors = itinerary?.validation.errors.length ?? 0;
 
   if (!itinerary) {
+    const step = nextTripStep({
+      tripId,
+      reservations: projection.reservations,
+      hasProgram: projection.program !== null,
+      hasItinerary: false,
+    });
     return (
       <section className="flex flex-col gap-4">
         <header className="flex flex-col gap-2">
@@ -160,6 +168,13 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
         {actionError ? (
           <p role="alert" className="text-sm text-clay">
             {actionError}
+          </p>
+        ) : null}
+        {step ? (
+          <p className="text-sm">
+            <Link href={step.href} className="underline">
+              {step.cta}
+            </Link>
           </p>
         ) : null}
         <p role="note" className="text-sm text-ink-muted">

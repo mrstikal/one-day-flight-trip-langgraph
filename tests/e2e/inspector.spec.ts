@@ -72,6 +72,11 @@ test("renders the real graph, nodes, operations, checkpoints, and LLM rows", asy
 
   await page.goto(`/trips/${tripId}/inspector`);
   await expect(page.getByTestId("inspector")).toBeVisible({ timeout: 30_000 });
+  // "Back to the trip" tracks the trip's current step (no flight confirmed yet).
+  await expect(page.getByRole("link", { name: "Back to the trip" })).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/flights`,
+  );
   // The graph is the persisted definition from the worker registry.
   await expect(page.getByTestId("execution-graph")).toBeVisible();
   const nodeTable = page.getByTestId("node-table");

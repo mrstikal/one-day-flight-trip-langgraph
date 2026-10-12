@@ -7,6 +7,7 @@ import { buildTripProjection } from "@/lib/projection";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
+import { nextTripStep } from "@/lib/trip-step";
 
 export const dynamic = "force-dynamic";
 
@@ -34,18 +35,13 @@ export default async function SummaryPage({
 
   const { trip, reservations, program, itinerary } = projection;
   const activeReservations = reservations.filter((row) => row.status === "confirmed");
-  const confirmed = new Set(activeReservations.map((row) => row.serviceKey));
-  // The summary is also a waypoint: offer the first step that is not finished
-  // yet, mirroring the forward links of the individual steps.
-  const nextStep = !confirmed.has("flights")
-    ? { href: `/trips/${id}/flights`, label: "Go to flight selection" }
-    : !confirmed.has("hotel")
-      ? { href: `/trips/${id}/hotel`, label: "Continue to hotel selection" }
-      : program === null
-        ? { href: `/trips/${id}/meals`, label: "Continue to meals" }
-        : itinerary === null
-          ? { href: `/trips/${id}/activities`, label: "Review activities" }
-          : null;
+  // The summary is also a waypoint: offer the trip's current step, if any.
+  const nextStep = nextTripStep({
+    tripId: id,
+    reservations,
+    hasProgram: program !== null,
+    hasItinerary: itinerary !== null,
+  });
 
   return (
     <div className="flex flex-col gap-8">
@@ -97,7 +93,7 @@ export default async function SummaryPage({
                 href={nextStep.href}
                 className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
               >
-                {nextStep.label}
+                {nextStep.cta}
               </Link>
             </div>
           ) : null}

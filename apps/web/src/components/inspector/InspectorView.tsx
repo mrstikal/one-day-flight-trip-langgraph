@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import Link from "next/link";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
+import { nextTripStep } from "@/lib/trip-step";
 import { ExecutionGraph } from "./execution-graph";
 import { SimulationControls } from "./simulation-controls";
 
@@ -54,6 +55,15 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </p>
     );
   }
+  // "Back to the trip" points at the trip's current step, not a fixed page: the
+  // itinerary is a dead end until a flight, hotel, and program are in place.
+  const backHref =
+    nextTripStep({
+      tripId,
+      reservations: projection.reservations,
+      hasProgram: projection.program !== null,
+      hasItinerary: projection.itinerary !== null,
+    })?.href ?? `/trips/${tripId}/itinerary`;
   if (!inspector) {
     return (
       <div className="flex flex-col gap-2">
@@ -61,7 +71,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
         <p role="status" className="text-sm text-ink-muted" data-testid="inspector-disabled">
           The inspector is available when demo controls are enabled for this environment.
         </p>
-        <Link href={`/trips/${tripId}/itinerary`} className="text-sm text-teal underline">
+        <Link href={backHref} className="text-sm text-teal underline">
           Back to the trip
         </Link>
       </div>
@@ -73,7 +83,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       <header className="flex flex-col gap-1">
         <div className="flex items-baseline justify-between gap-3">
           <h1 className="font-serif text-xl font-semibold">Execution inspector</h1>
-          <Link href={`/trips/${tripId}/itinerary`} className="text-sm text-teal underline">
+          <Link href={backHref} className="text-sm text-teal underline">
             Back to the trip
           </Link>
         </div>
