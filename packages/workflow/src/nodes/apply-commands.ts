@@ -87,23 +87,38 @@ export async function applyCommandsNode(
   // same-value command) always re-runs the feasibility stages and starts a fresh
   // flight choice — never an empty confirmation.
   const appliedRouteChange = routing.resolution.routeChange && !routeNoop;
+  // A search/decision that targets a downstream domain cannot run before the
+  // flight step: no snapshot exists yet, so its offers would be empty. The
+  // prerequisite flight choice is presented instead (Phase 11 review fix).
+  const targetedBeforeFlight =
+    !progress.flightConfirmed &&
+    (routing.resolution.nextDecisionKind === "hotel_choice" ||
+      routing.resolution.nextDecisionKind === "program_choices");
   return {
-    nextWork: routeNoop ? "progress" : appliedRouteChange ? "route" : routing.nextWork,
-    nextDecisionKind: routeNoop
-      ? state.nextDecisionKind
-      : appliedRouteChange
-        ? "flight_choice"
-        : (routing.resolution.nextDecisionKind ?? state.nextDecisionKind),
+    nextWork: targetedBeforeFlight
+      ? "route"
+      : routeNoop
+        ? "progress"
+        : appliedRouteChange
+          ? "route"
+          : routing.nextWork,
+    nextDecisionKind: targetedBeforeFlight
+      ? "flight_choice"
+      : routeNoop
+        ? state.nextDecisionKind
+        : appliedRouteChange
+          ? "flight_choice"
+          : (routing.resolution.nextDecisionKind ?? state.nextDecisionKind),
     hasConfirmedFlight: progress.flightConfirmed,
     hasConfirmedHotel: progress.hotelConfirmed,
     confirmedServices: [...progress.confirmedServices],
     selectedServices: [...progress.selectedServices],
     searchTargetDomains:
-      command.type === "find_alternatives"
+      !targetedBeforeFlight && command.type === "find_alternatives"
         ? routing.resolution.affectedDomains.slice(0, 1)
         : [],
     searchIntent:
-      command.type === "find_alternatives"
+      !targetedBeforeFlight && command.type === "find_alternatives"
         ? {
             target: command.target,
             objective: command.objective,

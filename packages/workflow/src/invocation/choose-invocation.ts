@@ -33,6 +33,8 @@ export interface CheckpointView {
   readonly values: Record<string, unknown>;
   readonly next: readonly string[];
   readonly interrupts: readonly { readonly id: string; readonly value: unknown }[];
+  /** LangGraph checkpoint id of this snapshot (inspector evidence). */
+  readonly checkpointId?: string | null;
 }
 
 export type InvocationChoice =

@@ -8,11 +8,13 @@ import {
   SyntheticRestaurantSearchProvider,
   type BehaviorOverlay,
 } from "@odft/data";
+import { orderSearchCandidates, type BoundOfferReference } from "@odft/domain";
 import {
   ARTIFACT_SERVICE_KEY_FOR_RESEARCH,
   SCENARIO_DOMAIN_FOR_RESEARCH,
   type Meal,
   type ResearchDomain,
+  type SnapshotContent,
   type ResearchDomainStatus,
   type ResearchSearchIntent,
   type ScenarioDomain,
@@ -225,6 +227,43 @@ function pickDefault<T extends { id: string; partyTotalMinor: number }>(
 /** Deterministic candidate order: ascending party total, then id. */
 function byPartyTotal<T extends { id: string; partyTotalMinor: number }>(offers: readonly T[]): T[] {
   return [...offers].sort((a, b) => a.partyTotalMinor - b.partyTotalMinor || a.id.localeCompare(b.id));
+}
+
+async function loadBoundOfferReference(
+  client: Queryable,
+  tripId: string,
+  serviceKey: string,
+  content: SnapshotContent,
+): Promise<BoundOfferReference | undefined> {
+  // The confirmed reservation carries its own party total.
+  const confirmed = await client.query<{ offer_id: string; party_total_minor: string }>(
+    `SELECT offer_id, party_total_minor::text AS party_total_minor
+       FROM odft_app.reservations
+      WHERE trip_id = $1 AND service_key = $2 AND status = 'confirmed'
+      LIMIT 1`,
+    [tripId, serviceKey],
+  );
+  const confirmedRow = confirmed.rows[0];
+  if (confirmedRow) {
+    return {
+      offerId: confirmedRow.offer_id,
+      partyTotalMinor: Number.parseInt(confirmedRow.party_total_minor, 10),
+    };
+  }
+  // A selection stores no price; the offer in the active snapshot does.
+  const selection = await client.query<{ offer_id: string }>(
+    `SELECT offer_id FROM odft_app.trip_selections
+      WHERE trip_id = $1 AND service_key = $2 LIMIT 1`,
+    [tripId, serviceKey],
+  );
+  const offerId = selection.rows[0]?.offer_id;
+  if (!offerId) {
+    return undefined;
+  }
+  const offer =
+    content.hotels.find((candidate) => candidate.id === offerId) ??
+    content.restaurants.find((candidate) => candidate.id === offerId);
+  return offer ? { offerId, partyTotalMinor: offer.partyTotalMinor } : undefined;
 }
 
 /** Whether a persisted overlay alters the provider behavior of one domain. */
@@ -586,6 +625,8 @@ export async function rankTripRecommendations(
   let snapshotId: string | undefined;
   let content: Awaited<ReturnType<typeof loadSnapshotContent>>;
   let override: { readonly domain: ResearchDomain; readonly level: ServiceLevel } | undefined;
+  let bound: BoundOfferReference | undefined;
+  let targetDomain: ResearchDomain | undefined;
   try {
     trip = await getTrip(client, input.tripId);
     if (!trip) {
@@ -596,7 +637,11 @@ export async function rankTripRecommendations(
       throw new Error(`trip ${input.tripId} has no active scenario snapshot`);
     }
     content = await loadSnapshotContent(client, snapshotId);
+    if (!content) {
+      throw new Error(`trip ${input.tripId} active snapshot is not materialized`);
+    }
     const overrideDomain = SEARCH_TARGET_DOMAIN[input.searchIntent?.target ?? ""];
+    targetDomain = overrideDomain;
     if (input.searchIntent && overrideDomain) {
       const level = await searchLevelOverride({
         client,
@@ -607,6 +652,9 @@ export async function rankTripRecommendations(
       });
       if (level) {
         override = { domain: overrideDomain, level };
+      }
+      if (overrideDomain !== "attractions" && input.searchIntent.objective !== "match_preferences") {
+        bound = await loadBoundOfferReference(client, input.tripId, overrideDomain, content);
       }
     }
   } finally {
@@ -633,7 +681,15 @@ export async function rankTripRecommendations(
       offer.nights === nights &&
       (trip.travelVariant !== "one_night" || offer.luggageStorage),
   );
-  const hotelOfferIds = byPartyTotal(hotelOffers).map((offer) => offer.id);
+  const objectiveFor = (domain: ResearchDomain): ResearchSearchIntent["objective"] | null =>
+    targetDomain === domain ? (input.searchIntent?.objective ?? null) : null;
+  const boundFor = (domain: ResearchDomain): BoundOfferReference | undefined =>
+    targetDomain === domain ? bound : undefined;
+  const hotelOfferIds = orderSearchCandidates(
+    hotelOffers,
+    objectiveFor("hotel"),
+    await boundFor("hotel"),
+  ).map((offer) => offer.id);
 
   const mealOfferIds: Record<Meal, string[]> = { breakfast: [], lunch: [], dinner: [] };
   const eligibleMeals: Record<Meal, { id: string; partyTotalMinor: number }[]> = {
@@ -651,7 +707,9 @@ export async function rankTripRecommendations(
         content.context.adults === trip.adults,
     );
     eligibleMeals[meal] = offers;
-    mealOfferIds[meal] = byPartyTotal(offers).map((offer) => offer.id);
+    mealOfferIds[meal] = orderSearchCandidates(offers, objectiveFor(meal), await boundFor(meal)).map(
+      (offer) => offer.id,
+    );
   }
 
   const activityIds = candidateIds("attractions");

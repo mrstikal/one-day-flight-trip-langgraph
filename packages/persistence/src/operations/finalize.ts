@@ -32,6 +32,10 @@ export interface WaitingSpec {
   readonly allowedOfferIds?: readonly string[];
   /** Server-side clarification question/labels (jsonb; never raw commands to the client). */
   readonly optionPayload?: unknown;
+  /** LangGraph checkpoint id the interrupt was raised at (inspector evidence). */
+  readonly checkpointId?: string | null;
+  /** LangGraph interrupt id of the awaited interrupt (inspector evidence). */
+  readonly interruptId?: string | null;
 }
 
 async function transitionOperation(
@@ -81,8 +85,10 @@ export async function finalizeWaiting(
     await client.query(
       `INSERT INTO odft_app.pending_decisions
          (id, trip_id, kind, thread_id, graph_version, created_revision, source_fingerprint,
-          proposal_id, allowed_offer_ids, allowed_option_ids, option_payload, payload_hash, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $7, 'pending')
+          proposal_id, allowed_offer_ids, allowed_option_ids, option_payload, payload_hash, status,
+          checkpoint_id, interrupt_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $7, 'pending',
+               $12, $13)
        ON CONFLICT DO NOTHING`,
       [
         randomUUID(),
@@ -96,6 +102,8 @@ export async function finalizeWaiting(
         JSON.stringify(spec.allowedOfferIds ?? []),
         JSON.stringify(spec.allowedOptionIds),
         JSON.stringify(spec.optionPayload ?? []),
+        spec.checkpointId ?? null,
+        spec.interruptId ?? null,
       ],
     );    await client.query(
       `UPDATE odft_app.trips SET workflow_status = 'waiting_user', updated_at = now() WHERE id = $1`,

@@ -261,7 +261,9 @@ test("route-change impact card names the reservations and cancels only after con
   await driveToProgramSaved(page);
   await approveItinerary(page, tripId);
 
-  // A typed route change that would invalidate the confirmed bookings (Paris).
+  // A typed ORIGIN-ONLY route change (PRG -> Brno): the scenario snapshot is
+  // keyed by the origin, so every confirmed booking is affected and the card
+  // must show the changed origin explicitly.
   const session = await page.request.post("/api/session", { headers: { origin: ORIGIN } });
   expect([200, 201]).toContain(session.status());
   const { csrfToken } = (await session.json()) as { csrfToken: string };
@@ -276,7 +278,7 @@ test("route-change impact card names the reservations and cancels only after con
     data: {
       requestId: randomUUID(),
       expectedRevision: revision,
-      command: { type: "set_route", destinationCityId: "geonames:2988507" },
+      command: { type: "set_route", originAirportId: "ourairports:4409" },
     },
   });
   expect([200, 201, 202]).toContain(submitted.status());
@@ -287,6 +289,11 @@ test("route-change impact card names the reservations and cancels only after con
   // The card names every affected reservation and keeps the old state active.
   await expect(page.getByTestId("route-change-reservations").locator("li")).not.toHaveCount(0);
   await expect(card).toContainText("Confirm the route change");
+  // The destructive origin change is visible with both values (Phase 11 fix).
+  const fields = page.getByTestId("route-change-fields");
+  await expect(fields).toContainText("Origin airport");
+  await expect(fields).toContainText("ourairports:4408");
+  await expect(fields).toContainText("ourairports:4409");
   await page.getByTestId("route-change-confirm").click();
   await expect(card).toHaveCount(0, { timeout: 120_000 });
   // The fresh feasibility flow starts again at the flight choice.

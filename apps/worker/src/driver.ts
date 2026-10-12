@@ -97,12 +97,14 @@ function toCheckpointView(snapshot: StateSnapshot | undefined): CheckpointView |
     return null;
   }
   const tasks = snapshot.tasks ?? [];
+  const checkpointId = snapshot.config?.configurable?.checkpoint_id;
   return {
     values:
       snapshot.values && typeof snapshot.values === "object"
         ? (snapshot.values as Record<string, unknown>)
         : {},
     next: snapshot.next ?? [],
+    checkpointId: typeof checkpointId === "string" ? checkpointId : null,
     interrupts: tasks.flatMap((task) =>
       (task.interrupts ?? []).map((interrupt) => ({
         id: interrupt.id ?? "",
@@ -326,6 +328,8 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
         allowedOfferIds,
         ...(proposalId ? { proposalId } : {}),
         ...(optionPayload !== undefined ? { optionPayload } : {}),
+        checkpointId: view.checkpointId ?? null,
+        interruptId: view.interrupts[0]?.id ?? null,
         graphVersion: deps.graphVersion,
         createdRevision: claim.acceptedRevision,
       },
@@ -529,15 +533,30 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
       recursionLimit: 100,
       context,
       signal: abort.signal,
-      streamMode: "updates",
+      // "updates" is the completion evidence; "tasks" adds the genuine START
+      // evidence the inspector needs to highlight the node actually executing
+      // (a task-create event carries `triggers`, a task-result carries `result`).
+      streamMode: ["updates", "tasks"],
     });
     for await (const chunk of stream) {
-      // With a single stream mode the chunk is the updates object; a multi-mode
-      // request would yield `[mode, payload]` tuples, so unwrap both shapes.
-      const payload =
+      // A multi-mode stream yields `[mode, payload]` tuples; unwrap defensively.
+      const tuple =
         Array.isArray(chunk) && chunk.length === 2 && typeof chunk[0] === "string"
-          ? chunk[1]
-          : chunk;
+          ? (chunk as [string, unknown])
+          : (["updates", chunk] as [string, unknown]);
+      const [mode, payload] = tuple;
+      if (mode === "tasks") {
+        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+          const task = payload as Record<string, unknown>;
+          if (typeof task.name === "string" && Object.prototype.hasOwnProperty.call(task, "triggers")) {
+            await insertFencedEvent(ctx, { type: "node.started", payload: { node: task.name } });
+          }
+        }
+        continue;
+      }
+      if (mode !== "updates") {
+        continue;
+      }
       if (payload && typeof payload === "object" && !Array.isArray(payload)) {
         for (const node of Object.keys(payload as Record<string, unknown>)) {
           await insertFencedEvent(ctx, { type: "node.updated", payload: { node } });

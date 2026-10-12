@@ -395,18 +395,15 @@ function changedRouteFields(from: PublicRouteSummary, to: PublicRouteSummary): R
 }
 
 /**
- * Which confirmed reservations a change invalidates. A destination, date, or
- * variant change invalidates everything (every service is bound to the city,
- * the day, or the variant). An origin-only change invalidates the flights only:
- * the hotel, meals, and activities stay in the unchanged destination.
+ * Which confirmed reservations a change invalidates. The scenario snapshot is
+ * keyed by the origin airport (plus destination/date/variant/party), so ANY route
+ * field change — including an origin-only change — regenerates every generated
+ * offer id. A preserved reservation would therefore reference an offer that no
+ * longer exists in the active inventory, so every confirmed service is affected
+ * and must be named in the impact preview (Phase 11 review fix).
  */
 function affectedServiceKeys(changed: readonly RouteChangeField[]): BookableKey[] {
-  const destinationLevel = changed.some(
-    (field) => field !== "originAirportId",
-  );
-  return destinationLevel
-    ? ["flights", "hotel", "breakfast", "lunch", "dinner"]
-    : ["flights"];
+  return changed.length === 0 ? [] : ["flights", "hotel", "breakfast", "lunch", "dinner"];
 }
 
 async function loadConfirmedReservations(

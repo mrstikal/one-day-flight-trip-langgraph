@@ -60,6 +60,7 @@ const EVENT_FIELD_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   ],
   "itinerary.reviewed": ["verdict", "issueCount", "attempt", "mode"],
   "itinerary.approved": ["itineraryId", "version", "decisionId"],
+  "node.started": ["node"],
   "node.updated": ["node"],
   "graph.initialized": ["graphVersion", "nodes", "edges"],
   "route_change.previewed": ["proposalId", "affectedReservationIds"],

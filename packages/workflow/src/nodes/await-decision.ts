@@ -1,6 +1,6 @@
 import { interrupt, InvalidUpdateError } from "@langchain/langgraph";
 import { graphResumeEnvelopeSchema, type DecisionKind } from "@odft/contracts";
-import type { TravelState, TravelUpdate } from "../travel/state.js";
+import { OPERATION_LOCAL_RESETS, type TravelState, type TravelUpdate } from "../travel/state.js";
 
 /**
  * The single interrupt node (03-langgraph-design.md section 6). It pauses for the
@@ -70,6 +70,12 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
   if (response.action === "modify") {
     return {
       ...base,
+      // A modification restarts the operation-local execution state, or it would
+      // keep the previous operation's `researchStatus: "ok"` and skip the
+      // required refresh, reopening the decision with stale offers (Phase 11
+      // review fix). Other resumes keep the status: the recovery flow relies on
+      // the retained `failed` state to explain the gap and offer a retry.
+      ...OPERATION_LOCAL_RESETS,
       lastAction: "modify",
       modificationOperationId: response.commandOperationId,
     };

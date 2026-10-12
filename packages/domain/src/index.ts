@@ -9,6 +9,7 @@ export * from "./research/affected-domains.js";
 export * from "./research/retry-scope.js";
 export * from "./research/gate.js";
 export * from "./research/rank.js";
+export * from "./research/search-objective.js";
 export * from "./selective/fingerprint-scope.js";
 export * from "./selective/preservation.js";
 export * from "./booking/references.js";

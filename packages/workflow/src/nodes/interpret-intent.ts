@@ -4,7 +4,7 @@ import { domainCommandSchema, type DomainCommand } from "@odft/contracts";
 import type { TravelState, TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
 import { resolveCommandRouting, routingRefs } from "../routing/invalidation-matrix.js";
-import { routeByNextWork } from "../routing/next-work-target.js";
+import { routeByNextWork, routeForCommandType } from "../routing/next-work-target.js";
 import { stageRouteChangeIfImpactful } from "./stage-route-change.js";
 
 /**
@@ -148,22 +148,37 @@ async function applyBatchAndRoute(
     ? routingFor(commands.filter((command) => command.type !== "set_route"))
     : null;
   const appliedRouteChange = matrix.resolution.routeChange && !routeNoop;
+  // A search/decision that targets a downstream domain cannot run before the
+  // flight step (no snapshot): present the prerequisite flight choice instead.
+  const targetedBeforeFlight =
+    !progress.flightConfirmed &&
+    (matrix.resolution.nextDecisionKind === "hotel_choice" ||
+      matrix.resolution.nextDecisionKind === "program_choices");
   return {
     ...routing,
     ...(fallbackRouting ?? {}),
-    nextWork: routeNoop ? "progress" : appliedRouteChange ? "route" : matrix.nextWork,
-    nextDecisionKind: routeNoop
-      ? state.nextDecisionKind
-      : appliedRouteChange
-        ? "flight_choice"
-        : (matrix.resolution.nextDecisionKind ?? state.nextDecisionKind),
+    nextWork: targetedBeforeFlight
+      ? "route"
+      : routeNoop
+        ? "progress"
+        : appliedRouteChange
+          ? "route"
+          : matrix.nextWork,
+    nextDecisionKind: targetedBeforeFlight
+      ? "flight_choice"
+      : routeNoop
+        ? state.nextDecisionKind
+        : appliedRouteChange
+          ? "flight_choice"
+          : (matrix.resolution.nextDecisionKind ?? state.nextDecisionKind),
     hasConfirmedFlight: progress.flightConfirmed,
     hasConfirmedHotel: progress.hotelConfirmed,
     confirmedServices: [...progress.confirmedServices],
     selectedServices: [...progress.selectedServices],
-    searchTargetDomains: search ? matrix.resolution.affectedDomains.slice(0, 1) : [],
+    searchTargetDomains:
+      search && !targetedBeforeFlight ? matrix.resolution.affectedDomains.slice(0, 1) : [],
     searchIntent:
-      search && search.type === "find_alternatives"
+      search && !targetedBeforeFlight && search.type === "find_alternatives"
         ? {
             target: search.target,
             objective: search.objective,
@@ -349,11 +364,8 @@ export function routeAfterModification(state: TravelState): string {
   if (state.intentStatus !== "commands") {
     return "interpret_intent";
   }
-  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
-    // A typed `set_route` admitted as a modification that STAGED an impact
-    // preview must present its confirmation; an applied (unbooked) route change
-    // continues into fresh feasibility instead of progress detection.
-    return "prepare_decision";
-  }
-  return routeByNextWork(state) ?? "detect_progress";
+  // A typed command admitted as a modification keeps its dedicated stage
+  // (program/proposal/itinerary) or its staged route-change confirmation; only
+  // preference/search commands fall through to the matrix work item.
+  return routeForCommandType(state) ?? routeByNextWork(state) ?? "detect_progress";
 }

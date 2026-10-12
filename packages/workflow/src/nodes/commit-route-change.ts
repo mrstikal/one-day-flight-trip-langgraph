@@ -1,5 +1,5 @@
 import { InvalidUpdateError } from "@langchain/langgraph";
-import type { TravelState, TravelUpdate } from "../travel/state.js";
+import { OPERATION_LOCAL_RESETS, type TravelState, type TravelUpdate } from "../travel/state.js";
 import { travelPorts } from "../travel/runtime.js";
 
 /**
@@ -54,17 +54,10 @@ export async function commitRouteChangeNode(
     scheduleStatus: "PENDING",
     validCombinationIds: [],
     domainsEnsured: false,
-    researchStatus: "pending",
-    researchFailedDomains: [],
-    researchReason: null,
-    dispatchMode: "none",
-    requiredDomains: [],
-    searchTargetDomains: [],
-    hotelOfferIds: [],
-    mealOfferIds: { breakfast: [], lunch: [], dinner: [] },
-    activityIds: [],
-    programDefaults: { breakfast: null, lunch: null, dinner: null },
-    dinnerNotIncludedReason: null,
+    // The route change is a new operation: the research status AND the
+    // per-operation provider-attempt budget/run scope restart (Phase 11 review
+    // fix) so successive route changes cannot exceed the task attempt ceiling.
+    ...OPERATION_LOCAL_RESETS,
     programApplied: false,
     replacementStaged: false,
     logisticsStatus: "pending",

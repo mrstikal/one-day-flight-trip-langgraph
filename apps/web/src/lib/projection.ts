@@ -70,6 +70,8 @@ interface TripRow {
   current_route_validation_id: string | null;
   current_schedule_validation_id: string | null;
   active_scenario_snapshot_id: string | null;
+  current_itinerary_id: string | null;
+  approved_itinerary_id: string | null;
 }
 
 /**
@@ -393,7 +395,8 @@ export async function buildTripProjection(
     `SELECT id, session_id, revision, user_name, adults, origin_airport_id, destination_city_id,
             destination_country_key, sightseeing_date::text AS sightseeing_date, travel_variant,
             preferences, workflow_status, recovery_required, current_route_validation_id,
-            current_schedule_validation_id, active_scenario_snapshot_id
+            current_schedule_validation_id, active_scenario_snapshot_id,
+            current_itinerary_id, approved_itinerary_id
        FROM odft_app.trips WHERE id = $1`,
     [tripId],
   );
@@ -835,14 +838,22 @@ export async function buildTripProjection(
     return parsed.success ? parsed.data : null;
   })();
 
-  // Phase 10: latest immutable itinerary version (draft or approved) with the
-  // safe marker list derived from the same events plus the confirmed hotel and
-  // destination airport anchors.
-  const itinerary = await buildPublicItinerary(pool, tripId, {
-    content: activeContent,
-    reservations,
-    approvedVersion: await loadApprovedItineraryVersion(pool, tripId),
-  });
+  // Phase 10/11: the CURRENT immutable itinerary version (draft or approved).
+  // A route change clears the trip's itinerary pointers without touching the
+  // rows, so the projection must honor the pointers: an invalidated version stays
+  // historical instead of being rendered as the current plan (Phase 11 fix).
+  const itinerary =
+    row.current_itinerary_id === null
+      ? null
+      : await buildPublicItinerary(pool, tripId, {
+          content: activeContent,
+          reservations,
+          currentItineraryId: row.current_itinerary_id,
+          approvedVersion:
+            row.approved_itinerary_id !== null
+              ? await loadApprovedItineraryVersion(pool, tripId)
+              : null,
+        });
 
   // Phase 11: the execution inspector is demo-controls gated and assembled from
   // safe persisted rows only (never a graph API, never prompts).
@@ -882,7 +893,6 @@ export async function buildTripProjection(
 interface ItineraryMarkerInputs {
   readonly content: SnapshotContent | null;
   readonly reservations: readonly PublicReservation[];
-  readonly approvedVersion: number | null;
 }
 
 /**
@@ -893,10 +903,15 @@ interface ItineraryMarkerInputs {
 async function buildPublicItinerary(
   pool: Pool,
   tripId: string,
-  inputs: ItineraryMarkerInputs,
+  inputs: ItineraryMarkerInputs & {
+    readonly currentItineraryId: string;
+    readonly approvedVersion: number | null;
+  },
 ): Promise<PublicItinerary | null> {
   const record = await loadLatestItinerary(pool, tripId);
-  if (!record) {
+  if (!record || record.id !== inputs.currentItineraryId) {
+    // The trip's current pointer does not name this version (invalidated by a
+    // route change): it stays historical and is not projected as the plan.
     return null;
   }
   const markers: PublicMapMarker[] = [];

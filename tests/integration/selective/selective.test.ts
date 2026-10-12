@@ -12,6 +12,7 @@ import {
 } from "@odft/persistence";
 import { buildTripProjection } from "../../../apps/web/src/lib/projection.js";
 import { driveTripToReady, resolveProgramChoices, sendChat } from "../ai/_setup.js";
+import { claimNextOperation } from "@odft/persistence";
 import {
   claimNextOrFail,
   createGraphTestPool,
@@ -19,9 +20,11 @@ import {
   createTravelDriver,
   createWorkerPools,
   endWorkerPools,
+  prewarmPool,
   readTravelState,
   resetGraphDatabase,
   researchEvents,
+  resolveDecision,
   snapshotManifest,
   tripRevision,
   type WorkerPools,
@@ -116,6 +119,50 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     return tripPreferencesSchema.parse(result.rows[0]?.preferences);
   }
 
+  /** Choose and confirm the first offered flight (the route-change continuation). */
+  async function bookCheapestFlight(tripId: string, sessionId: string): Promise<void> {
+    const driver = createTravelDriver(pools);
+    const choice = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(choice?.kind).toBe("flight_choice");
+    await resolveDecision(pool, pools, tripId, sessionId, {
+      action: "choose_offer",
+      offerId: choice?.allowedOfferIds[0] as string,
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const confirmation = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(confirmation?.kind).toBe("booking_confirmation");
+    await resolveDecision(pool, pools, tripId, sessionId, {
+      action: "confirm_booking",
+      proposalId: confirmation?.proposalId as string,
+      acceptedDemoDisclaimer: true,
+    });
+    await prewarmPool(pools.operations, 6);
+    await driver.runOperation(await claimNextOrFail(pools));
+  }
+
+  /**
+   * Run every QUEUED operation until the trip waits at a decision or the queue
+   * drains. It always runs a queued operation first: right after an admission the
+   * trip's previous decision is still pending in the DB, so checking before
+   * running would return too early.
+   */
+  async function settle(tripId: string, rounds = 12): Promise<void> {
+    const driver = createTravelDriver(pools);
+    for (let round = 0; round < rounds; round += 1) {
+      const claim = await claimNextOperation(pools.operations, {
+        workerId: "test-worker",
+        leaseMs: 30_000,
+      });
+      if (!claim) {
+        return;
+      }
+      await driver.runOperation(claim);
+      if (await getPendingDecisionForTrip(pools.operations, tripId)) {
+        return;
+      }
+    }
+  }
+
   async function confirmRouteChange(
     tripId: string,
     sessionId: string,
@@ -184,6 +231,86 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     // The re-entry preserved every confirmed reservation (T-E2E-14).
     expect(await reservations(harness.tripId)).toEqual(beforeReservations);
   }, 180_000);
+
+  it("refreshes the affected domain when a preference change is a pending-decision modification", async () => {
+    const harness = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
+    // Open the program step, then submit a typed preference change: it is
+    // admitted as a MODIFICATION of that decision.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_activity_pace",
+      pace: "relaxed",
+    });
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "program_choices",
+    );
+    const beforeEvents = await researchEvents(pool, harness.tripId);
+    const beforeIds = new Set(beforeEvents.map((event) => event.operationId));
+    const before = await preferences(harness.tripId);
+    const dinnerLevel = before.serviceOverrides.dinner ?? before.defaultServiceLevel;
+    const otherLevel = dinnerLevel === "luxury" ? "budget" : "luxury";
+
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_service_override",
+      service: "dinner",
+      level: otherLevel,
+    });
+
+    // The new operation re-researched ONLY dinner: the retained research status
+    // must not make the graph skip the refresh and reopen stale offers.
+    const refresh = (await researchEvents(pool, harness.tripId)).filter(
+      (event) => !beforeIds.has(event.operationId),
+    );
+    expect(refresh.map((event) => event.domain)).toEqual(["dinner", "dinner"]);
+    const projection = await buildTripProjection(pool, harness.tripId, DISPLAY);
+    expect(projection?.serviceLevels.dinner.level).toBe(otherLevel);
+    const dinnerOffers = projection?.meals.filter((offer) => offer.meal === "dinner") ?? [];
+    expect(dinnerOffers.length).toBeGreaterThan(0);
+    expect(dinnerOffers.every((offer) => offer.level === otherLevel)).toBe(true);
+  }, 240_000);
+
+  it("restarts the research budget for every operation across successive route changes", async () => {
+    const harness = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
+
+    // First route change (Paris): confirm, then book a flight so the domains are
+    // researched again for the new snapshot.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_route",
+      destinationCityId: "geonames:2988507",
+    });
+    expect(await confirmRouteChange(harness.tripId, harness.sessionId)).toEqual({ status: "accepted" });
+    await settle(harness.tripId);
+    await bookCheapestFlight(harness.tripId, harness.sessionId);
+    await settle(harness.tripId);
+
+    // Second route change (Barcelona) must not exceed the per-operation provider
+    // attempt ceiling: the budget restarts for the new operation.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_route",
+      destinationCityId: "geonames:3128760",
+    });
+    expect(await confirmRouteChange(harness.tripId, harness.sessionId)).toEqual({ status: "accepted" });
+    await settle(harness.tripId);
+    await bookCheapestFlight(harness.tripId, harness.sessionId);
+    await settle(harness.tripId);
+
+    const lastOperation = await pool.query<{ status: string }>(
+      `SELECT status FROM odft_app.workflow_operations
+        WHERE trip_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [harness.tripId],
+    );
+    expect(lastOperation.rows[0]?.status).not.toBe("failed");
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "hotel_choice",
+    );
+    const state = await readTravelState(pools, harness.tripId);
+    // The final operation's research budget restarted: every domain it
+    // researched is at attempt 1 (not 3, which the task schema would reject).
+    expect(state.values.researchAttempts).toEqual({ hotel: 1, breakfast: 1, lunch: 1, dinner: 1, attractions: 1, events: 1 });
+    expect(state.values.researchStatus).toBe("ok");
+    expect(state.values.routeStatus).toBe("FEASIBLE");
+  }, 300_000);
 
   it("scenario I: a dinner-only change refreshes dinner and preserves everything else (T-INV-07)", async () => {
     const harness = await createHarnessTrip(pool);
@@ -472,6 +599,69 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     expect(state.values.nextDecisionKind).toBe("flight_choice");
   }, 180_000);
 
+  it("applies a typed set_program admitted as a modification of a pending decision", async () => {
+    const harness = await createHarnessTrip(pool);
+    await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_activity_pace",
+      pace: "relaxed",
+    });
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "program_choices",
+    );
+    const projection = await buildTripProjection(pool, harness.tripId, DISPLAY);
+    const defaults = projection?.program?.mealDefaults;
+    expect(defaults?.breakfast).toBeTruthy();
+    expect(defaults?.lunch).toBeTruthy();
+
+    // The typed program command must reach apply_program (its dedicated stage),
+    // never fall through to the summary and report success without applying.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "set_program",
+      mealOfferIds: {
+        breakfast: defaults?.breakfast as string,
+        lunch: defaults?.lunch as string,
+        dinner: defaults?.dinner ?? null,
+      },
+      preferredActivityIds: projection?.program?.preferredActivityIds ?? [],
+    });
+
+    const state = await readTravelState(pools, harness.tripId);
+    expect(state.values.programApplied).toBe(true);
+    // Applying the program continues into planning and waits at the approval.
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "itinerary_approval",
+    );
+  }, 240_000);
+
+  it("keeps the flight step when a search is requested before the flight is confirmed", async () => {
+    const harness = await createHarnessTrip(pool);
+    // Run the creation to its first decision (flight_choice pending, no snapshot).
+    await createTravelDriver(pools).runOperation(await claimNextOrFail(pools));
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "flight_choice",
+    );
+
+    await sendChat(pool, pools, harness.tripId, harness.sessionId, "Find a cheaper hotel");
+
+    // A downstream search cannot run without a snapshot: the prerequisite flight
+    // choice is presented instead of an empty hotel decision.
+    const decision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(decision?.kind).toBe("flight_choice");
+    expect(decision?.allowedOfferIds.length).toBeGreaterThan(0);
+    const state = await readTravelState(pools, harness.tripId);
+    expect(state.values.searchIntent).toBeNull();
+    expect(state.values.searchTargetDomains).toEqual([]);
+    // The waiting decision carries the real checkpoint/interrupt evidence.
+    const checkpoint = await pool.query<{ checkpoint_id: string | null; interrupt_id: string | null }>(
+      `SELECT checkpoint_id, interrupt_id FROM odft_app.pending_decisions
+        WHERE trip_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+      [harness.tripId],
+    );
+    expect(checkpoint.rows[0]?.checkpoint_id).toBeTruthy();
+    expect(checkpoint.rows[0]?.interrupt_id).toBeTruthy();
+  }, 180_000);
+
   it("treats a same-value route command as a no-op and keeps the current step", async () => {
     const harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
@@ -503,46 +693,39 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     expect(state.values.nextDecisionKind).toBe("program_choices");
   }, 180_000);
 
-  it("allows an origin-only change once no flight reservation remains", async () => {
+  it("previews and cancels every confirmed reservation for an origin-only change", async () => {
     const harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
+    const before = await reservations(harness.tripId);
+    const confirmedBefore = before.filter((row) => row.status === "confirmed");
+    expect(confirmedBefore.length).toBeGreaterThanOrEqual(2);
 
-    // The first origin-only change cancels the flights (all bookings are
-    // previewed) and leaves the destination-bound hotel confirmed.
+    // The scenario snapshot is keyed by the origin, so an origin-only change
+    // regenerates every offer id: the preview must name every reservation.
     await runCommand(harness.tripId, harness.sessionId, {
       type: "set_route",
       originAirportId: "ourairports:4409", // Brno
     });
-    expect(await confirmRouteChange(harness.tripId, harness.sessionId)).toEqual({ status: "accepted" });
-    const driver = createTravelDriver(pools);
-    for (let round = 0; round < 12; round += 1) {
-      await driver.runOperation(await claimNextOrFail(pools));
-      const pending = await getPendingDecisionForTrip(pools.operations, harness.tripId);
-      if (pending) {
-        break;
-      }
-    }
-    const afterFirst = await reservations(harness.tripId);
-    expect(afterFirst.find((row) => row.serviceKey === "flights")?.status).toBe("cancelled");
-    const hotel = afterFirst.find((row) => row.serviceKey === "hotel");
-    expect(hotel?.status).toBe("confirmed");
-
-    // A second origin-only change affects only flights, and none remain, so it
-    // applies directly: no impact confirmation, the hotel stays confirmed.
-    await runCommand(harness.tripId, harness.sessionId, {
-      type: "set_route",
-      originAirportId: "ourairports:4402", // Ostrava
-    });
     const decision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
-    expect(decision?.kind).not.toBe("route_change_confirmation");
+    expect(decision?.kind).toBe("route_change_confirmation");
+    const projection = await buildTripProjection(pool, harness.tripId, DISPLAY);
+    expect(projection?.routeChange?.changedFields).toEqual(["originAirportId"]);
+    expect(projection?.routeChange?.affectedReservations.map((entry) => entry.id).sort()).toEqual(
+      confirmedBefore.map((row) => row.id).sort(),
+    );
+    expect(await reservations(harness.tripId)).toEqual(before);
+
+    expect(await confirmRouteChange(harness.tripId, harness.sessionId)).toEqual({ status: "accepted" });
+    await settle(harness.tripId);
+    const after = await reservations(harness.tripId);
+    for (const row of confirmedBefore) {
+      expect(after.find((entry) => entry.id === row.id)?.status).toBe("cancelled");
+    }
     const tripRow = await pool.query<{ origin_airport_id: string }>(
       `SELECT origin_airport_id FROM odft_app.trips WHERE id = $1`,
       [harness.tripId],
     );
-    expect(tripRow.rows[0]?.origin_airport_id).toBe("ourairports:4402");
-    const afterSecond = await reservations(harness.tripId);
-    expect(afterSecond.find((row) => row.serviceKey === "hotel")?.status).toBe("confirmed");
-    expect(afterSecond.find((row) => row.serviceKey === "hotel")?.id).toBe(hotel?.id);
+    expect(tripRow.rows[0]?.origin_airport_id).toBe("ourairports:4409");
   }, 240_000);
 
   it("refuses to commit a route change with a rotated fencing token", async () => {
@@ -692,6 +875,10 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
       [harness.tripId],
     );
     expect(updated.rows[0]?.destination_city_id).toBe("geonames:2988507");
+    // The previous route's approved itinerary stays historical: the projection
+    // honors the cleared pointers instead of rendering it as the current plan.
+    const postRouteProjection = await buildTripProjection(pool, harness.tripId, DISPLAY);
+    expect(postRouteProjection?.itinerary).toBeNull();
     // Stage A ran fresh for the new route (a new validation row exists for Paris).
     const validation = await pool.query<{ id: string; status: string }>(
       `SELECT v.id, v.status FROM odft_app.route_validations v

@@ -30,6 +30,7 @@ const PROJECTION_EVENTS = [
   "trip.preferences_changed",
   "trip.simulation_armed",
   "route_change.committed",
+  "node.started",
   "node.updated",
 ] as const;
 

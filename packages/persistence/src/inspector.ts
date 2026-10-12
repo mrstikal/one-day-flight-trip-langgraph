@@ -56,6 +56,8 @@ function stringArray(value: unknown): string[] {
 function summarizeEvent(type: string, payload: unknown): string | null {
   const record = asRecord(payload);
   switch (type) {
+    case "node.started":
+      return `${shortString(record.node, 80) ?? "node"} started`;
     case "node.updated":
       return shortString(record.node, 80);
     case "research.domain_started":
@@ -108,6 +110,50 @@ function rowToEvent(row: EventRow): PublicInspectorEvent {
 }
 
 /**
+ * The newest operation's execution frontier from REAL node events: a node with a
+ * `node.started` event and no later `node.updated` for the same operation is the
+ * node that is (or was, on failure) executing. `null` when the operation is not
+ * running/failed or has no start evidence — the inspector never guesses from the
+ * newest completed-node event of a previous operation (Phase 11 review fix).
+ */
+export function deriveOperationFrontier(
+  events: readonly {
+    readonly type: string;
+    readonly operationId: string | null;
+    readonly node: string | null;
+  }[],
+  newestOperation: { readonly id: string; readonly status: string } | null,
+): { readonly node: string | null; readonly status: "active" | "failed" } {
+  if (!newestOperation || (newestOperation.status !== "running" && newestOperation.status !== "failed")) {
+    return { node: null, status: newestOperation?.status === "failed" ? "failed" : "active" };
+  }
+  const relevant = events.filter((event) => event.operationId === newestOperation.id);
+  const started = new Set<string>();
+  const completed = new Set<string>();
+  let frontierNode: string | null = null;
+  // Events arrive newest-first; walk oldest-first to replay start/finish pairs.
+  for (const event of [...relevant].reverse()) {
+    if (!event.node) {
+      continue;
+    }
+    if (event.type === "node.started") {
+      started.add(event.node);
+      frontierNode = event.node;
+    } else if (event.type === "node.updated") {
+      completed.add(event.node);
+      if (frontierNode === event.node) {
+        frontierNode = null;
+      }
+    }
+  }
+  const stillRunning = frontierNode !== null && !completed.has(frontierNode);
+  if (!stillRunning) {
+    return { node: null, status: "active" };
+  }
+  return { node: frontierNode, status: newestOperation.status === "failed" ? "failed" : "active" };
+}
+
+/**
  * Build the public inspector view. Returns a schema-validated DTO: any row that
  * does not fit a safe field is dropped rather than rendered.
  */
@@ -123,10 +169,10 @@ export async function loadPublicInspector(
           ORDER BY id DESC LIMIT 1`,
         [tripId],
       ),
-      client.query<EventRow>(
-        `SELECT id::text AS id, type, payload, created_at::text AS created_at
+      client.query<EventRow & { operation_id: string | null }>(
+        `SELECT id::text AS id, type, payload, created_at::text AS created_at, operation_id
            FROM odft_app.execution_events
-          WHERE trip_id = $1 AND type = 'node.updated'
+          WHERE trip_id = $1 AND type IN ('node.started', 'node.updated')
           ORDER BY id DESC LIMIT $2`,
         [tripId, MAX_ROWS],
       ),
@@ -206,10 +252,7 @@ export async function loadPublicInspector(
   const graph = graphParsed?.success ? graphParsed.data : null;
 
   const pendingDecision = activeResult.rows[0] ?? null;
-  const activeOperation = operationsResult.rows.find(
-    (operation) => operation.status === "queued" || operation.status === "running",
-  );
-  const newestNodeEvent = nodeEvents.rows[0] ?? null;
+  const newestOperation = operationsResult.rows[0] ?? null;
   const nodeStats = new Map<string, { occurrences: number; lastAt: string }>();
   for (const row of nodeEvents.rows) {
     const node = shortString(asRecord(row.payload).node, 80);
@@ -225,14 +268,24 @@ export async function loadPublicInspector(
   }
   const nodeIds =
     graph?.nodes.map((node) => node.id) ?? [...nodeStats.keys()].sort((a, b) => a.localeCompare(b));
-  const newestNodeName = newestNodeEvent ? shortString(asRecord(newestNodeEvent.payload).node, 80) : null;
+  const frontier = deriveOperationFrontier(
+    nodeEvents.rows.map((row) => ({
+      type: row.type,
+      operationId: row.operation_id,
+      node: shortString(asRecord(row.payload).node, 80),
+    })),
+    newestOperation,
+  );
   const nodes: PublicInspectorNode[] = nodeIds.map((name) => {
     const stats = nodeStats.get(name);
     let status: PublicInspectorNode["status"] = stats ? "completed" : "pending";
     if (pendingDecision && name === "await_decision") {
       status = "interrupted";
-    } else if (activeOperation && newestNodeName === name) {
-      status = "active";
+    } else if (frontier.node === name) {
+      // Real start evidence: the node started in the newest operation without a
+      // matching completion event is the frontier — active while the operation
+      // runs, failed when it failed (Phase 11 review fix).
+      status = frontier.status;
     }
     return {
       name,

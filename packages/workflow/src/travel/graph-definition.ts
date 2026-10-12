@@ -118,10 +118,12 @@ export const TRAVEL_GRAPH_EDGE_GROUPS: readonly TravelGraphEdgeGroup[] = [
     targets: [
       "interpret_intent",
       "prepare_decision",
+      "apply_program",
+      "stage_command_proposal",
+      "plan_itinerary",
       "detect_progress",
       "ensure_domains",
       "validate_route",
-      "plan_itinerary",
       "validate_selected_logistics",
       "publish_summary",
     ],

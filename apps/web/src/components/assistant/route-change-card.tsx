@@ -20,7 +20,39 @@ export function RouteChangeCard({
   readonly onConfirm: () => void;
 }): React.JSX.Element {
   const money = (minor: number): string => (minor / 100).toFixed(2);
-  const destination = `${preview.from.destinationCityId} → ${preview.to.destinationCityId}`;
+  const variantLabel = (variant: string): string =>
+    variant === "one_night" ? "one night" : "two nights";
+  // Only the fields the command actually changes are shown, with both values, so
+  // an origin-only change is visibly destructive instead of looking identical.
+  const changes: { readonly field: string; readonly from: string; readonly to: string }[] = [];
+  if (preview.from.originAirportId !== preview.to.originAirportId) {
+    changes.push({
+      field: "Origin airport",
+      from: preview.from.originAirportId,
+      to: preview.to.originAirportId,
+    });
+  }
+  if (preview.from.destinationCityId !== preview.to.destinationCityId) {
+    changes.push({
+      field: "Destination",
+      from: `${preview.from.destinationCityId} (${preview.from.destinationCountryKey})`,
+      to: `${preview.to.destinationCityId} (${preview.to.destinationCountryKey})`,
+    });
+  }
+  if (preview.from.sightseeingDate !== preview.to.sightseeingDate) {
+    changes.push({
+      field: "Sightseeing date",
+      from: preview.from.sightseeingDate,
+      to: preview.to.sightseeingDate,
+    });
+  }
+  if (preview.from.travelVariant !== preview.to.travelVariant) {
+    changes.push({
+      field: "Variant",
+      from: variantLabel(preview.from.travelVariant),
+      to: variantLabel(preview.to.travelVariant),
+    });
+  }
   return (
     <section
       data-testid="route-change-card"
@@ -28,10 +60,14 @@ export function RouteChangeCard({
       className="rounded border border-amber-500 bg-amber-50 p-3 text-sm"
     >
       <h3 className="font-serif text-sm font-semibold">Confirm the route change</h3>
-      <p className="mt-1 text-xs text-ink-muted">
-        {destination} · {preview.from.sightseeingDate} → {preview.to.sightseeingDate} ·{" "}
-        {preview.to.travelVariant === "one_night" ? "one night" : "two nights"}
-      </p>
+      <ul className="mt-1 text-xs text-ink-muted" data-testid="route-change-fields">
+        {changes.map((change) => (
+          <li key={change.field}>
+            <span className="font-medium text-ink">{change.field}:</span> {change.from} →{" "}
+            {change.to}
+          </li>
+        ))}
+      </ul>
       {preview.affectedReservations.length > 0 ? (
         <>
           <p className="mt-2 text-xs">

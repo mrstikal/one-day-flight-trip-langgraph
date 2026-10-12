@@ -1,6 +1,6 @@
 import { END, START, StateGraph, type BaseCheckpointSaver } from "@langchain/langgraph";
 import { TRAVEL_GRAPH_VERSION, travelStateSchema, type TravelState, type TravelUpdate } from "./state.js";
-import { routeByNextWork } from "../routing/next-work-target.js";
+import { routeByNextWork, routeForCommandType } from "../routing/next-work-target.js";
 import {
   TRAVEL_GRAPH_EDGE_GROUPS,
   TRAVEL_GRAPH_NODES,
@@ -90,21 +90,9 @@ export function routeAfterApplyCommands(state: TravelState): string {
   if (state.commandType === "chat") {
     return "interpret_intent";
   }
-  if (state.commandType === "propose_selection") {
-    return "stage_command_proposal";
-  }
-  if (state.commandType === "set_program") {
-    return "apply_program";
-  }
-  if (state.commandType === "build_itinerary") {
-    return "plan_itinerary";
-  }
-  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
-    // Only a STAGED route change presents the impact confirmation; an applied
-    // (unbooked) route change continues into fresh feasibility.
-    return "prepare_decision";
-  }
-  return routeByNextWork(state) ?? "detect_progress";
+  // A STAGED route change presents its impact confirmation; an applied
+  // (unbooked) route change continues into fresh feasibility via `nextWork`.
+  return routeForCommandType(state) ?? routeByNextWork(state) ?? "detect_progress";
 }
 
 /** Route a validated intent result: unsupported ends, clarification interrupts,
@@ -117,21 +105,7 @@ export function routeAfterIntentResult(state: TravelState): string {
   if (state.intentStatus === "clarification") {
     return "prepare_decision";
   }
-  if (state.commandType === "set_program") {
-    return "apply_program";
-  }
-  if (state.commandType === "propose_selection") {
-    return "stage_command_proposal";
-  }
-  if (state.commandType === "build_itinerary") {
-    return "plan_itinerary";
-  }
-  if (state.commandType === "route_change" && state.routeChangePreview !== null) {
-    // A staged route change presents the impact confirmation; an applied
-    // (unbooked) one continues into fresh feasibility via `nextWork`.
-    return "prepare_decision";
-  }
-  return routeByNextWork(state) ?? "detect_progress";
+  return routeForCommandType(state) ?? routeByNextWork(state) ?? "detect_progress";
 }
 
 /** With a confirmed flight, re-derive the non-flight steps; otherwise run feasibility. */

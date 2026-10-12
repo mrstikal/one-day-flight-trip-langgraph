@@ -282,6 +282,46 @@ export type TravelState = typeof travelStateSchema.State;
 export type TravelUpdate = typeof travelStateSchema.Update;
 
 /**
+ * Operation-local execution state that must restart whenever a NEW operation
+ * resumes a checkpoint (a decision response, a pending-decision modification, or
+ * a route-change confirmation).
+ *
+ * LangGraph keeps the previous operation's channel values across a resume, so
+ * without this reset a modification would keep `researchStatus: "ok"` and the
+ * graph would skip the research dispatch (`routeAfterSchedules` only dispatches
+ * while the status is "pending"), presenting stale offers for a freshly
+ * persisted preference. The provider-attempt budget and the run scope are
+ * per-operation too: retaining `researchAttempts` across independent operations
+ * would push the third route change past the task schema's attempt ceiling.
+ *
+ * Deliberately NOT reset here:
+ * - the keyed `researchResults` map (it carries the retained usable results
+ *   across operations, pruned by `join_research`, so a selective refresh never
+ *   reruns unrelated domains);
+ * - the derived offer/activity lists (`hotelOfferIds`/`mealOfferIds`/...): the
+ *   hotel-confirmation path reaches `prepare_decision(program_choices)` without
+ *   a research round, so it must keep the offers the previous operation ranked
+ *   from the SAME snapshot. Every snapshot change (load_context, ensure_domains,
+ *   commit_route_change) re-derives or clears them explicitly.
+ */
+export const OPERATION_LOCAL_RESETS = {
+  researchStatus: "pending",
+  researchRunId: "",
+  researchRound: 0,
+  researchAttempts: {},
+  researchRetryPending: false,
+  failedDomains: [],
+  researchInputFingerprints: {},
+  dispatchMode: "none",
+  requiredDomains: [],
+  researchFailedDomains: [],
+  researchReason: null,
+  nextDecisionKind: "flight_choice",
+  searchTargetDomains: [],
+  searchIntent: null,
+} satisfies Partial<TravelUpdate>;
+
+/**
  * Plain start input when a run begins at START (never a `Command({ update })`).
  * The command payload is validated by the persistence admission layer; the graph
  * only forwards it to the ports.
