@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
 import { searchAirports } from "@/lib/reference-client";
 import { validateWelcomeDraft, type WelcomeErrors } from "@/lib/wizard-form";
@@ -14,11 +14,17 @@ export function WelcomeStep(): React.JSX.Element {
   const [airportOptions, setAirportOptions] = useState<readonly ComboboxOption[]>([]);
   const [airportsLoading, setAirportsLoading] = useState(false);
   const [errors, setErrors] = useState<WelcomeErrors>({});
+  // Monotonic request ids so a slow response cannot overwrite newer results.
+  const airportRequest = useRef(0);
 
   async function onAirportQuery(query: string): Promise<void> {
+    const seq = ++airportRequest.current;
     setAirportsLoading(true);
     try {
       const items = await searchAirports(query);
+      if (seq !== airportRequest.current) {
+        return;
+      }
       setAirportOptions(
         items.map((airport) => ({
           id: airport.id,
@@ -27,9 +33,13 @@ export function WelcomeStep(): React.JSX.Element {
         })),
       );
     } catch {
-      setAirportOptions([]);
+      if (seq === airportRequest.current) {
+        setAirportOptions([]);
+      }
     } finally {
-      setAirportsLoading(false);
+      if (seq === airportRequest.current) {
+        setAirportsLoading(false);
+      }
     }
   }
 
