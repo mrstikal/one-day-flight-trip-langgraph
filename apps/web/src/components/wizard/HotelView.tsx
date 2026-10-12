@@ -17,7 +17,7 @@ import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
-import { HotelLevelSelect } from "@/components/preferences/HotelLevelSelect";
+import { ServiceLevelSelect } from "@/components/preferences/ServiceLevelSelect";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
@@ -172,11 +172,13 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
             Simulated offers in EUR. Selecting a card starts a review; nothing is booked yet.
           </p>
         </header>
-        <HotelLevelSelect
+        <ServiceLevelSelect
           tripId={tripId}
           revision={projection.trip.revision}
+          service="hotel"
+          label="Hotel"
           levelState={serviceLevels.hotel}
-          customObjective={projection.hotelSearch?.objective ?? null}
+          customObjective={projection.searchObjectives.hotel}
           onChanged={refresh}
         />
         <SimulatedFailureNote state={hotelResearch} />
@@ -307,11 +309,13 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           nextLabel="Continue to meals"
         />
         {pendingDecision === null ? (
-          <HotelLevelSelect
+          <ServiceLevelSelect
             tripId={tripId}
             revision={projection.trip.revision}
+            service="hotel"
+            label="Hotel"
             levelState={serviceLevels.hotel}
-            customObjective={projection.hotelSearch?.objective ?? null}
+            customObjective={projection.searchObjectives.hotel}
             onChanged={refresh}
           />
         ) : null}
@@ -339,11 +343,13 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           disabled={activeWork}
           onRetried={refresh}
         />
-        <HotelLevelSelect
+        <ServiceLevelSelect
           tripId={tripId}
           revision={projection.trip.revision}
+          service="hotel"
+          label="Hotel"
           levelState={serviceLevels.hotel}
-          customObjective={projection.hotelSearch?.objective ?? null}
+          customObjective={projection.searchObjectives.hotel}
           onChanged={refresh}
         />
         <p className="text-sm">

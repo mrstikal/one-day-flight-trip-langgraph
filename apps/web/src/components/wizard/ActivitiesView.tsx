@@ -10,7 +10,6 @@ import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { ActivityCard } from "@/components/program/ActivityCard";
 import { InterestControls } from "@/components/program/InterestControls";
-import { ProgramChoices } from "@/components/program/ProgramChoices";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 
@@ -60,7 +59,7 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
     return <StatusPanel message="Loading your activities…" />;
   }
 
-  const { program, pendingDecision, meals } = projection;
+  const { program, pendingDecision } = projection;
   const selectedIds = selectedOverride ?? program?.preferredActivityIds ?? [];
 
   function toggleActivity(id: string): void {
@@ -127,33 +126,6 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
     );
   }
 
-  if (pendingDecision?.kind === "program_choices" && program) {
-    return (
-      <div className="flex flex-col gap-6">
-        {banner}
-        <ProgramChoices
-          mealOffers={meals}
-          program={program}
-          pace={projection.trip.preferences.activityPace}
-          busy={busy}
-          error={actionError}
-          onSubmit={(selection) =>
-            void submitResponse(pendingDecision.id, projection.trip.revision, {
-              action: "submit_program",
-              mealOfferIds: selection.mealOfferIds,
-              preferredActivityIds: selection.preferredActivityIds,
-            })
-          }
-        />
-        <p className="text-sm">
-          <Link href={`/trips/${tripId}/meals`} className="underline">
-            Back to meals
-          </Link>
-        </p>
-      </div>
-    );
-  }
-
   if (program) {
     return (
       <div className="flex flex-col gap-6">
@@ -208,9 +180,20 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
         ) : (
           <>
             <p className="text-sm text-ink-muted">
-              Activity pace:{" "}
-              <span className="capitalize">{projection.trip.preferences.activityPace}</span>. A
-              pending choice must be answered before preferences can change.
+              {pendingDecision?.kind === "program_choices" ? (
+                <>
+                  Meal choices are still pending.{" "}
+                  <Link href={`/trips/${tripId}/meals`} className="underline">
+                    Choose your meals
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Activity pace:{" "}
+                  <span className="capitalize">{projection.trip.preferences.activityPace}</span>. A
+                  pending choice must be answered before preferences can change.
+                </>
+              )}
             </p>
             <ul className="flex flex-col gap-2" aria-label="Activity choices">
               {program.activities.map((activity) => (

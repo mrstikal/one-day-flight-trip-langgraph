@@ -96,7 +96,7 @@ test("assistant rail interprets a chat request and applies a clarification choic
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
   // Phase 10: the saved program plans the itinerary and waits for approval.
@@ -115,7 +115,7 @@ test("assistant rail interprets a chat request and applies a clarification choic
   // The chat re-derived the program decision; save it to return to a chat-ready state.
   await expect(page.getByRole("button", { name: "Save program" })).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
   // Phase 10: rebuilds the draft; approve it before the next chat.

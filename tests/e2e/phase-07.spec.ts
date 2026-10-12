@@ -95,7 +95,49 @@ test("books a simulated flight and hotel, then saves the program choices", async
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
+});
+
+test("meals and activities live on separate pages with per-meal tile sections", async ({ page }) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  const firstHotel = page.getByTestId("hotel-offer").first();
+  await expect(firstHotel).toBeVisible({ timeout: 60_000 });
+  await firstHotel.getByRole("button", { name: "Choose this hotel" }).click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-HTL-");
+  await page.getByRole("link", { name: "Continue to meals" }).click();
+
+  // Three meal sections, each with its own category select and offer tiles.
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 60_000,
+  });
+  for (const meal of ["breakfast", "lunch", "dinner"]) {
+    await expect(page.getByTestId(`level-select-${meal}`)).toHaveValue("standard");
+    await expect(page.getByTestId(`meal-offer-${meal}`).first()).toBeVisible();
+  }
+  // No activities here: they live on their own step.
+  await expect(page.getByLabel("Activity choices")).toHaveCount(0);
+
+  // A different tile per section is a local selection; Save program applies it.
+  await page
+    .getByTestId("meal-offer-lunch")
+    .nth(1)
+    .getByRole("button", { name: "Choose this lunch" })
+    .click();
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+
+  // The activities page holds the activity choices and no meal selects.
+  await page.getByRole("link", { name: "Review activities" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/activities$/, { timeout: 60_000 });
+  await expect(page.getByLabel("Activity choices")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
 });

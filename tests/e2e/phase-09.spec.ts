@@ -104,7 +104,7 @@ test("scenario D: the retried hotel research renders siblings and labels the sim
   // Siblings were researched in the same run: the meals page renders the meal
   // defaults without any failed-domain panel.
   await page.goto(`/trips/${tripId}/meals`);
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
   await expect(page.getByTestId("research-failure-breakfast")).toHaveCount(0);

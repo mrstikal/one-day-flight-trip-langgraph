@@ -119,7 +119,7 @@ async function driveToProgramSaved(page: Page): Promise<void> {
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
 }

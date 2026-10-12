@@ -746,7 +746,6 @@ export async function buildTripProjection(
     dinner: levelState(trip.preferences, "dinner"),
   };
   let hotel: PublicHotelOffer[] = [];
-  let hotelSearch: TripProjection["hotelSearch"] = null;
   let meals: PublicMealOffer[] = [];
   let program: PublicProgramChoices | null = null;
   let activeContent: SnapshotContent | null = null;
@@ -772,12 +771,6 @@ export async function buildTripProjection(
           (trip.travelVariant !== "one_night" || offer.luggageStorage),
         toPublicHotel,
       );
-      // Phase 11: did an assistant search (not a plain category) rank these offers?
-      const hotelOutcome = researchOutcomeFor("hotel");
-      const hotelArtifact =
-        hotelOutcome?.status === "ok" ? artifactFor("hotel", hotelOutcome.fingerprint) : undefined;
-      const hotelSearchObjective = parseCustomSearchObjective(hotelArtifact?.explanation ?? null);
-      hotelSearch = hotelSearchObjective === null ? null : { objective: hotelSearchObjective };
       meals = domainOffers(
         "breakfast",
         "breakfast",
@@ -831,6 +824,26 @@ export async function buildTripProjection(
       }
     }
   }
+
+  // Phase 11: a targeted assistant search records its objective on the ranking
+  // artifact; the offer pages show "Custom request" instead of a plain category.
+  const searchObjectiveFor = (
+    domain: ResearchDomain,
+    serviceKey: string,
+  ): CustomHotelSearchObjective | null => {
+    const outcome = researchOutcomeFor(domain);
+    if (outcome?.status !== "ok") {
+      return null;
+    }
+    const artifact = artifactFor(serviceKey, outcome.fingerprint);
+    return parseCustomSearchObjective(artifact?.explanation ?? null);
+  };
+  const searchObjectives: TripProjection["searchObjectives"] = {
+    hotel: searchObjectiveFor("hotel", "hotel"),
+    breakfast: searchObjectiveFor("breakfast", "breakfast"),
+    lunch: searchObjectiveFor("lunch", "lunch"),
+    dinner: searchObjectiveFor("dinner", "dinner"),
+  };
 
   // Phase 08: persistent conversation (safe projection) and the clarification card.
   const conversationMessages = await listConversation(pool, tripId, 20);
@@ -904,7 +917,7 @@ export async function buildTripProjection(
     meals,
     program,
     serviceLevels,
-    hotelSearch,
+    searchObjectives,
     research,
     proposal,
     reservation,

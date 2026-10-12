@@ -22,6 +22,7 @@ import {
   publicConversationMessageSchema,
 } from "./ai.js";
 import { publicItinerarySchema } from "./itinerary.js";
+import { customSearchObjectiveSchema } from "./preferences.js";
 import {
   admissionAcceptedSchema,
   commandRequestSchema,
@@ -115,15 +116,17 @@ export const tripProjectionSchema = z
     program: publicProgramChoicesSchema.nullable(),
     serviceLevels: publicServiceLevelsSchema,
     /**
-     * Phase 11: the objective of the assistant search that produced the current
-     * hotel offers (null for the plain category ranking).
+     * Phase 11: the objectives of the assistant searches that produced the
+     * current offers per service (null = the plain category ranking).
      */
-    hotelSearch: z
+    searchObjectives: z
       .object({
-        objective: z.enum(["cheaper", "better_location", "higher_rating"]),
+        hotel: customSearchObjectiveSchema.nullable(),
+        breakfast: customSearchObjectiveSchema.nullable(),
+        lunch: customSearchObjectiveSchema.nullable(),
+        dinner: customSearchObjectiveSchema.nullable(),
       })
-      .strict()
-      .nullable(),
+      .strict(),
     /** Phase 09: latest per-domain research outcomes (safe, events-derived). */
     research: publicResearchStateSchema.nullable(),
     proposal: publicProposalSchema.nullable(),

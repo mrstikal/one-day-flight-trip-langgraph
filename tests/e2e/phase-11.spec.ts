@@ -106,7 +106,7 @@ async function driveToProgramSaved(
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals and activities" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
     timeout: 60_000,
   });
 }
@@ -266,6 +266,40 @@ test("the summary hotel row offers a direct change action", async ({ page }) => 
   expect(await readHotelReference(page, tripId)).toBe(hotelReference);
 });
 
+test("the summary meal rows offer their own change action", async ({ page }) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+  await driveToProgramSaved(page, { hotelPosition: "first" });
+
+  // Reserve one meal so its confirmed row exists on the summary.
+  await page.goto(`/trips/${tripId}/meals`);
+  await page.getByRole("button", { name: "Reserve breakfast" }).click();
+  await expect(page.getByRole("button", { name: "Review reservation" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByRole("button", { name: "Review reservation" }).click();
+  await confirmDialog(page, "DEMO-RST-");
+
+  // The confirmed-meal row stages the same search the assistant runs and opens
+  // the meals step, where the refreshed choice is presented as tiles.
+  await page.goto(`/trips/${tripId}/summary`);
+  await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+  await page.getByTestId("change-breakfast").click();
+  await expect(page).toHaveURL(new RegExp(`/trips/${tripId}/meals$`), { timeout: 60_000 });
+  await expect(page.getByTestId("meal-offer-breakfast").first()).toBeVisible({ timeout: 120_000 });
+  // The target page opens at the top, not at the previous scroll offset.
+  await expect.poll(async () => page.evaluate("window.scrollY")).toBe(0);
+
+  // Back to the (cached) summary and change another confirmed row: the revision
+  // is read live before writing, so the stale server-rendered page cannot fail
+  // with "expected revision does not match the current revision".
+  await page.goBack();
+  await expect(page.getByTestId("change-hotel")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("change-hotel").click();
+  await expect(page).toHaveURL(new RegExp(`/trips/${tripId}/hotel$`), { timeout: 60_000 });
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 120_000 });
+});
+
 test("the hotel category select follows the global default and locks for a custom search", async ({
   page,
 }) => {
@@ -278,7 +312,7 @@ test("the hotel category select follows the global default and locks for a custo
   await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 90_000 });
 
   // The value defaults to the global level chosen on the first step.
-  const select = page.getByTestId("hotel-level-select");
+  const select = page.getByTestId("level-select-hotel");
   await expect(select).toHaveValue("luxury");
   await expect(select).toBeEnabled();
 

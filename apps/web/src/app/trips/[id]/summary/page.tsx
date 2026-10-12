@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { getServerDeps } from "@/lib/server";
 import { resolveSession } from "@/lib/session";
 import { buildTripProjection } from "@/lib/projection";
-import { ChangeHotelButton } from "@/components/booking/ChangeHotelButton";
+import { ChangeServiceButton } from "@/components/booking/ChangeServiceButton";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
@@ -84,8 +84,15 @@ export default async function SummaryPage({
                   <dt className="text-ink-muted">Party total</dt>
                   <dd>{formatEuroMinor(reservation.partyTotalMinor)}</dd>
                 </dl>
-                {reservation.serviceKey === "hotel" ? (
-                  <ChangeHotelButton tripId={id} revision={trip.revision} />
+                {reservation.serviceKey === "hotel" ||
+                reservation.serviceKey === "breakfast" ||
+                reservation.serviceKey === "lunch" ||
+                reservation.serviceKey === "dinner" ? (
+                  <ChangeServiceButton
+                    tripId={id}
+                    service={reservation.serviceKey}
+                    label={reservation.serviceKey}
+                  />
                 ) : null}
               </li>
             ))}

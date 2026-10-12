@@ -317,7 +317,7 @@ function buildEvent(
   };
 }
 
-function chooseRouteMode(distanceKm: number, legCapKm: number): ItineraryRouteMode {
+export function chooseRouteMode(distanceKm: number, legCapKm: number): ItineraryRouteMode {
   if (distanceKm <= legCapKm) {
     return "walking";
   }

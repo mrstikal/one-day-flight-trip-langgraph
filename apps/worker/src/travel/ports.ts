@@ -5,6 +5,7 @@ import {
   assembleItinerary,
   buildItineraryConflictDecision,
   computeItinerarySourceFingerprint,
+  ensureTransferAllowance,
   fingerprint,
   localMinuteOfInstant,
   paceMealDuration,
@@ -342,6 +343,78 @@ function itinerarySource(data: ItineraryPlanningData): ItinerarySourceFingerprin
   };
 }
 
+/**
+ * Phase 10: the planner proposes the selection and order, but the required room
+ * between consecutive located stops (route estimate plus pace buffer) is domain
+ * arithmetic. A live planner reliably leaves some back-to-back pairs, which the
+ * validator can only reject; widen them deterministically before assembly.
+ */
+function normalizePlannerSchedule(
+  output: PlannerOutput,
+  data: ItineraryPlanningData,
+): PlannerOutput {
+  const meals = selectedMealOffers(data);
+  const activities = activityCandidates(data);
+  const normalized = ensureTransferAllowance({
+    stops: output.stops.map((stop) => {
+      if (stop.kind === "meal") {
+        const meal = meals.find((candidate) => candidate.id === stop.refId);
+        const confirmed = data.confirmedMealIds.includes(stop.refId);
+        return {
+          kind: stop.kind,
+          refId: stop.refId,
+          anchor: meal?.anchor ?? null,
+          latestStartMinute: confirmed
+            ? stop.startMinute
+            : meal
+              ? Math.max(meal.windowStartMinute, meal.windowEndMinute - stop.durationMinutes)
+              : null,
+          startMinute: stop.startMinute,
+          durationMinutes: stop.durationMinutes,
+        };
+      }
+      if (stop.kind === "activity") {
+        const activity = activities.find((candidate) => candidate.id === stop.refId);
+        return {
+          kind: stop.kind,
+          refId: stop.refId,
+          anchor: activity?.anchor ?? null,
+          latestStartMinute: null,
+          startMinute: stop.startMinute,
+          durationMinutes: stop.durationMinutes,
+        };
+      }
+      return {
+        kind: stop.kind,
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: stop.startMinute,
+        durationMinutes: stop.durationMinutes,
+      };
+    }),
+    pace: data.trip.preferences.activityPace,
+    adults: data.trip.adults,
+    routing: ITINERARY_ROUTING,
+    routingRuleVersion: ITINERARY_ROUTING_RULE_VERSION,
+  });
+  const stops: PlannerOutput["stops"] = normalized.map((stop) =>
+    stop.kind === "meal" || stop.kind === "activity"
+      ? stop.refId !== null
+        ? {
+            kind: stop.kind,
+            refId: stop.refId,
+            startMinute: stop.startMinute,
+            durationMinutes: stop.durationMinutes,
+          }
+        : // A located stop without a resolved reference cannot survive resolution;
+          // keep its time budget as an unlocated break instead of inventing an id.
+          { kind: "break" as const, startMinute: stop.startMinute, durationMinutes: stop.durationMinutes }
+      : { kind: stop.kind, startMinute: stop.startMinute, durationMinutes: stop.durationMinutes },
+  );
+  return { ...output, stops };
+}
+
 /** Scenario E: inject exactly one labeled overlap after schema parsing. */
 function injectFirstAttemptOverlap(output: PlannerOutput): PlannerOutput {
   const content = output.stops
@@ -659,6 +732,13 @@ export function createTravelPortsFactory(
       let simulatedFailure = false;
       let simulatedFailureNote: string | null = null;
       let injectedThisAttempt = false;
+      // Phase 10: the transfer room between consecutive located stops is domain
+      // arithmetic, not model arithmetic; widen the planner's packed pairs before
+      // the (deliberate) fault injection and validation so the bounded loop fails
+      // only on genuine conflicts.
+      if (output) {
+        output = normalizePlannerSchedule(output, data);
+      }
       if (output && overlayArmed && !injectedBefore) {
         const injected = injectFirstAttemptOverlap(output);
         injectedThisAttempt = injected !== output;

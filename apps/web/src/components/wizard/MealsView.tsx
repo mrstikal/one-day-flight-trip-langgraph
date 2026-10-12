@@ -14,8 +14,9 @@ import { ConfirmationResult } from "@/components/booking/ConfirmationResult";
 import { ProposalReview } from "@/components/booking/ProposalReview";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
-import { ServiceLevelControl } from "@/components/preferences/ServiceLevelControl";
-import { ProgramChoices } from "@/components/program/ProgramChoices";
+import { OfferCard } from "@/components/offers/OfferCard";
+import { OfferGrid } from "@/components/offers/OfferGrid";
+import { ServiceLevelSelect } from "@/components/preferences/ServiceLevelSelect";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
@@ -29,7 +30,22 @@ function mealOfferLabel(meals: readonly PublicMealOffer[], offerId: string | nul
   return offer ? `${offer.name} · ${formatEuroMinor(offer.partyTotalMinor)}` : offerId;
 }
 
-/** Meals step: program choices, optional per-meal reservations, and confirmations. */
+function mealDetails(offer: PublicMealOffer): { label: string; value: string }[] {
+  return [
+    { label: "Cuisine", value: offer.cuisine },
+    { label: "Serving window", value: `${offer.windowStart}–${offer.windowEnd}` },
+    { label: "Duration", value: `${offer.durationMinutes} min` },
+    { label: "Per adult", value: formatEuroMinor(offer.perAdultMinor) },
+    { label: "From centre", value: `${offer.centerDistanceKm.toFixed(1)} km` },
+  ];
+}
+
+/**
+ * Meals step: one tile section per meal (breakfast, lunch, dinner) with its own
+ * category select, plus the optional per-meal reservations. Activities live on
+ * their own step; saving the program here preserves the current activity
+ * preferences.
+ */
 export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.Element {
   const { projection, error, refresh } = useTripProjection(tripId);
   const onEvent = useCallback(() => refresh(), [refresh]);
@@ -37,6 +53,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [mealSelection, setMealSelection] = useState<Record<Meal, string | null> | null>(null);
 
   const handleError = useCallback(
     (caught: unknown): void => {
@@ -111,7 +128,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
     return <StatusPanel message="Loading your meal options…" />;
   }
 
-  const { meals, program, pendingDecision, proposal, reservations, serviceLevels } = projection;
+  const { meals, program, pendingDecision, proposal, reservations, serviceLevels, searchObjectives } =
+    projection;
   const confirmedMeals = reservations.filter(
     (reservation) =>
       reservation.status === "confirmed" &&
@@ -130,16 +148,32 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
   ) : null;
 
   if (pendingDecision?.kind === "program_choices" && program) {
+    const selection: Record<Meal, string | null> = mealSelection ?? {
+      breakfast: program.selectedMeals.breakfast ?? program.mealDefaults.breakfast,
+      lunch: program.selectedMeals.lunch ?? program.mealDefaults.lunch,
+      dinner: program.selectedMeals.dinner ?? program.mealDefaults.dinner,
+    };
+    const dinnerOptional = program.dinnerNotIncludedReason !== null;
+    const ready =
+      selection.breakfast !== null &&
+      selection.lunch !== null &&
+      (selection.dinner !== null || dinnerOptional);
     return (
       <div className="flex flex-col gap-6">
         {banner}
-        <p className="text-sm text-ink-muted" data-testid="meal-levels">
-          Meal categories: breakfast{" "}
-          <span className="capitalize">{serviceLevels.breakfast.level}</span>, lunch{" "}
-          <span className="capitalize">{serviceLevels.lunch.level}</span>, dinner{" "}
-          <span className="capitalize">{serviceLevels.dinner.level}</span>. A pending choice must be
-          answered before preferences can change.
-        </p>
+        <header className="flex flex-col gap-2">
+          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 5 of 5</p>
+          <h1 className="text-2xl">Plan your day</h1>
+          <p className="text-sm text-ink-muted">
+            Choose one option per meal; activities live on their own step. Selecting a meal here does
+            not book it; restaurant reservations are optional and confirmed separately.
+          </p>
+        </header>
+        {actionError ? (
+          <p role="alert" className="text-sm text-clay">
+            {actionError}
+          </p>
+        ) : null}
         <SimulatedFailureNote
           state={
             MEALS.map(
@@ -148,20 +182,85 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
             ).find((state) => state?.simulatedFailure) ?? null
           }
         />
-        <ProgramChoices
-          mealOffers={meals}
-          program={program}
-          pace={projection.trip.preferences.activityPace}
-          busy={busy}
-          error={actionError}
-          onSubmit={(selection) =>
-            void submitResponse(pendingDecision.id, projection.trip.revision, {
-              action: "submit_program",
-              mealOfferIds: selection.mealOfferIds,
-              preferredActivityIds: selection.preferredActivityIds,
-            })
-          }
-        />
+        {MEALS.map((meal) => {
+          const offers = meals.filter((offer) => offer.meal === meal);
+          const dinnerBlocked = meal === "dinner" && dinnerOptional;
+          return (
+            <section key={meal} className="flex flex-col gap-3" aria-label={`${meal} options`}>
+              <h2 className="text-lg capitalize">{meal}</h2>
+              <ServiceLevelSelect
+                tripId={tripId}
+                revision={projection.trip.revision}
+                service={meal}
+                label={meal}
+                levelState={serviceLevels[meal]}
+                customObjective={searchObjectives[meal]}
+                onChanged={refresh}
+              />
+              {dinnerBlocked ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="text-sm text-ink-muted">{program.dinnerNotIncludedReason}</p>
+                  <button
+                    type="button"
+                    disabled={busy || activeWork}
+                    aria-pressed={selection.dinner === null}
+                    onClick={() => setMealSelection({ ...selection, dinner: null })}
+                    className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
+                  >
+                    Leave dinner out
+                  </button>
+                </div>
+              ) : null}
+              {offers.length === 0 ? (
+                <p className="text-sm text-ink-muted">
+                  No {meal} offers are available for this category.
+                </p>
+              ) : (
+                <OfferGrid label={`${meal} offers`}>
+                  {offers.map((offer) => (
+                    <OfferCard
+                      key={offer.id}
+                      title={offer.name}
+                      subtitle={`${offer.level} · ${offer.cuisine} · ${offer.durationMinutes} min`}
+                      priceMinor={offer.partyTotalMinor}
+                      priceNote={`total for ${projection.trip.adults} adults`}
+                      details={mealDetails(offer)}
+                      demoLabels={offer.demoLabels}
+                      actionLabel={selection[meal] === offer.id ? "Selected" : `Choose this ${meal}`}
+                      selected={selection[meal] === offer.id}
+                      disabled={busy || activeWork}
+                      testId={`meal-offer-${meal}`}
+                      onAction={() => setMealSelection({ ...selection, [meal]: offer.id })}
+                    />
+                  ))}
+                </OfferGrid>
+              )}
+            </section>
+          );
+        })}
+        <div>
+          <button
+            type="button"
+            disabled={busy || activeWork || !ready}
+            onClick={() =>
+              void submitResponse(pendingDecision.id, projection.trip.revision, {
+                action: "submit_program",
+                mealOfferIds: {
+                  breakfast: selection.breakfast as string,
+                  lunch: selection.lunch as string,
+                  dinner: selection.dinner,
+                },
+                preferredActivityIds: [...program.preferredActivityIds],
+              })
+            }
+            className="rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save program"}
+          </button>
+        </div>
+        <p role="note" className="text-sm text-ink-muted">
+          {DEMO_DISCLAIMER}
+        </p>
       </div>
     );
   }
@@ -276,7 +375,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         ) : null}
         <header className="flex flex-col gap-2">
           <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 5 of 5</p>
-          <h1 className="text-2xl">Meals and activities</h1>
+          <h1 className="text-2xl">Meals</h1>
           <p className="text-sm text-ink-muted">
             Meal selections are saved. Restaurant reservations are optional and confirmed one meal
             at a time.
@@ -301,13 +400,14 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         {pendingDecision === null ? (
           <div className="grid gap-3 sm:grid-cols-3">
             {MEALS.map((meal) => (
-              <ServiceLevelControl
+              <ServiceLevelSelect
                 key={meal}
                 tripId={tripId}
                 revision={projection.trip.revision}
                 service={meal}
                 label={meal}
                 levelState={serviceLevels[meal]}
+                customObjective={searchObjectives[meal]}
                 onChanged={refresh}
               />
             ))}
@@ -371,13 +471,14 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           ))}
           <div className="grid gap-3 sm:grid-cols-3">
             {failedMeals.map(({ meal }) => (
-              <ServiceLevelControl
+              <ServiceLevelSelect
                 key={meal}
                 tripId={tripId}
                 revision={projection.trip.revision}
                 service={meal}
                 label={meal}
                 levelState={serviceLevels[meal]}
+                customObjective={searchObjectives[meal]}
                 onChanged={refresh}
               />
             ))}

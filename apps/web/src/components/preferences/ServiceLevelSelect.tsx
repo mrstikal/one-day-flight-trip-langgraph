@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { PublicServiceLevelState, ServiceLevel } from "@odft/contracts";
+import type { PublicServiceLevelState, ServiceKey, ServiceLevel } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
 import { submitCommand } from "@/lib/decision-client";
 
@@ -12,21 +12,26 @@ const LEVEL_LABELS: readonly { readonly value: ServiceLevel; readonly label: str
 ];
 
 /**
- * Hotel category select (Phase 11). The value defaults to the effective level —
- * the global default from the first step unless an explicit override exists —
- * and the server resolves inheritance; the client never guesses it. When the
- * current offers came from an objective-driven assistant search, the select
- * shows "Custom request" and is locked: no plain category describes that list.
+ * Per-service category select (Phase 11). The value defaults to the effective
+ * level — the global default from the first step unless an explicit override
+ * exists — and the server resolves inheritance; the client never guesses it.
+ * When the current offers came from an objective-driven assistant search, the
+ * select shows "Custom request" and is locked: no plain category describes that
+ * list. Used for the hotel and for each meal section.
  */
-export function HotelLevelSelect({
+export function ServiceLevelSelect({
   tripId,
   revision,
+  service,
+  label,
   levelState,
   customObjective,
   onChanged,
 }: {
   readonly tripId: string;
   readonly revision: number;
+  readonly service: ServiceKey;
+  readonly label: string;
   readonly levelState: PublicServiceLevelState;
   readonly customObjective: string | null;
   readonly onChanged: () => void;
@@ -34,7 +39,7 @@ export function HotelLevelSelect({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const custom = customObjective !== null;
-  const selectId = `hotel-level-${tripId}`;
+  const selectId = `${service}-level-${tripId}`;
 
   async function apply(level: ServiceLevel | null): Promise<void> {
     setBusy(true);
@@ -43,7 +48,7 @@ export function HotelLevelSelect({
       await submitCommand(tripId, {
         requestId: crypto.randomUUID(),
         expectedRevision: revision,
-        command: { type: "set_service_override", service: "hotel", level },
+        command: { type: "set_service_override", service, level },
       });
       onChanged();
     } catch (caught) {
@@ -56,7 +61,7 @@ export function HotelLevelSelect({
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor={selectId} className="flex items-center gap-2 text-sm font-medium">
-        Hotel category
+        <span className="capitalize">{label}</span> category
         <span className="text-xs font-normal text-ink-muted">
           {custom
             ? "from your assistant request"
@@ -68,15 +73,15 @@ export function HotelLevelSelect({
       <div className="flex flex-wrap items-center gap-3">
         <select
           id={selectId}
-          data-testid="hotel-level-select"
+          data-testid={`level-select-${service}`}
           className="w-48 rounded border border-border bg-paper px-3 py-2 text-sm disabled:opacity-60"
           value={custom ? "custom" : levelState.level}
           disabled={custom || busy}
           onChange={(event) => void apply(event.target.value as ServiceLevel)}
         >
-          {LEVEL_LABELS.map(({ value, label }) => (
+          {LEVEL_LABELS.map(({ value, label: levelLabel }) => (
             <option key={value} value={value}>
-              {label}
+              {levelLabel}
             </option>
           ))}
           {custom ? <option value="custom">Custom request</option> : null}

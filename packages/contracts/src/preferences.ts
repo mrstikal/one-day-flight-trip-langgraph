@@ -25,6 +25,13 @@ export const researchSearchIntentSchema = z
   .strict();
 export type ResearchSearchIntent = z.infer<typeof researchSearchIntentSchema>;
 
+/**
+ * A targeted assistant search objective (Phase 11). The neutral
+ * `match_preferences` refresh is excluded: it reproduces the plain ranking.
+ */
+export const customSearchObjectiveSchema = z.enum(["cheaper", "better_location", "higher_rating"]);
+export type CustomSearchObjective = z.infer<typeof customSearchObjectiveSchema>;
+
 export const interestsSchema = z
   .object({
     culture: z.number().int().min(0).max(5),
