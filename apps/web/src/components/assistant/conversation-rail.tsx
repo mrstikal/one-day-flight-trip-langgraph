@@ -147,7 +147,7 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     >
       <header className="flex flex-col gap-1">
         <div className="flex items-baseline justify-between gap-2">
-          <h2 className="font-serif text-base font-semibold">Assistant</h2>
+          <h2 className="text-base font-semibold">Assistant</h2>
           {inspectorHref ? (
             <Link
               href={inspectorHref}

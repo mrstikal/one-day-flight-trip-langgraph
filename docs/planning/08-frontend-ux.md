@@ -8,7 +8,7 @@ This document is the authoritative home for the traveler UI, design system, pace
 - The interface is a hybrid: a full graphical wizard plus a persistent assistant. The assistant supplements the wizard; it never replaces graphical controls.
 - The server projection is the only source of trip truth. A selected card is not a confirmed reservation; the UI never computes prices, feasibility, pace feasibility, or booking decisions client-side.
 - A `202 Accepted` response means a command was queued, not completed. Completion is shown only after the operation status or SSE event reports success.
-- No external font, CDN, analytics, or tile dependency is required for the core planning flow.
+- No external font, CDN, analytics, or tile dependency is required for the core planning flow. The Roboto webfont is downloaded at build time and self-hosted via `next/font`; the browser makes no runtime font-CDN request.
 - AI mode is visible: a quiet banner states whether the app runs in `OpenRouter` mode or `Deterministic fixture mode` (scripted responses; see [06 AI design](06-ai-agent-design.md)).
 
 ## 2. Visual System (travel journal)
@@ -16,7 +16,7 @@ This document is the authoritative home for the traveler UI, design system, pace
 Direction: a warm travel journal: cream paper, ink text, teal accent, restrained borders, and generous whitespace.
 
 - Tailwind CSS 4.3.3 with CSS-first `@theme` tokens in a global stylesheet. No `tailwind.config.js`/`.js` file may exist. Component variants use plain CSS variables and utility classes.
-- Headings: Georgia, `"Times New Roman"`, serif. Body/UI: system sans (`system-ui`, `-apple-system`, `"Segoe UI"`, `Roboto`, `sans-serif`). No webfont download.
+- Headings: Georgia, `"Times New Roman"`, serif (`--font-serif`). Body/UI: Roboto webfont with system-sans fallback (`system-ui`, `-apple-system`, `"Segoe UI"`, `sans-serif`). Roboto is loaded with `next/font/google` in the root layout (`variable: "--font-roboto"` on `<html>`) and wired as the `--font-sans` token (`var(--font-roboto), …`); assets are self-hosted, so there is no runtime font CDN.
 - Core tokens (fixed initial values; verify contrast in Phase 01, changing only a pair that demonstrably fails):
 
 | Token | Role | Value |

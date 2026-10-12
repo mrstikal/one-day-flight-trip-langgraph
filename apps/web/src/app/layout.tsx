@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Roboto } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
@@ -8,6 +9,13 @@ export const metadata: Metadata = {
   title: "AI Travel Planner",
   description: "Demo AI travel planner for one sightseeing day in a European city.",
 };
+
+const roboto = Roboto({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  variable: "--font-roboto",
+  display: "swap",
+});
 
 /** Visible AI-mode banner (08 section 1): fixture vs live AI mode. */
 function aiModeBanner(): string | null {
@@ -24,7 +32,7 @@ function aiModeBanner(): string | null {
 export default function RootLayout({ children }: { readonly children: ReactNode }) {
   const banner = aiModeBanner();
   return (
-    <html lang="en">
+    <html lang="en" className={roboto.variable}>
       <body className="flex min-h-screen flex-col bg-cream text-ink">
         <a
           href="#main"
@@ -34,7 +42,7 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
         </a>
         <header className="border-b border-border bg-paper">
           <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 py-4">
-            <p className="font-serif text-lg font-semibold">AI Travel Planner</p>
+            <p className="text-xl font-semibold">AI Travel Planner</p>
             <p role="note" className="text-sm text-clay">
               {DEMO_DISCLAIMER}
             </p>

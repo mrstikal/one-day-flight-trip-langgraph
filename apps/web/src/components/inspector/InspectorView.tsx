@@ -84,7 +84,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </header>
 
       <section aria-label="Execution graph">
-        <h2 className="font-serif text-base font-semibold">Graph</h2>
+        <h2 className="text-base font-semibold">Graph</h2>
         {inspector.graph ? (
           <div className="mt-2">
             <ExecutionGraph definition={inspector.graph} nodes={inspector.nodes} />
@@ -97,7 +97,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </section>
 
       <section aria-label="Nodes">
-        <h2 className="font-serif text-base font-semibold">Nodes</h2>
+        <h2 className="text-base font-semibold">Nodes</h2>
         <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="node-table">
           <thead>
             <tr className="border-b border-border text-ink-muted">
@@ -123,7 +123,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </section>
 
       <section aria-label="Operations">
-        <h2 className="font-serif text-base font-semibold">Operations</h2>
+        <h2 className="text-base font-semibold">Operations</h2>
         <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="operation-table">
           <thead>
             <tr className="border-b border-border text-ink-muted">
@@ -153,7 +153,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </section>
 
       <section aria-label="Checkpoints and resumes">
-        <h2 className="font-serif text-base font-semibold">Checkpoints &amp; resumes</h2>
+        <h2 className="text-base font-semibold">Checkpoints &amp; resumes</h2>
         <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="checkpoint-table">
           <thead>
             <tr className="border-b border-border text-ink-muted">
@@ -187,7 +187,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </section>
 
       <section aria-label="LLM calls">
-        <h2 className="font-serif text-base font-semibold">LLM calls</h2>
+        <h2 className="text-base font-semibold">LLM calls</h2>
         <p className="mt-1 text-xs text-ink-muted">
           Safe telemetry only: role, model, prompt version label, tokens, and estimated cost.
           Prompts and model output are never stored.
@@ -232,7 +232,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       </section>
 
       <section aria-label="Faults">
-        <h2 className="font-serif text-base font-semibold">Faults</h2>
+        <h2 className="text-base font-semibold">Faults</h2>
         {inspector.faults.length === 0 ? (
           <p className="mt-1 text-sm text-ink-muted" data-testid="no-faults">
             No fault overlay has been armed for this trip.
@@ -259,7 +259,7 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
       ) : null}
 
       <section aria-label="Events">
-        <h2 className="font-serif text-base font-semibold">Events</h2>
+        <h2 className="text-base font-semibold">Events</h2>
         <ul className="mt-2 flex flex-col gap-1 text-xs" data-testid="event-list">
           {inspector.events.map((event) => (
             <li key={event.id} className="flex gap-2 border-b border-border/50 py-1">
