@@ -9,6 +9,8 @@ import {
   generateEvents,
   generateHotels,
   generateMeals,
+  flightDemandFactor,
+  flightScheduleDemandFactor,
   hotelBaseMinor,
   priceFlightPerAdult,
   priceMeal,
@@ -55,6 +57,23 @@ describe("pricing", () => {
   it("applies documented season factors without per-offer randomness", () => {
     const factors = { seasonFactor: 1.2, tierFactor: 1 };
     expect(priceFlightPerAdult(800, factors, 0)).toBe(priceFlightPerAdult(800, factors, 0));
+  });
+
+  it("bounds the seeded demand factor and prices peak departures higher", () => {
+    expect(flightDemandFactor(0)).toBe(0.85);
+    expect(flightDemandFactor(1)).toBe(1.2);
+    expect(flightDemandFactor(-1)).toBe(0.85);
+    expect(flightDemandFactor(2)).toBe(1.2);
+
+    const base = { seasonFactor: 1, tierFactor: 1 };
+    const peak = { ...base, demandFactor: flightScheduleDemandFactor(8) };
+    const offPeak = { ...base, demandFactor: flightScheduleDemandFactor(22) };
+    expect(priceFlightPerAdult(1000, peak, 0)).toBeGreaterThan(
+      priceFlightPerAdult(1000, offPeak, 0),
+    );
+    const cheap = { ...base, demandFactor: 0.85 };
+    const dear = { ...base, demandFactor: 1.2 };
+    expect(priceFlightPerAdult(1000, cheap, 0)).toBeLessThan(priceFlightPerAdult(1000, dear, 0));
   });
 });
 

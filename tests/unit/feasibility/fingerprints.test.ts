@@ -137,4 +137,29 @@ describe("flight generator", () => {
     );
     expect(reversed).toEqual(forward);
   });
+
+  it("varies the price across combinations of one pair inside bounded bands", () => {
+    const inputs = routeInputs();
+    const approval = approvalFor(inputs);
+    const flights = generateFlights(approval, context, inputs);
+    for (const pair of approval.approvedPairDetails) {
+      const combinations = flights.filter(
+        (flight) =>
+          flight.outbound.segments[0]?.fromIata === pair.originIata &&
+          flight.outbound.segments[flight.outbound.segments.length - 1]?.toIata ===
+            pair.destinationIata,
+      );
+      expect(combinations.length).toBeGreaterThanOrEqual(6);
+      const prices = combinations.map((flight) => flight.perAdultMinor);
+      expect(new Set(prices).size).toBeGreaterThan(1);
+      for (const flight of combinations) {
+        // Per direction: clamped base (45..420 EUR) + 25 EUR per connection.
+        const connectionFee = flight.outbound.segments.length > 1 ? 2_500 : 0;
+        const inboundFee = flight.inbound.segments.length > 1 ? 2_500 : 0;
+        expect(flight.perAdultMinor).toBeGreaterThanOrEqual(4_500 * 2 + connectionFee + inboundFee);
+        expect(flight.perAdultMinor).toBeLessThanOrEqual(42_000 * 2 + connectionFee + inboundFee);
+        expect(flight.partyTotalMinor).toBe(flight.perAdultMinor * flight.adults);
+      }
+    }
+  });
 });

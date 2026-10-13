@@ -175,7 +175,7 @@ All prices are simulated EUR minor units and party totals. Sum integer amounts; 
 
 ### Flights
 
-Initial per-adult one-way base: EUR `25 + 0.085 * distanceKm`, times season/tier factors; clamp EUR 45..420. A connecting direction adds EUR 25 per connection. Round to cents, then sum both directions and multiply by adults. Every carrier/name/number has a `Demo` label. Neither airport nor real airline names are invented.
+Initial per-adult one-way base: EUR `25 + 0.085 * distanceKm`, times season/tier/demand factors; clamp EUR 45..420. A connecting direction adds EUR 25 per connection. Demand combines a bounded seeded per-direction factor (0.85..1.20) with a departure-bank factor (1.10 for local 07:00-09:59 and 17:00-20:59, 0.90 for 21:00-05:59, else 1.00), so the combinations of one pair never share a price. Round to cents, then sum both directions and multiply by adults. Every carrier/name/number has a `Demo` label. Neither airport nor real airline names are invented.
 
 ### Hotels
 

@@ -14,7 +14,12 @@ import { haversineKm } from "../routing/haversine.js";
 import { DomainError } from "@odft/domain";
 import { createDomainFaker } from "./seed.js";
 import { deriveOfferId } from "./ids.js";
-import { priceFlightPerAdult, seasonFactor } from "./pricing.js";
+import {
+  flightDemandFactor,
+  flightScheduleDemandFactor,
+  priceFlightPerAdult,
+  seasonFactor,
+} from "./pricing.js";
 
 /**
  * Deterministic flight generator (05 section 6). Reads only a fresh
@@ -207,10 +212,12 @@ function buildDirection(
   ] as number;
   const returnElapsed = legMinutes(pair.distanceKm, -variation);
   let inbound: FlightDirection;
+  let inboundConnections = 0;
   if (pair.connectionHub) {
     const hubLeg1 = legMinutes(hubToDestination, -variation);
     const hubLeg2 = legMinutes(originToHub, variation);
     const hub = pair.connectionHub;
+    inboundConnections = 1;
     const firstDeparture = toInstant(returnDate, returnDeparture, pair.destinationZone);
     const firstArrival = firstDeparture.add({ minutes: hubLeg1 });
     const secondDeparture = firstArrival.add({ minutes: 90 });
@@ -267,16 +274,36 @@ function buildDirection(
     };
   }
 
+  // Demand-based fares: each direction is priced with its own connection count,
+  // a bounded seeded demand factor, and the demand of its local departure bank.
+  const outboundLocalHour = Temporal.Instant.from(
+    (outbound.segments[0] as FlightSegment).departureInstant,
+  ).toZonedDateTimeISO(pair.originZone).hour;
+  const inboundLocalHour = Temporal.Instant.from(
+    (inbound.segments[0] as FlightSegment).departureInstant,
+  ).toZonedDateTimeISO(pair.destinationZone).hour;
   const perAdult =
     priceFlightPerAdult(
       pair.distanceKm,
-      { seasonFactor: pair.__seasonFactor, tierFactor: 1 },
+      {
+        seasonFactor: pair.__seasonFactor,
+        tierFactor: 1,
+        demandFactor:
+          flightDemandFactor(faker.number.float({ min: 0, max: 1 })) *
+          flightScheduleDemandFactor(outboundLocalHour),
+      },
       outboundConnections,
     ) +
     priceFlightPerAdult(
       pair.distanceKm,
-      { seasonFactor: pair.__seasonFactor, tierFactor: 1 },
-      outboundConnections,
+      {
+        seasonFactor: pair.__seasonFactor,
+        tierFactor: 1,
+        demandFactor:
+          flightDemandFactor(faker.number.float({ min: 0, max: 1 })) *
+          flightScheduleDemandFactor(inboundLocalHour),
+      },
+      inboundConnections,
     );
   return { outbound, inbound, perAdultMinor: perAdult };
 }

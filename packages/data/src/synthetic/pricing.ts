@@ -9,11 +9,15 @@ import type { Meal, ServiceLevel } from "@odft/contracts";
 export interface FlightPriceFactors {
   readonly seasonFactor: number;
   readonly tierFactor: number;
+  /** Bounded per-direction demand factor (0.75..1.35). Defaults to 1. */
+  readonly demandFactor?: number;
 }
 
 const FLIGHT_BASE_MINOR = 4_500;
 const FLIGHT_BASE_MAX_MINOR = 42_000;
 const FLIGHT_CONNECTION_MINOR = 2_500;
+const FLIGHT_DEMAND_MIN = 0.75;
+const FLIGHT_DEMAND_MAX = 1.35;
 
 const HOTEL_BAND_MINOR: Record<ServiceLevel, { min: number; max: number }> = {
   budget: { min: 6_000, max: 9_500 },
@@ -56,18 +60,50 @@ export function clampMinor(value: number, min: number, max: number): number {
 
 /**
  * Per-adult, one-way flight price. `base = 25 + 0.085 * km` times
- * season/tier factors, clamped to 45..420 EUR, plus 25 EUR per connection.
+ * season/tier/demand factors, clamped to 45..420 EUR, plus 25 EUR per
+ * connection.
  */
 export function priceFlightPerAdult(
   distanceKm: number,
   factors: FlightPriceFactors,
   connections: number,
 ): number {
-  const baseMinor = (25 + 0.085 * distanceKm) * 100 * factors.seasonFactor * factors.tierFactor;
+  const demand = Math.min(
+    FLIGHT_DEMAND_MAX,
+    Math.max(FLIGHT_DEMAND_MIN, factors.demandFactor ?? 1),
+  );
+  const baseMinor =
+    (25 + 0.085 * distanceKm) * 100 * factors.seasonFactor * factors.tierFactor * demand;
   return (
     clampMinor(baseMinor, FLIGHT_BASE_MINOR, FLIGHT_BASE_MAX_MINOR) +
     connections * FLIGHT_CONNECTION_MINOR
   );
+}
+
+/**
+ * Bounded per-direction demand factor from a seeded fraction (0..1), 0.85..1.20.
+ * Deterministic variation so the combinations of one pair never share one price.
+ */
+export function flightDemandFactor(seedFraction: number): number {
+  const fraction = Math.min(1, Math.max(0, seedFraction));
+  return Math.round((0.85 + 0.35 * fraction) * 100) / 100;
+}
+
+/**
+ * Departure-bank demand factor by the direction's own local departure hour
+ * (0..23): morning/evening peaks cost more, late-night/early departures less.
+ */
+export function flightScheduleDemandFactor(localDepartureHour: number): number {
+  if (localDepartureHour >= 7 && localDepartureHour <= 9) {
+    return 1.1;
+  }
+  if (localDepartureHour >= 17 && localDepartureHour <= 20) {
+    return 1.1;
+  }
+  if (localDepartureHour >= 21 || localDepartureHour <= 5) {
+    return 0.9;
+  }
+  return 1.0;
 }
 
 /** Seed a hotel base night price inside the level's documented band. */

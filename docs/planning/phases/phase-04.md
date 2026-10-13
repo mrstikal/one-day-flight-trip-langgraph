@@ -59,8 +59,10 @@ Apply the canonical ordered status/reason table:reviewed PRG/Budejovice ground p
 - Flight duration per direct leg is `ceil(25 + distanceKm / 700 * 60)` minutes, min 35, plus seeded variation
   within +/- 8 minutes; UTC instants plus IANA display zones; overnight transitions and DST gap/fold handled with
   `@js-temporal/polyfill`. Duration is elapsed time, not subtraction of local clocks.
-- Pricing (simulated EUR minor units, party totals, single rounding boundary): flights per-adult base
-  `25 + 0.085 * km`, season/tier factors, clamp 45..420, +25 per connection; hotels Budget 60..95, Standard
+- Pricing (simulated EUR minor units, party totals, single rounding boundary): flights per-adult one-way base
+  `25 + 0.085 * km`, season/tier/demand factors (a bounded seeded per-direction factor 0.85..1.20 plus a
+  departure-bank factor 1.10/0.90/1.00, so one pair's combinations never share a price), clamp 45..420, +25 per
+  connection; hotels Budget 60..95, Standard
   110..180, Luxury 250..420 per room-night times city/season/weekend/nights/rooms; restaurants per the meal/level
   table in 05 section 8 with a documented cuisine factor 0.90..1.15. Budget < Standard < Luxury must be
   meaningful and non-random.
