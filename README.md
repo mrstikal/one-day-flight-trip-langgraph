@@ -84,9 +84,31 @@ for the full list. Key values:
 | `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
 | `AI_CONFIG_PATH` | Required only in OpenRouter mode; path to the role-profile JSON file (see below) |
 | `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` | Bounded AI usage (defaults 40 calls / 1.00 USD) |
+| `MAP_TILE_URL` | Optional `{z}/{x}/{y}` tile URL template for the itinerary map; unset → labeled SVG fallback (see below) |
 
 Secrets stay on the server. They are never placed in `NEXT_PUBLIC_*` and never sent to the browser;
 `npm run build` scans the client bundle to confirm this.
+
+## Map tiles
+
+The itinerary map is client-only Leaflet. Tiles come only from `MAP_TILE_URL`, an optional **public**,
+credential-free `{z}/{x}/{y}` URL template validated at startup (`assertPublicTileUrl`): userinfo is
+rejected and plain HTTP is refused when `PUBLIC_BASE_URL` is https. Point it only at a policy-compliant
+provider (attribution is required and shown on the map; normal HTTP caching only; no bulk download or
+offline tile packs).
+
+```bash
+# .env (optional)
+MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
+```
+
+`{z}/{x}/{y}` are literal Leaflet placeholder tokens, not values you compute: keep them exactly as the
+provider's documentation writes them and Leaflet fills in the needed tile coordinates per request based on
+the current map view, so nothing depends on the destination city chosen at trip creation. Any
+policy-compliant provider works as long as its template uses the same placeholders.
+
+When `MAP_TILE_URL` is unset (the default), or the first tile does not load within five seconds, or tile
+loads keep failing, the map renders the labeled SVG schematic instead; every map fact also exists as text.
 
 ## AI modes and configuration
 
