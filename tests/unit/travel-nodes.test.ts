@@ -88,9 +88,7 @@ describe("reject_proposal -> reselection (P2-6)", () => {
     expect(update.proposalId).toBeNull();
     // Phase 10: a reselection re-derives its offers through detect_progress
     // instead of preparing a decision from state a fresh operation cleared.
-    expect(routeAfterApplyDecision(state({ pendingStage: "reselection" }))).toBe(
-      "detect_progress",
-    );
+    expect(routeAfterApplyDecision(state({ pendingStage: "reselection" }))).toBe("detect_progress");
   });
 
   it("confirm_booking commits, choose_offer stages", () => {
@@ -166,6 +164,54 @@ describe("prepare_decision phase 07 kinds", () => {
     expect(restored.allowedOfferIds).toEqual(["h1", "h2"]);
     expect(restored.gate).toBe("hotels_ready");
     expect(restored.restoredDecision).toBeNull();
+  });
+
+  it("never inherits another decision's fingerprint for derived kinds", () => {
+    const stale = "f".repeat(64);
+    const hotel = prepareDecisionNode(
+      state({
+        nextDecisionKind: "hotel_choice",
+        hotelOfferIds: ["h1"],
+        decisionFingerprint: stale,
+      }),
+    );
+    expect(hotel.decisionFingerprint).toBeNull();
+
+    const program = prepareDecisionNode(
+      state({
+        nextDecisionKind: "program_choices",
+        mealOfferIds: { breakfast: ["b1"], lunch: [], dinner: [] },
+        activityIds: [],
+        decisionFingerprint: stale,
+      }),
+    );
+    expect(program.decisionFingerprint).toBeNull();
+
+    const flight = prepareDecisionNode(
+      state({
+        nextDecisionKind: "flight_choice",
+        validCombinationIds: [],
+        decisionFingerprint: stale,
+      }),
+    );
+    expect(flight.decisionFingerprint).toBeNull();
+
+    const recovery = prepareDecisionNode(
+      state({ nextDecisionKind: "recovery", decisionFingerprint: stale }),
+    );
+    expect(recovery.decisionFingerprint).toBeNull();
+
+    // A confirmation keeps the fingerprint its proposal was staged with (the
+    // update leaves the channel untouched).
+    const booking = prepareDecisionNode(
+      state({
+        nextDecisionKind: "booking_confirmation",
+        proposalId: "p",
+        selectedOfferId: "o",
+        decisionFingerprint: stale,
+      }),
+    );
+    expect(booking.decisionFingerprint).toBeUndefined();
   });
 
   it("choose_option recovery reopens the affected step without editing (Phase 07)", () => {
@@ -303,13 +349,11 @@ describe("routers", () => {
       routeAfterReviewItinerary(state({ itineraryReviewVerdict: "revise", planningAttempt: 2 })),
     ).toBe("plan_itinerary");
     expect(
-      routeAfterReviewItinerary(
-        state({ itineraryReviewVerdict: "revise", planningAttempt: 3 }),
-      ),
+      routeAfterReviewItinerary(state({ itineraryReviewVerdict: "revise", planningAttempt: 3 })),
     ).toBe("prepare_decision");
-    expect(
-      routeAfterReviewItinerary(state({ itineraryReviewVerdict: "acceptable" })),
-    ).toBe("prepare_decision");
+    expect(routeAfterReviewItinerary(state({ itineraryReviewVerdict: "acceptable" }))).toBe(
+      "prepare_decision",
+    );
     expect(routeAfterApplyDecision(state({ pendingStage: "approve" }))).toBe("approve_itinerary");
   });
 

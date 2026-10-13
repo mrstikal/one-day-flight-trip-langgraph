@@ -73,15 +73,35 @@ export async function finalizeWaiting(
       return false;
     }
 
-    // Retire any pending decision that this interrupt supersedes.
+    // Retire any pending decision that this interrupt supersedes. A row is kept
+    // only for an EXACT replay of the same decision: the same kind, fingerprint,
+    // proposal, and offered ids. A descriptor that differs in any bound id (e.g.
+    // a modification refreshed the offers while keeping the same kind and
+    // fingerprint) must replace the row — otherwise the stored allowlist would go
+    // stale and the next resume of a freshly rendered offer would be refused as
+    // STALE_DECISION.
     await client.query(
       `UPDATE odft_app.pending_decisions
           SET status = 'cancelled', resolved_at = now()
         WHERE trip_id = $1 AND status = 'pending'
-          AND NOT (kind = $2 AND source_fingerprint = $3)`,
-      [fence.tripId, spec.kind, spec.fingerprint],
+          AND NOT (
+            kind = $2
+            AND source_fingerprint = $3
+            AND allowed_offer_ids = $4::jsonb
+            AND allowed_option_ids = $5::jsonb
+            AND proposal_id IS NOT DISTINCT FROM $6::uuid
+          )`,
+      [
+        fence.tripId,
+        spec.kind,
+        spec.fingerprint,
+        JSON.stringify(spec.allowedOfferIds ?? []),
+        JSON.stringify(spec.allowedOptionIds),
+        spec.proposalId ?? null,
+      ],
     );
-    // Insert the current decision; a same-fingerprint replay leaves the row as is.
+    // Insert the current decision; an exact replay (same kind, fingerprint, and
+    // bound ids) left the row in place above, so this insert is a no-op then.
     await client.query(
       `INSERT INTO odft_app.pending_decisions
          (id, trip_id, kind, thread_id, graph_version, created_revision, source_fingerprint,
@@ -105,7 +125,8 @@ export async function finalizeWaiting(
         spec.checkpointId ?? null,
         spec.interruptId ?? null,
       ],
-    );    await client.query(
+    );
+    await client.query(
       `UPDATE odft_app.trips SET workflow_status = 'waiting_user', updated_at = now() WHERE id = $1`,
       [fence.tripId],
     );

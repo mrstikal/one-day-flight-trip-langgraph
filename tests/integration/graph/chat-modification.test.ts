@@ -153,4 +153,96 @@ describe("chat modifications (real PostgreSQL)", () => {
     expect(after?.kind).toBe("clarification");
     expect(after?.id).not.toBe(before?.id);
   });
+
+  it("re-binds a reopened hotel choice to the refreshed offers", async () => {
+    const { tripId, sessionId } = await createHarnessTrip(pool);
+    const driver = createTravelDriver(pools);
+
+    // Creation -> flight choice -> choose -> confirm -> hotel choice.
+    await driver.runOperation(await claimNextOrFail(pools));
+    const flightDecision = await getPendingDecisionForTrip(pools.operations, tripId);
+    await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId: flightDecision?.id ?? "",
+        response: {
+          action: "choose_offer",
+          offerId: flightDecision?.allowedOfferIds[0],
+        } as never,
+      },
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const flightConfirmation = await getPendingDecisionForTrip(pools.operations, tripId);
+    await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: 1,
+        decisionId: flightConfirmation?.id ?? "",
+        response: {
+          action: "confirm_booking",
+          proposalId: flightConfirmation?.proposalId,
+          acceptedDemoDisclaimer: true,
+        } as never,
+      },
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const before = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(before?.kind).toBe("hotel_choice");
+    expect(before?.allowedOfferIds.length).toBeGreaterThan(0);
+
+    // A typed hotel-level change while the choice is pending is a modification:
+    // it refreshes the hotel offers, so the decision row must be re-bound to
+    // them. This used to keep the stale allowlist (the confirmed flight
+    // proposal's fingerprint leaked into the hotel_choice decision), and every
+    // click on a refreshed offer was refused as STALE_DECISION (409).
+    const revision = await pool.query<{ revision: number }>(
+      `SELECT revision FROM odft_app.trips WHERE id = $1`,
+      [tripId],
+    );
+    const admitted = await admitOperation(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: revision.rows[0]?.revision ?? 0,
+        command: { type: "set_service_override", service: "hotel", level: "luxury" },
+      },
+    });
+    if (!("status" in admitted) || admitted.status !== "accepted") {
+      throw new Error(`modification admission refused: ${JSON.stringify(admitted)}`);
+    }
+    await driver.runOperation(await claimNextOrFail(pools));
+
+    const after = await getPendingDecisionForTrip(pools.operations, tripId);
+    expect(after?.kind).toBe("hotel_choice");
+    expect(after?.id).not.toBe(before?.id);
+    const artifact = await pool.query<{ ranked_offers: string[] }>(
+      `SELECT ranked_offers FROM odft_app.recommendation_artifacts
+        WHERE trip_id = $1 AND service_key = 'hotel' ORDER BY created_at DESC LIMIT 1`,
+      [tripId],
+    );
+    expect(after?.allowedOfferIds).toEqual(artifact.rows[0]?.ranked_offers);
+    expect(after?.allowedOfferIds).not.toEqual(before?.allowedOfferIds);
+
+    // Selecting one of the REFRESHED offers is admissible (the reported 409).
+    const accepted = await admitResume(pool, {
+      tripId,
+      sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: admitted.revision,
+        decisionId: after?.id ?? "",
+        response: {
+          action: "choose_offer",
+          offerId: after?.allowedOfferIds[0],
+        } as never,
+      },
+    });
+    expect(accepted).toMatchObject({ status: "accepted" });
+  });
 });

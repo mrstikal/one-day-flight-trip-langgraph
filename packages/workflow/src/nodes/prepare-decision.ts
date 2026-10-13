@@ -11,6 +11,13 @@ import type { TravelState, TravelUpdate } from "../travel/state.js";
  * - `booking_confirmation` offers the single staged proposal.
  *
  * Only ids are stored, never offer content; the projection renders the content.
+ *
+ * A decision kind that has no fingerprint of its own explicitly clears
+ * `decisionFingerprint`: LangGraph keeps the previous operation's channel values,
+ * so without it a `hotel_choice`/`program_choices`/`flight_choice` after a
+ * confirmation would carry the CONFIRMED PROPOSAL's fingerprint into its
+ * `await_decision` interrupt, and the driver would store it as the decision's
+ * `source_fingerprint` (breaking the persistence layer's replay identity check).
  */
 export function prepareDecisionNode(state: TravelState): TravelUpdate {
   if (state.restoredDecision) {
@@ -99,6 +106,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
       return {
         decisionKind: "recovery",
         proposalId: null,
+        decisionFingerprint: null,
         allowedOfferIds: [],
         allowedOptionIds: options.length > 0 ? options : ["change_program"],
         gate: "research_failed",
@@ -109,6 +117,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
       return {
         decisionKind: "recovery",
         proposalId: null,
+        decisionFingerprint: null,
         allowedOfferIds: [],
         allowedOptionIds: state.recoveryOptionIds,
         gate: "itinerary_conflict",
@@ -117,6 +126,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
     return {
       decisionKind: "recovery",
       proposalId: null,
+      decisionFingerprint: null,
       allowedOfferIds: [],
       allowedOptionIds: ["change_hotel", "change_meals"],
       gate: "logistics_conflict",
@@ -126,6 +136,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
     return {
       decisionKind: "hotel_choice",
       proposalId: null,
+      decisionFingerprint: null,
       allowedOfferIds: state.hotelOfferIds,
       allowedOptionIds: [],
       gate: "hotels_ready",
@@ -135,6 +146,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
     return {
       decisionKind: "program_choices",
       proposalId: null,
+      decisionFingerprint: null,
       allowedOfferIds: [
         ...state.mealOfferIds.breakfast,
         ...state.mealOfferIds.lunch,
@@ -147,6 +159,7 @@ export function prepareDecisionNode(state: TravelState): TravelUpdate {
   return {
     decisionKind: "flight_choice",
     proposalId: null,
+    decisionFingerprint: null,
     allowedOfferIds: state.validCombinationIds,
     allowedOptionIds: [],
     gate: "flights_ready",
