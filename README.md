@@ -4,11 +4,125 @@ A hybrid graphical/conversational planner for one sightseeing day in a European 
 
 **DEMO APPLICATION - No real reservations are made and no payments are processed.**
 
-Implemented phases: durable graph core and BFF (05), flights vertical slice (06), hotels/meals/program
-choices (07), and AI interpretation with the assistant rail (08). The graphical wizard drives PRG → a
-European city through route/schedule feasibility, a simulated flight and hotel booking, and the program
-choices; the assistant rail on every trip page accepts free-text requests that are interpreted into the
-same deterministic commands (or a bounded clarification).
+## What This Demo Demonstrates as a Proof of Concept
+
+The goal is a **stateful, human-in-the-loop AI workflow**, not a production travel agency or an
+autonomous booking agent.
+
+**LangGraph** is a framework from the LangChain ecosystem for orchestrating workflows as graphs:
+nodes perform individual steps, edges determine what happens next, and shared state carries their
+results. It is not an AI model. It combines ordinary code and model calls with conditional routing,
+parallel branches, feedback loops, and interrupts that pause for user decisions. Persistent
+checkpoints let execution resume after an interruption or worker restart. This makes a multi-step
+process explicit, testable, and observable instead of hiding it inside one large prompt.
+
+This demo applies those capabilities to:
+
+- **Hybrid interaction:** graphical controls and chat use the same validated commands and business
+  rules; ambiguous or conflicting requests produce bounded clarification choices.
+- **Parallel research:** hotel, breakfast, lunch, dinner, attractions, and events are independent
+  branches whose results are merged; only failed or affected domains need another search.
+- **Controlled planning:** a planner proposes a day, deterministic validation checks it, and a
+  reviewer assesses qualitative tradeoffs, with at most three planning attempts before user input.
+- **Selective changes:** cheaper-hotel searches, local service-level overrides, or a less demanding
+  pace refresh the relevant results without silently replacing unrelated confirmed reservations.
+- **Durability and visibility:** saved decisions, checkpoints, and events support reload/recovery;
+  an execution inspector exposes graph progress, attempts, AI usage/costs, and labeled simulated
+  faults, not private model reasoning or secrets. SQL transactions and idempotent effects complement
+  graph checkpoints to prevent duplicate simulated bookings on replay.
+
+### Supporting Technologies and AI
+
+| Technology | Role in the demo |
+| --- | --- |
+| Node.js / TypeScript / Zod | Server runtime, typed domain contracts, and strict validation of requests and model outputs. |
+| Next.js / React / Tailwind CSS | Graphical wizard, assistant, and presentation; Next.js also acts as the backend-for-frontend (BFF). |
+| Dedicated worker / PostgreSQL | The worker executes LangGraph outside browser requests; PostgreSQL stores domain truth, queued operations, events, AI cost records, and official LangGraph checkpoints. |
+| OpenRouter / AI adapters | Configurable model access for four roles: intent interpretation, optional recommendation ranking, itinerary planning, and qualitative review. |
+| Faker / Temporal | Seeded fictional labels and variation; correct calendar, time-zone, DST, and elapsed-time handling. Domain algorithms, not Faker or AI, own scheduling and pricing. |
+| Leaflet / SSE | Map presentation with a schematic fallback; Server-Sent Events deliver persisted workflow progress to the browser. |
+
+AI returns structured **proposals**, never authoritative prices, feasibility decisions, or booking
+permissions. Existing candidate IDs and deterministic rules constrain every result. Direct graphical
+actions do not need an intent-model call, and explicit user confirmation remains mandatory for
+simulated bookings, replacements, impactful route changes, and itinerary approval.
+
+## How the Demo Works
+
+1. **Describe the trip.** Choose an origin airport (PRG by default), supported European country/city,
+   sightseeing date, adults, and one or two hotel nights. Budget/Standard/Luxury defaults can be
+   overridden per hotel or meal; pace, interests, numeric activity requirements, and budget are
+   separate preferences.
+2. **Check the journey before offering flights.** Deterministic Stage A checks practical route and
+   airport eligibility, including when ground travel is more practical. Only approved routes receive
+   synthetic flights; independent Stage B checks
+   dates, connections, arrival/return windows, transfers, and enough time for a full sightseeing day.
+   Arrival is on the previous day; return is late on the sightseeing day or the following day.
+   Unsupported routes or impossible schedules stop downstream work rather than inventing a solution.
+3. **Choose services and a program.** Review and explicitly confirm demo flights, then research hotel,
+   meals, attractions, and events in parallel. Select and confirm a hotel, choose meals and preferred
+   activities, and optionally simulate restaurant reservations. The one-night variant requires
+   luggage storage; a return window that leaves no dinner slot is explained explicitly.
+4. **Build and approve the day.** Assemble a timeline with visits, meals, breaks, transfers, and airport
+   buffers. Deterministic checks cover overlaps, simulated opening windows, walking/pace, fixed
+   reservations, activity counts, and budget. Planner/reviewer feedback can revise the draft; unresolved
+   conflicts require a user decision. A map, validation messages, and a party-total EUR breakdown
+   accompany the itinerary; approving it is separate from booking anything.
+5. **Revise and observe.** Chat or supported controls can change preferences, search alternatives, or
+   rebuild the relevant part of the plan. Confirmed services remain fixed until an explicit replacement
+   or route-impact confirmation. Persisted decisions survive browser closure, and checkpoint/effect
+   recovery supports worker restart. Protected demo controls and the inspector demonstrate unavailable
+   offers, provider failures, invalid drafts, and budget/preference conflicts with visible labels.
+
+### Data, Fakes, and Real Computation
+
+| Layer | What is real and what is simulated |
+| --- | --- |
+| Geographic references | Versioned offline GeoNames countries/cities (`cities15000` coverage), OurAirports airports/codes/coordinates, reviewed Wikidata landmarks, and resolved IANA time zones. Assets are loaded into PostgreSQL; normal startup does not download them. Rome, Paris, and Barcelona have richer curated coverage; other supported cities use labeled generic activities. |
+| Mock/fake travel providers | Synthetic providers read reproducible, seeded, persisted offer snapshots, not commercial APIs. Carriers, flight schedules, hotel/restaurant businesses, availability, ratings, events, prices, and opening hours are demo data. Hotel/restaurant pins are approximate positions, not real business addresses. Fault overlays change behavior without regenerating unrelated inventory. |
+| Actual calculations | Code really computes geographic distances, rule-based travel/transfer estimates, time-zone/DST conversions, feasibility, schedule constraints, pace metrics, and integer-cent party totals without double-counting. These calculations operate on demo assumptions, not live timetables, road routing, fares, or real availability. |
+| AI modes | Default `fixture` mode replaces model calls with deterministic scripted interpretations/plans/reviews: no AI credentials, OpenRouter requests, or billable usage. `openrouter` mode makes genuine configured model calls with structured-output validation and call/token/time/cost limits; the travel data remains synthetic in either mode. |
+| Reservations and maps | Confirmations create only internal `DEMO-*` records, never tickets, real reservations, or payments. Optional map tiles are external imagery, not a routing service; without usable tiles, a labeled SVG schematic and textual facts remain available. |
+
+The plan and detailed contracts are in [ODFT_PLAN.md](ODFT_PLAN.md) and
+[docs/planning](docs/planning/00-project-overview.md), especially the
+[graph design](docs/planning/03-langgraph-design.md),
+[reference data and generators](docs/planning/05-synthetic-data-design.md), and
+[AI roles](docs/planning/06-ai-agent-design.md).
+
+**Demo limitations:** As this is only a demo, application performance optimization and responsive
+design have not been addressed; both are potential future TODO tasks. This is not a production-ready
+booking system, and its schedules, estimates, and confirmations are not valid for real travel.
+
+## Inspector
+
+The **Inspector** is the demo's workflow observability panel: it explains what LangGraph actually
+executed, where it is waiting, and why a retry or replan happened. Enable
+`DEMO_CONTROLS_ENABLED=true` in the server environment, then open the trip's Inspector link or
+`/trips/<trip-id>/inspector`. Access requires the browser session that owns the trip; a trip ID alone
+does not grant access.
+
+- **Execution graph:** an SVG view of nodes, edges, and conditional branches, with active, completed,
+  pending, interrupted, and failed states. Its topology comes from the same registry as the worker's
+  graph; highlights come from persisted execution events, not a decorative animation or invented trace.
+- **Operations and recovery:** attempts, execution durations, checkpoint/interrupt IDs, pending
+  decision kinds, and resume operations help trace pauses, selective replanning, and restart recovery.
+  Updates arrive through SSE, with polling fallback when the connection is unavailable.
+- **AI telemetry:** role, model, prompt-version identifier, token usage, latency, cost/validation
+  status, and retries distinguish model work from deterministic steps. Fixture invocations remain
+  explicitly scripted and are not presented as live AI usage or billable calls.
+- **Simulation controls:** protected commands activate persisted no-flight/no-hotel, provider-error,
+  invalid-itinerary, and budget/preference-conflict modes. Injected faults are labeled
+  `Simulated failure`; they change provider/validator behavior without regenerating unrelated offers.
+- **What to observe:** a failed hotel branch retrying while successful meal/activity results remain,
+  a rejected draft entering the bounded planning loop, or a pace/dinner change rerunning only the
+  relevant work while confirmed services stay intact.
+
+The Inspector renders only safe projected data, not raw checkpoint/database dumps. It never exposes
+prompt text, raw model output, private reasoning/chain-of-thought, provider payloads, SQL, stack
+traces, cookies, or secrets. Simulation commands use the normal validated command path, not arbitrary
+graph edits; worker/database restarts remain operator actions, never browser-executed shell commands.
+See the [Inspector specification](docs/planning/08-frontend-ux.md#10-inspector).
 
 ## Requirements
 
@@ -80,6 +194,7 @@ for the full list. Key values:
 | `DATABASE_URL` | Required; never logged |
 | `PUBLIC_BASE_URL` | Exact origin used by cookie/CSRF checks |
 | `SESSION_HMAC_KEY` | Required random server secret (>= 32 chars) |
+| `DEMO_CONTROLS_ENABLED` | `true` enables the Inspector and protected simulation controls for owned trips in a local/demo deployment |
 | `AI_MODE` | `fixture` (default, no credentials) or `openrouter` |
 | `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
 | `AI_CONFIG_PATH` | Required only in OpenRouter mode; path to the role-profile JSON file (see below) |
@@ -215,8 +330,9 @@ $0.0163 (planner) — comfortably under the example ceilings.
   Options are server-side bound: only the opaque option id is submitted.
 - **Never** confirm, cancel, or book anything, and never claim unconfirmed success. Prompt-injection text
   in a message or in persisted content cannot become an executable booking operation.
-- Report a **search request** ("find a cheaper hotel") honestly: the intent is recorded, but the
-  alternative search itself ships in a later phase, so the assistant says so instead of pretending it ran.
+- Handle a **search request** ("find a cheaper hotel") as a targeted refresh of demo alternatives,
+  preserving the selected/confirmed category unless explicitly changed; a result is not a replacement
+  booking, and the current reservation remains active until confirmation.
 - Fail **visibly**: an AI failure is terminal for that message (no silent retry, no stacked billable
   call); the conversation shows the failure and the graphical controls keep working.
 
