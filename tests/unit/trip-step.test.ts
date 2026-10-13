@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasSavedProgram, nextTripStep } from "../../apps/web/src/lib/trip-step.js";
+import {
+  hasSavedProgram,
+  nextTripStep,
+  tripStepStates,
+} from "../../apps/web/src/lib/trip-step.js";
 
 const tripId = "11111111-1111-1111-1111-111111111111";
 const reservation = (serviceKey: string, status: string) => ({ serviceKey, status });
@@ -13,6 +17,71 @@ describe("hasSavedProgram (no server calls)", () => {
 
   it("recognizes persisted meal selections as an applied program", () => {
     expect(hasSavedProgram({ selectedMeals: { breakfast: "b1" } })).toBe(true);
+  });
+});
+
+describe("tripStepStates (no server calls)", () => {
+  const byKey = (states: ReturnType<typeof tripStepStates>) =>
+    Object.fromEntries(states.map((step) => [step.key, step]));
+
+  it("unlocks each step only after its prerequisite milestone", () => {
+    const fresh = byKey(
+      tripStepStates({ tripId, reservations: [], hasProgram: false, hasItinerary: false }),
+    );
+    expect(fresh.details?.enabled).toBe(true);
+    expect(fresh.destination?.enabled).toBe(true);
+    expect(fresh.flights?.enabled).toBe(true);
+    expect(fresh.summary?.enabled).toBe(true);
+    expect(fresh.hotel?.enabled).toBe(false);
+    expect(fresh.hotel?.requires).toBe("Confirm a flight first");
+    expect(fresh.meals?.enabled).toBe(false);
+    expect(fresh.activities?.enabled).toBe(false);
+    expect(fresh.itinerary?.enabled).toBe(false);
+
+    const flightBooked = byKey(
+      tripStepStates({
+        tripId,
+        reservations: [reservation("flights", "confirmed")],
+        hasProgram: false,
+        hasItinerary: false,
+      }),
+    );
+    expect(flightBooked.hotel?.enabled).toBe(true);
+    expect(flightBooked.hotel?.requires).toBeNull();
+    expect(flightBooked.meals?.enabled).toBe(false);
+
+    const hotelBooked = byKey(
+      tripStepStates({
+        tripId,
+        reservations: [reservation("flights", "confirmed"), reservation("hotel", "confirmed")],
+        hasProgram: false,
+        hasItinerary: false,
+      }),
+    );
+    expect(hotelBooked.meals?.enabled).toBe(true);
+    expect(hotelBooked.activities?.enabled).toBe(false);
+
+    const programSaved = byKey(
+      tripStepStates({
+        tripId,
+        reservations: [reservation("flights", "confirmed"), reservation("hotel", "confirmed")],
+        hasProgram: true,
+        hasItinerary: false,
+      }),
+    );
+    expect(programSaved.activities?.enabled).toBe(true);
+    expect(programSaved.itinerary?.enabled).toBe(true);
+  });
+
+  it("marks the decision-aware step that needs the user next", () => {
+    const states = tripStepStates({
+      tripId,
+      reservations: [reservation("flights", "confirmed"), reservation("hotel", "confirmed")],
+      hasProgram: true,
+      hasItinerary: false,
+      pendingDecisionKind: "program_choices",
+    });
+    expect(states.filter((step) => step.next).map((step) => step.key)).toEqual(["meals"]);
   });
 });
 

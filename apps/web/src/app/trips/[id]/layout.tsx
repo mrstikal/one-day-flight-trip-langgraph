@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { ConversationRail } from "@/components/assistant/conversation-rail";
+import { StepNav } from "@/components/trip/StepNav";
 
 export const dynamic = "force-dynamic";
 
-/** Trip workspace: the step content plus the persistent assistant rail. */
+/** Trip workspace: the step content plus the sticky step nav and assistant rail. */
 export default async function TripLayout({
   children,
   params,
@@ -15,8 +16,11 @@ export default async function TripLayout({
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="min-w-0">{children}</div>
-      <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-6rem)]">
-        <ConversationRail tripId={id} />
+      <div className="flex flex-col gap-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-6rem)]">
+        <StepNav tripId={id} />
+        <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+          <ConversationRail tripId={id} />
+        </div>
       </div>
     </div>
   );

@@ -25,9 +25,14 @@ function hasActiveWork(projection: TripProjection): boolean {
  * Own projection reader. Polls while the worker has active work or a decision is
  * pending, and refetches on demand (after a resume or an SSE event). A transient
  * fetch failure does not stop polling: it retries with capped backoff and keeps
- * the last projection visible while surfacing the error.
+ * the last projection visible while surfacing the error. Pass `poll: false` for
+ * a secondary reader (e.g. the step nav) that refetches only on SSE events, so
+ * one page never runs several polling loops.
  */
-export function useTripProjection(tripId: string): ProjectionState & {
+export function useTripProjection(
+  tripId: string,
+  options: { readonly poll?: boolean } = {},
+): ProjectionState & {
   readonly refresh: () => void;
 } {
   const [state, setState] = useState<ProjectionState>({
@@ -63,7 +68,7 @@ export function useTripProjection(tripId: string): ProjectionState & {
       }
       failures.current = 0;
       setState({ projection, error: null, loading: false });
-      if (hasActiveWork(projection)) {
+      if (options.poll !== false && hasActiveWork(projection)) {
         schedule(POLL_INTERVAL_MS);
       }
     } catch (error) {
@@ -90,7 +95,7 @@ export function useTripProjection(tripId: string): ProjectionState & {
     } finally {
       inFlight.current = false;
     }
-  }, [schedule, tripId]);
+  }, [options.poll, schedule, tripId]);
 
   useEffect(() => {
     loadRef.current = () => {

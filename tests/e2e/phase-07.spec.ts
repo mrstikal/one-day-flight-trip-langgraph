@@ -75,12 +75,33 @@ test("books a simulated flight and hotel, then saves the program choices", async
   const tripId = await createTrip(page);
   expect(tripId).not.toBe("");
 
+  // The step nav lists every step; the hotel unlocks only after a confirmed flight.
+  await expect(page.getByTestId("step-nav")).toBeVisible();
+  await expect(page.getByTestId("step-nav-details")).toHaveAttribute("href", "/");
+  await expect(page.getByTestId("step-nav-flights")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/flights`,
+  );
+  await expect(page.getByTestId("step-nav-hotel")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("step-nav-meals")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("step-nav-activities")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("step-nav-itinerary")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("step-nav-summary")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/summary`,
+  );
+
   const firstFlight = page.getByRole("button", { name: "Choose this flight" }).first();
   await expect(firstFlight).toBeVisible({ timeout: 60_000 });
   await firstFlight.click();
   await page.getByRole("button", { name: "Review booking" }).click();
   await confirmDialog(page, "DEMO-FLT-");
 
+  await expect(page.getByTestId("step-nav-hotel")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/hotel`,
+  );
+  await expect(page.getByTestId("step-nav-meals")).toHaveAttribute("aria-disabled", "true");
   await page.getByRole("link", { name: "Continue to hotel selection" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/hotel$/, { timeout: 60_000 });
   const firstHotel = page.getByTestId("hotel-offer").first();
@@ -89,13 +110,34 @@ test("books a simulated flight and hotel, then saves the program choices", async
   await page.getByRole("button", { name: "Review booking" }).click();
   await confirmDialog(page, "DEMO-HTL-");
 
+  await expect(page.getByTestId("step-nav-meals")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/meals`,
+  );
+  await expect(page.getByTestId("step-nav-activities")).toHaveAttribute("aria-disabled", "true");
   await page.getByRole("link", { name: "Continue to meals" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/meals$/, { timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
     timeout: 60_000,
   });
+  // The step that needs the user next is marked.
+  await expect(page.getByTestId("step-nav-meals")).toContainText("next");
   await page.getByRole("button", { name: "Save program" }).click();
   await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
+    timeout: 60_000,
+  });
+
+  // Saving the program unlocks the activities and the itinerary; planning then
+  // starts and the approval on the itinerary needs the user next.
+  await expect(page.getByTestId("step-nav-activities")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/activities`,
+  );
+  await expect(page.getByTestId("step-nav-itinerary")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/itinerary`,
+  );
+  await expect(page.getByTestId("step-nav-itinerary")).toContainText("next", {
     timeout: 60_000,
   });
 });
@@ -119,10 +161,17 @@ test("meals and activities live on separate pages with per-meal tile sections", 
   await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
     timeout: 60_000,
   });
-  for (const meal of ["breakfast", "lunch", "dinner"]) {
+  for (const meal of ["breakfast", "lunch"]) {
     await expect(page.getByTestId(`level-select-${meal}`)).toHaveValue("standard");
     await expect(page.getByTestId(`meal-offer-${meal}`).first()).toBeVisible();
   }
+  // The one-night fixture return leaves at 21:00: dinner is excluded outright —
+  // no tiles, no category select, only the prominent reason.
+  await expect(page.getByTestId("meal-offer-dinner")).toHaveCount(0);
+  await expect(page.getByTestId("level-select-dinner")).toHaveCount(0);
+  await expect(page.getByTestId("dinner-not-included")).toContainText(
+    "too early to finish dinner",
+  );
   // No activities here: they live on their own step.
   await expect(page.getByLabel("Activity choices")).toHaveCount(0);
 
@@ -140,4 +189,49 @@ test("meals and activities live on separate pages with per-meal tile sections", 
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/activities$/, { timeout: 60_000 });
   await expect(page.getByLabel("Activity choices")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
+});
+
+test("an early return offers no dinner selection, only a clear warning", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Your name").fill("Grace Hopper");
+  await selectCombobox(page, "Origin airport", "PRG");
+  await page.getByLabel("Sightseeing date").fill("2026-10-31");
+  await page.getByRole("button", { name: "Continue to destination" }).click();
+  await selectCombobox(page, "Country", "Finland");
+  // "Helsinki" also matches the district "East Helsinki": pick the city itself.
+  await page.getByRole("combobox", { name: "City" }).fill("Helsinki");
+  await page.getByRole("option", { name: "Helsinki", exact: true }).click();
+  await page.getByRole("button", { name: "Create trip" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  const firstHotel = page.getByTestId("hotel-offer").first();
+  await expect(firstHotel).toBeVisible({ timeout: 90_000 });
+  await firstHotel.getByRole("button", { name: "Choose this hotel" }).click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-HTL-");
+  await page.getByRole("link", { name: "Continue to meals" }).click();
+
+  // The return flight leaves at 21:00 local: dinner cannot fit, so it is neither
+  // offered nor selectable — only the prominent reason is shown.
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await expect(page.getByTestId("meal-offer-breakfast").first()).toBeVisible();
+  await expect(page.getByTestId("meal-offer-lunch").first()).toBeVisible();
+  await expect(page.getByTestId("meal-offer-dinner")).toHaveCount(0);
+  await expect(page.getByTestId("level-select-dinner")).toHaveCount(0);
+  await expect(page.getByTestId("dinner-not-included")).toContainText(
+    "too early to finish dinner",
+  );
+
+  // Saving without dinner works, and the saved state repeats the warning.
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("dinner-not-included")).toContainText(
+    "too early to finish dinner",
+  );
+  await expect(page.getByRole("button", { name: "Reserve dinner" })).toHaveCount(0);
 });

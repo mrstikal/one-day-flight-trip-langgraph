@@ -815,7 +815,9 @@ export async function buildTripProjection(
           selectedMeals: {
             breakfast: selectedByMeal.get("breakfast") ?? null,
             lunch: selectedByMeal.get("lunch") ?? null,
-            dinner: selectedByMeal.get("dinner") ?? null,
+            // A dinner the deterministic slot check excluded is never part of the
+            // program, even if an earlier selection exists for the trip.
+            dinner: dinnerNotIncludedReason ? null : (selectedByMeal.get("dinner") ?? null),
           },
           dinnerNotIncludedReason,
           preferredActivityIds,

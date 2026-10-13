@@ -148,12 +148,15 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
   ) : null;
 
   if (pendingDecision?.kind === "program_choices" && program) {
+    const dinnerOptional = program.dinnerNotIncludedReason !== null;
     const selection: Record<Meal, string | null> = mealSelection ?? {
       breakfast: program.selectedMeals.breakfast ?? program.mealDefaults.breakfast,
       lunch: program.selectedMeals.lunch ?? program.mealDefaults.lunch,
-      dinner: program.selectedMeals.dinner ?? program.mealDefaults.dinner,
+      // An excluded dinner is never selectable, even if a stale selection exists.
+      dinner: dinnerOptional
+        ? null
+        : (program.selectedMeals.dinner ?? program.mealDefaults.dinner),
     };
-    const dinnerOptional = program.dinnerNotIncludedReason !== null;
     const ready =
       selection.breakfast !== null &&
       selection.lunch !== null &&
@@ -188,52 +191,55 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           return (
             <section key={meal} className="flex flex-col gap-3" aria-label={`${meal} options`}>
               <h2 className="text-lg capitalize">{meal}</h2>
-              <ServiceLevelSelect
-                tripId={tripId}
-                revision={projection.trip.revision}
-                service={meal}
-                label={meal}
-                levelState={serviceLevels[meal]}
-                customObjective={searchObjectives[meal]}
-                onChanged={refresh}
-              />
               {dinnerBlocked ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="text-sm text-ink-muted">{program.dinnerNotIncludedReason}</p>
-                  <button
-                    type="button"
-                    disabled={busy || activeWork}
-                    aria-pressed={selection.dinner === null}
-                    onClick={() => setMealSelection({ ...selection, dinner: null })}
-                    className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
-                  >
-                    Leave dinner out
-                  </button>
+                // The deterministic slot check excluded dinner: no category and no
+                // tiles are offered, only the prominent reason.
+                <div
+                  role="note"
+                  data-testid="dinner-not-included"
+                  className="flex flex-col gap-1 rounded border border-clay bg-cream p-3 text-sm text-clay"
+                >
+                  <p className="font-medium">Dinner is not included in this trip</p>
+                  <p>{program.dinnerNotIncludedReason}</p>
                 </div>
-              ) : null}
-              {offers.length === 0 ? (
-                <p className="text-sm text-ink-muted">
-                  No {meal} offers are available for this category.
-                </p>
               ) : (
-                <OfferGrid label={`${meal} offers`}>
-                  {offers.map((offer) => (
-                    <OfferCard
-                      key={offer.id}
-                      title={offer.name}
-                      subtitle={`${offer.level} · ${offer.cuisine} · ${offer.durationMinutes} min`}
-                      priceMinor={offer.partyTotalMinor}
-                      priceNote={`total for ${projection.trip.adults} adults`}
-                      details={mealDetails(offer)}
-                      demoLabels={offer.demoLabels}
-                      actionLabel={selection[meal] === offer.id ? "Selected" : `Choose this ${meal}`}
-                      selected={selection[meal] === offer.id}
-                      disabled={busy || activeWork}
-                      testId={`meal-offer-${meal}`}
-                      onAction={() => setMealSelection({ ...selection, [meal]: offer.id })}
-                    />
-                  ))}
-                </OfferGrid>
+                <>
+                  <ServiceLevelSelect
+                    tripId={tripId}
+                    revision={projection.trip.revision}
+                    service={meal}
+                    label={meal}
+                    levelState={serviceLevels[meal]}
+                    customObjective={searchObjectives[meal]}
+                    onChanged={refresh}
+                  />
+                  {offers.length === 0 ? (
+                    <p className="text-sm text-ink-muted">
+                      No {meal} offers are available for this category.
+                    </p>
+                  ) : (
+                    <OfferGrid label={`${meal} offers`}>
+                      {offers.map((offer) => (
+                        <OfferCard
+                          key={offer.id}
+                          title={offer.name}
+                          subtitle={`${offer.level} · ${offer.cuisine} · ${offer.durationMinutes} min`}
+                          priceMinor={offer.partyTotalMinor}
+                          priceNote={`total for ${projection.trip.adults} adults`}
+                          details={mealDetails(offer)}
+                          demoLabels={offer.demoLabels}
+                          actionLabel={
+                            selection[meal] === offer.id ? "Selected" : `Choose this ${meal}`
+                          }
+                          selected={selection[meal] === offer.id}
+                          disabled={busy || activeWork}
+                          testId={`meal-offer-${meal}`}
+                          onAction={() => setMealSelection({ ...selection, [meal]: offer.id })}
+                        />
+                      ))}
+                    </OfferGrid>
+                  )}
+                </>
               )}
             </section>
           );
@@ -382,24 +388,38 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           </p>
         </header>
         <dl className="grid grid-cols-2 gap-2 text-sm">
-          {MEALS.map((meal) => (
-            <div key={meal} className="contents">
-              <dt className="capitalize text-ink-muted">{meal}</dt>
-              <dd>
-                {mealOfferLabel(
-                  meals,
-                  program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null,
-                )}
-              </dd>
-            </div>
-          ))}
+          {MEALS.map((meal) => {
+            const blocked = meal === "dinner" && program?.dinnerNotIncludedReason;
+            return (
+              <div key={meal} className="contents">
+                <dt className="capitalize text-ink-muted">{meal}</dt>
+                <dd>
+                  {blocked
+                    ? "Not included"
+                    : mealOfferLabel(
+                        meals,
+                        program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null,
+                      )}
+                </dd>
+              </div>
+            );
+          })}
         </dl>
         {program?.dinnerNotIncludedReason ? (
-          <p className="text-sm text-ink-muted">{program.dinnerNotIncludedReason}</p>
+          <div
+            role="note"
+            data-testid="dinner-not-included"
+            className="flex flex-col gap-1 rounded border border-clay bg-cream p-3 text-sm text-clay"
+          >
+            <p className="font-medium">Dinner is not included in this trip</p>
+            <p>{program.dinnerNotIncludedReason}</p>
+          </div>
         ) : null}
         {pendingDecision === null ? (
           <div className="grid gap-3 sm:grid-cols-3">
-            {MEALS.map((meal) => (
+            {MEALS.filter(
+              (meal) => !(meal === "dinner" && program?.dinnerNotIncludedReason),
+            ).map((meal) => (
               <ServiceLevelSelect
                 key={meal}
                 tripId={tripId}
@@ -417,7 +437,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           {MEALS.map((meal) => {
             const offerId = program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null;
             const already = confirmedMeals.some((row) => row.serviceKey === meal);
-            if (!offerId || already) {
+            const blocked = meal === "dinner" && program?.dinnerNotIncludedReason;
+            if (!offerId || already || blocked) {
               return null;
             }
             return (

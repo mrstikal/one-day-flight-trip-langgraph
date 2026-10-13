@@ -74,6 +74,99 @@ export function hasSavedProgram(
   return program !== null && program.selectedMeals.breakfast !== null;
 }
 
+export type TripStepKey =
+  | "details"
+  | "destination"
+  | "flights"
+  | "hotel"
+  | "meals"
+  | "activities"
+  | "itinerary"
+  | "summary";
+
+export interface TripStepEntry {
+  readonly key: TripStepKey;
+  readonly label: string;
+  readonly href: string;
+  readonly enabled: boolean;
+  /** Why the step is not available yet (hint for the disabled state). */
+  readonly requires: string | null;
+  /** True for the step that needs the user next (decision-aware). */
+  readonly next: boolean;
+}
+
+/**
+ * The trip's step list for the sticky step navigation. A step is enabled once
+ * its prerequisite milestone is done (a confirmed flight unlocks the hotel, a
+ * confirmed hotel unlocks the meals, a saved program unlocks the activities and
+ * the itinerary); the wizard's first two screens stay reachable because they
+ * render the created trip read-only. The decision-aware `nextTripStep` marks the
+ * step that needs the user next.
+ */
+export function tripStepStates(input: TripStepInput): readonly TripStepEntry[] {
+  const confirmed = new Set(
+    input.reservations
+      .filter((reservation) => reservation.status === "confirmed")
+      .map((reservation) => reservation.serviceKey),
+  );
+  const flights = confirmed.has("flights");
+  const hotel = confirmed.has("hotel");
+  const nextHref = nextTripStep(input)?.href ?? null;
+  const steps: Omit<TripStepEntry, "next">[] = [
+    { key: "details", label: "Trip details", href: "/", enabled: true, requires: null },
+    {
+      key: "destination",
+      label: "Destination",
+      href: "/destination",
+      enabled: true,
+      requires: null,
+    },
+    {
+      key: "flights",
+      label: "Flights",
+      href: `/trips/${input.tripId}/flights`,
+      enabled: true,
+      requires: null,
+    },
+    {
+      key: "hotel",
+      label: "Hotel",
+      href: `/trips/${input.tripId}/hotel`,
+      enabled: flights,
+      requires: flights ? null : "Confirm a flight first",
+    },
+    {
+      key: "meals",
+      label: "Meals",
+      href: `/trips/${input.tripId}/meals`,
+      enabled: hotel,
+      requires: hotel ? null : "Confirm a hotel first",
+    },
+    {
+      key: "activities",
+      label: "Activities",
+      href: `/trips/${input.tripId}/activities`,
+      enabled: input.hasProgram,
+      requires: input.hasProgram ? null : "Save the meal program first",
+    },
+    {
+      key: "itinerary",
+      label: "Itinerary",
+      href: `/trips/${input.tripId}/itinerary`,
+      enabled: input.hasProgram,
+      requires: input.hasProgram ? null : "Save the meal program first",
+    },
+    {
+      key: "summary",
+      label: "Summary",
+      href: `/trips/${input.tripId}/summary`,
+      enabled: true,
+      requires: null,
+    },
+  ];
+  return steps.map((step) => ({ ...step, next: step.href === nextHref }));
+}
+
 /** Returns null once the itinerary exists and no decision is pending. */
 export function nextTripStep(input: TripStepInput): TripStep | null {
   const confirmed = new Set(
