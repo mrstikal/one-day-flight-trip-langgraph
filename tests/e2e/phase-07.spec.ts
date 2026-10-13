@@ -191,6 +191,96 @@ test("meals and activities live on separate pages with per-meal tile sections", 
   await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
 });
 
+test("self-arranged meals and activities hide their offers and appear in the itinerary", async ({
+  page,
+}) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  const firstHotel = page.getByTestId("hotel-offer").first();
+  await expect(firstHotel).toBeVisible({ timeout: 90_000 });
+  await firstHotel.getByRole("button", { name: "Choose this hotel" }).click();
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-HTL-");
+
+  // Meals: mark breakfast as self-arranged; its category and offers disappear.
+  await page.getByRole("link", { name: "Continue to meals" }).click();
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("meal-offer-breakfast").first()).toBeVisible();
+  await page.getByTestId("self-arranged-breakfast").check();
+  await expect(page.getByTestId("meal-offer-breakfast")).toHaveCount(0);
+  await expect(page.getByTestId("level-select-breakfast")).toHaveCount(0);
+  await expect(page.getByTestId("self-arranged-note-breakfast")).toBeVisible();
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("saved-self-arranged-breakfast")).toBeChecked();
+  await expect(page.getByText("You arrange this yourself — not part of the plan.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reserve breakfast" })).toHaveCount(0);
+
+  // The planned day lists the self-arranged breakfast and contains no breakfast
+  // event; approving unlocks the activities step.
+  await page.goto(`/trips/${tripId}/itinerary`);
+  await expect(page.getByTestId("self-arranged-note")).toContainText("Breakfast", {
+    timeout: 180_000,
+  });
+  await expect(page.locator('[data-event-kind="meal"]')).not.toHaveCount(0);
+  const mealTexts = (
+    await page.locator('[data-event-kind="meal"]').allTextContents()
+  )
+    .join(" ")
+    .toLowerCase();
+  expect(mealTexts).not.toContain("breakfast");
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("open-approval")).toBeEnabled({ timeout: 10_000 });
+  }).toPass({ timeout: 180_000, intervals: [2_000, 3_000, 5_000] });
+  await page.getByTestId("open-approval").click();
+  await page
+    .getByTestId("approval-dialog")
+    .getByLabel("I understand this approves the current itinerary version")
+    .check();
+  await page.getByTestId("approve-itinerary").click();
+  await expect(page.getByTestId("itinerary-status")).toHaveText("Approved", { timeout: 90_000 });
+
+  // Activities: mark them self-arranged; the list disappears and the choice saves.
+  await page.goto(`/trips/${tripId}/activities`);
+  await expect(page.getByTestId("self-arranged-activities")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("self-arranged-activities").check();
+  await expect(page.getByLabel("Activity choices")).toHaveCount(0);
+  // The command must be admitted before leaving the page; then the durable state
+  // is visible on a fresh projection (the replanned draft waits for approval).
+  await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().includes("/commands") && response.request().method() === "POST",
+      { timeout: 60_000 },
+    ),
+    page.getByRole("button", { name: "Save activity preferences" }).click(),
+  ]);
+  await expect(page.getByTestId("self-arranged-activities-note")).toBeVisible();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("self-arranged-activities-note")).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 120_000, intervals: [1_000, 2_000, 3_000] });
+
+  // The replanned itinerary names both self-arranged parts and plans no visits.
+  await page.goto(`/trips/${tripId}/itinerary`);
+  await expect(page.getByTestId("self-arranged-note")).toContainText("activities", {
+    timeout: 180_000,
+  });
+  await expect(page.getByTestId("self-arranged-note")).toContainText("Breakfast");
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("itinerary-status")).toHaveText("Draft", { timeout: 10_000 });
+    await expect(page.locator('[data-event-kind="activity"]')).toHaveCount(0);
+  }).toPass({ timeout: 180_000, intervals: [2_000, 3_000, 5_000] });
+});
+
 test("an early return offers no dinner selection, only a clear warning", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Your name").fill("Grace Hopper");

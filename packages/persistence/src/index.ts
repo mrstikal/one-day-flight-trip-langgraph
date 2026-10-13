@@ -262,6 +262,7 @@ export {
   parseClock,
   planProgramSelections,
   recordPreferredActivities,
+  removeProgramSelections,
   ServiceSelectionError,
   upsertProgramSelections,
   validateTripLogistics,
@@ -273,6 +274,15 @@ export type {
   TripLogisticsResult,
   TripProgress,
 } from "./scenario/trip-services.js";
+
+export {
+  EMPTY_SELF_ARRANGED_STATE,
+  loadSelfArrangedState,
+  replaceSelfArrangedStateIn,
+  selfArrangedServiceKeys,
+  setSelfArrangedState,
+} from "./self-arranged.js";
+export type { SelfArrangedService, SelfArrangedState } from "./self-arranged.js";
 
 /* ---- Phase 08: AI call governance and persistent conversation ---------------- */
 

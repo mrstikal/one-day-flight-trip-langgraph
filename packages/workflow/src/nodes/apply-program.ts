@@ -6,8 +6,10 @@ import { travelPorts } from "../travel/runtime.js";
 /**
  * Phase 07: apply a `submit_program` selection deterministically. Compatible
  * unbooked meal selections are stored; a differing confirmed meal is staged as a
- * replacement proposal (never moved, removed, or re-keyed). The null dinner is
- * accepted only when research produced the deterministic no-slot result.
+ * replacement proposal (never moved, removed, or re-keyed). A meal marked
+ * self-arranged is stored as that explicit state and never planned. The null
+ * dinner without the self-arranged state is accepted only when research produced
+ * the deterministic no-slot result.
  */
 export async function applyProgramNode(
   state: TravelState,
@@ -20,14 +22,18 @@ export async function applyProgramNode(
   const ports = travelPorts(runtime);
   const effectScope = fingerprint({
     mealSelections: selections,
+    selfArrangedMeals: [...state.submittedSelfArrangedMeals].sort(),
     preferredActivityIds: [...state.submittedActivityIds].sort(),
+    activitiesSelfArranged: state.submittedActivitiesSelfArranged,
   });
   const result = await ports.runEffect("apply_program", effectScope, () =>
     ports.applyProgram({
       tripId: state.tripId,
       operationId: state.operationId,
       mealSelections: selections,
+      selfArrangedMeals: state.submittedSelfArrangedMeals,
       preferredActivityIds: state.submittedActivityIds,
+      activitiesSelfArranged: state.submittedActivitiesSelfArranged,
     }),
   );
   if (result.replacementStaged && result.replacementProposalId) {

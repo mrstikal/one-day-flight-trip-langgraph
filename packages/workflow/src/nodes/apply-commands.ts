@@ -62,6 +62,8 @@ export async function applyCommandsNode(
     // request, so it applies deterministically just like submit_program).
     return {
       submittedMealSelections: command.mealOfferIds,
+      submittedSelfArrangedMeals: command.selfArrangedMeals,
+      submittedActivitiesSelfArranged: command.activitiesSelfArranged,
       submittedActivityIds: command.preferredActivityIds,
     };
   }

@@ -185,7 +185,9 @@ describe("travel graph phase 07 replacement (real PostgreSQL)", () => {
         command: {
           type: "set_program",
           mealOfferIds: { breakfast, lunch, dinner: dinners[1] as string },
+          selfArrangedMeals: [],
           preferredActivityIds: [],
+          activitiesSelfArranged: false,
         },
       },
     });

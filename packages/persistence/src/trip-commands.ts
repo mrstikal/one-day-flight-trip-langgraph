@@ -639,8 +639,12 @@ export async function commitRouteChange(
         ],
       );
       // Selections reference the previous snapshot's offers; a route change
-      // invalidates them (they are not bookings and carry no confirmation).
+      // invalidates them (they are not bookings and carry no confirmation). The
+      // self-arranged program state is reopened with the whole program.
       await client.query(`DELETE FROM odft_app.trip_selections WHERE trip_id = $1`, [input.tripId]);
+      await client.query(`DELETE FROM odft_app.self_arranged_services WHERE trip_id = $1`, [
+        input.tripId,
+      ]);
     }
 
     let cancelledReservationIds: string[] = [];

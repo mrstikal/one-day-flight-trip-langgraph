@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { SyntheticRoutingProvider } from "@odft/data";
-import type { BookableKey, ServiceKey } from "@odft/contracts";
+import type { BookableKey, Meal, ServiceKey } from "@odft/contracts";
 import { tripPreferencesSchema } from "@odft/contracts";
 import { getTrip } from "../trips.js";
 import { loadSnapshotContent } from "./snapshots.js";
@@ -34,6 +34,8 @@ export interface ProgramPlan {
   readonly selections: ProgramSelection[];
   readonly replacements: { readonly serviceKey: ServiceKey; readonly offerId: string }[];
   readonly dinnerExcluded: boolean;
+  /** Meals the traveler arranges themselves: never selected, planned, or costed. */
+  readonly selfArrangedMeals: readonly Meal[];
 }
 
 export interface TripLogisticsResult {
@@ -200,7 +202,7 @@ async function recordRecommendation(
 
 /** Confirmed flight/hotel progress used to resume a preference change at the right step. */
 export async function loadTripProgress(pool: Pool, tripId: string): Promise<TripProgress> {
-  const [reservations, selections, program] = await Promise.all([
+  const [reservations, selections, program, selfArranged] = await Promise.all([
     pool.query<{ service_key: string }>(
       `SELECT service_key FROM odft_app.reservations
         WHERE trip_id = $1 AND status = 'confirmed'`,
@@ -214,17 +216,29 @@ export async function loadTripProgress(pool: Pool, tripId: string): Promise<Trip
       `SELECT EXISTS (
          SELECT 1 FROM odft_app.trip_selections
           WHERE trip_id = $1 AND service_key IN ('breakfast','lunch')
+       ) OR EXISTS (
+         SELECT 1 FROM odft_app.self_arranged_services
+          WHERE trip_id = $1 AND service_key IN ('breakfast','lunch')
        ) AS applied`,
+      [tripId],
+    ),
+    pool.query<{ service_key: string }>(
+      `SELECT service_key FROM odft_app.self_arranged_services
+        WHERE trip_id = $1 AND service_key IN ('breakfast','lunch','dinner')`,
       [tripId],
     ),
   ]);
   const confirmedServices = reservations.rows.map((row) => row.service_key as BookableKey);
   const services = new Set(confirmedServices);
+  const selectedServices = new Set<BookableKey>([
+    ...selections.rows.map((row) => row.service_key as BookableKey),
+    ...selfArranged.rows.map((row) => row.service_key as BookableKey),
+  ]);
   return {
     flightConfirmed: services.has("flights"),
     hotelConfirmed: services.has("hotel"),
     confirmedServices,
-    selectedServices: selections.rows.map((row) => row.service_key as BookableKey),
+    selectedServices: [...selectedServices],
     programApplied: program.rows[0]?.applied ?? false,
   };
 }
@@ -246,14 +260,20 @@ export async function loadPreferredActivityIds(client: Queryable, tripId: string
 /**
  * Validate a `submit_program` selection without writing anything. Compatible
  * unbooked meals become selections; a confirmed meal with a different offer is a
- * replacement (never moved or removed). A null dinner is accepted only with the
- * deterministic no-slot result.
+ * replacement (never moved or removed). A meal marked self-arranged is never
+ * selected and must not remove a confirmed reservation. A null dinner without
+ * the self-arranged state is accepted only with the deterministic no-slot result.
  */
 export async function planProgramSelections(
   pool: Pool,
   input: {
     readonly tripId: string;
-    readonly mealSelections: { breakfast: string; lunch: string; dinner: string | null };
+    readonly mealSelections: {
+      breakfast: string | null;
+      lunch: string | null;
+      dinner: string | null;
+    };
+    readonly selfArrangedMeals: readonly Meal[];
   },
 ): Promise<ProgramPlan> {
   const client = await pool.connect();
@@ -281,7 +301,31 @@ export async function planProgramSelections(
       confirmed.rows.map((row) => [row.service_key, row.offer_id]),
     );
 
-    if (input.mealSelections.dinner === null) {
+    const selfArranged = new Set<Meal>(input.selfArrangedMeals);
+    for (const meal of selfArranged) {
+      if (input.mealSelections[meal] !== null) {
+        throw new ServiceSelectionError(
+          "CONFLICT",
+          `${meal} cannot be selected and self-arranged at the same time`,
+        );
+      }
+      if (confirmedByService.has(meal)) {
+        throw new ServiceSelectionError(
+          "CONFLICT",
+          `a confirmed ${meal} reservation cannot be removed`,
+        );
+      }
+    }
+    for (const meal of ["breakfast", "lunch"] as const) {
+      if (input.mealSelections[meal] === null && !selfArranged.has(meal)) {
+        throw new ServiceSelectionError(
+          "CONFLICT",
+          `${meal} must either be selected or marked as self-arranged`,
+        );
+      }
+    }
+
+    if (input.mealSelections.dinner === null && !selfArranged.has("dinner")) {
       if (confirmedByService.has("dinner")) {
         throw new ServiceSelectionError(
           "CONFLICT",
@@ -301,7 +345,7 @@ export async function planProgramSelections(
     const replacements: ProgramPlan["replacements"] = [];
     for (const service of MEAL_SERVICES) {
       const selected = input.mealSelections[service];
-      if (selected === null) {
+      if (selected === null || selfArranged.has(service)) {
         continue;
       }
       const offer = content.restaurants.find(
@@ -334,7 +378,12 @@ export async function planProgramSelections(
       });
     }
 
-    return { selections, replacements, dinnerExcluded: input.mealSelections.dinner === null };
+    return {
+      selections,
+      replacements,
+      dinnerExcluded: input.mealSelections.dinner === null && !selfArranged.has("dinner"),
+      selfArrangedMeals: [...selfArranged],
+    };
   } finally {
     client.release();
   }
@@ -397,6 +446,26 @@ export async function upsertProgramSelections(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Remove the persisted selections of meals the traveler now arranges
+ * themselves. `planProgramSelections` refuses this for a confirmed
+ * reservation, so only unbooked selections can reach the delete.
+ */
+export async function removeProgramSelections(
+  pool: Pool,
+  tripId: string,
+  meals: readonly Meal[],
+): Promise<void> {
+  if (meals.length === 0) {
+    return;
+  }
+  await pool.query(
+    `DELETE FROM odft_app.trip_selections
+      WHERE trip_id = $1 AND service_key = ANY($2::text[])`,
+    [tripId, meals],
+  );
 }
 
 /**

@@ -11,11 +11,13 @@ import {
   type ItineraryEvent,
   type ItineraryReview,
   type ItineraryValidation,
+  type Meal,
   type SnapshotContent,
   type TripRecord,
 } from "@odft/contracts";
 import { withEffect } from "./admission.js";
 import { assertOperationFence, type OperationFence } from "./effects.js";
+import { loadSelfArrangedState } from "./self-arranged.js";
 import { loadSnapshotContent } from "./scenario/snapshots.js";
 import {
   dinnerSlotAvailable,
@@ -58,6 +60,10 @@ export interface ItineraryPlanningData {
   /** Confirmed meal offer id per service (locked reservation windows). */
   readonly confirmedMeals: ItineraryMealSelections;
   readonly confirmedMealIds: readonly string[];
+  /** Meals the traveler arranges themselves: excluded from the plan. */
+  readonly selfArrangedMeals: readonly Meal[];
+  /** Activities the traveler arranges themselves: no activity candidates. */
+  readonly selfArrangedActivities: boolean;
   readonly confirmedFlightOfferId: string | null;
   readonly confirmedHotelOfferId: string | null;
   readonly dinnerExcludedReason: string | null;
@@ -134,8 +140,10 @@ export async function loadItineraryPlanningData(
       : null;
 
     const slot = await dinnerSlotAvailable(client, tripId, content);
+    const selfArranged = await loadSelfArrangedState(client, tripId);
+    const dinnerSelfArranged = selfArranged.meals.includes("dinner");
     const dinnerExcludedReason =
-      selectedMeals.dinner === null && !slot.available ? slot.reason : null;
+      !dinnerSelfArranged && selectedMeals.dinner === null && !slot.available ? slot.reason : null;
 
     return {
       trip,
@@ -145,6 +153,8 @@ export async function loadItineraryPlanningData(
       selectedMeals,
       confirmedMeals,
       confirmedMealIds,
+      selfArrangedMeals: selfArranged.meals,
+      selfArrangedActivities: selfArranged.activities,
       confirmedFlightOfferId,
       confirmedHotelOfferId,
       dinnerExcludedReason,

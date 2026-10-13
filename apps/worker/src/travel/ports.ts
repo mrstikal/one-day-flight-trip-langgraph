@@ -38,9 +38,11 @@ import {
   rankTripRecommendations,
   recordFaultOutcome,
   recordPreferredActivities,
+  removeProgramSelections,
   researchTripDomain,
   saveItineraryReview,
   ScenarioService,
+  setSelfArrangedState,
   upsertProgramSelections,
   validateAndPersistSchedules,
   validateTripLogistics,
@@ -133,6 +135,11 @@ function selectedMealOffers(data: ItineraryPlanningData): AssemblyMealCandidate[
 }
 
 function activityCandidates(data: ItineraryPlanningData): AssemblyActivityCandidate[] {
+  // The traveler arranges the visits themselves: no activity candidates reach
+  // the planner, so the plan contains no activity events by design.
+  if (data.selfArrangedActivities) {
+    return [];
+  }
   const preferred = new Set(data.preferredActivityIds);
   return [...data.content.activities]
     .sort((a, b) => {
@@ -166,6 +173,9 @@ function returnDepartureInstant(data: ItineraryPlanningData): string | null {
 function preferredActivityNames(
   data: ItineraryPlanningData,
 ): { id: string; name: string }[] {
+  if (data.selfArrangedActivities) {
+    return [];
+  }
   return data.preferredActivityIds
     .slice(0, 2)
     .map((id) => ({
@@ -340,6 +350,8 @@ function itinerarySource(data: ItineraryPlanningData): ItinerarySourceFingerprin
     confirmedMealIds: data.confirmedMealIds,
     confirmedFlightOfferId: data.confirmedFlightOfferId,
     confirmedHotelOfferId: data.confirmedHotelOfferId,
+    selfArrangedMeals: data.selfArrangedMeals,
+    selfArrangedActivities: data.selfArrangedActivities,
   };
 }
 
@@ -603,6 +615,7 @@ export function createTravelPortsFactory(
       const plan = await planProgramSelections(pool, {
         tripId: input.tripId,
         mealSelections: input.mealSelections,
+        selfArrangedMeals: input.selfArrangedMeals,
       });
       let firstReplacement: {
         proposalId: string;
@@ -637,10 +650,21 @@ export function createTravelPortsFactory(
         };
       }
       await upsertProgramSelections(pool, input.tripId, plan.selections);
-      await recordPreferredActivities(pool, {
-        tripId: input.tripId,
-        preferredActivityIds: input.preferredActivityIds,
+      // A meal the traveler now arranges themselves loses its unbooked selection
+      // (planProgramSelections refused this for any confirmed reservation).
+      await removeProgramSelections(pool, input.tripId, plan.selfArrangedMeals);
+      await setSelfArrangedState(pool, input.tripId, {
+        meals: plan.selfArrangedMeals,
+        activities: input.activitiesSelfArranged,
       });
+      // Self-arranged activities keep the previously recorded preferences (they
+      // return unchanged when the traveler opts back in).
+      if (!input.activitiesSelfArranged) {
+        await recordPreferredActivities(pool, {
+          tripId: input.tripId,
+          preferredActivityIds: input.preferredActivityIds,
+        });
+      }
       return {
         applied: true,
         replacementStaged: firstReplacement !== null,
@@ -799,6 +823,8 @@ export function createTravelPortsFactory(
               }
             : null,
         dinnerExcludedReason: data.dinnerExcludedReason,
+        selfArrangedMeals: data.selfArrangedMeals,
+        selfArrangedActivities: data.selfArrangedActivities,
         returnDepartureInstant: departureInstant,
         routing: ITINERARY_ROUTING,
         routingRuleVersion: ITINERARY_ROUTING_RULE_VERSION,

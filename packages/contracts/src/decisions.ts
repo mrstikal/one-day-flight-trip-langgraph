@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { decisionKindSchema, type DecisionKind } from "./enums.js";
 import { fingerprintSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
-import { mealSelectionsSchema } from "./preferences.js";
+import { mealSelectionsSchema, refineProgramSelection, selfArrangedMealsSchema } from "./preferences.js";
 
 /** Decision responses and resume envelopes (04-domain-model.md section 7). */
 
@@ -29,9 +29,12 @@ const submitProgram = z
   .object({
     action: z.literal("submit_program"),
     mealOfferIds: mealSelectionsSchema,
+    selfArrangedMeals: selfArrangedMealsSchema,
     preferredActivityIds: z.array(nonEmptyStringSchema),
+    activitiesSelfArranged: z.boolean().default(false),
   })
-  .strict();
+  .strict()
+  .superRefine(refineProgramSelection);
 const approveItinerary = z
   .object({ action: z.literal("approve_itinerary"), itineraryId: uuidSchema })
   .strict();

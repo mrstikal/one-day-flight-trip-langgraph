@@ -1,5 +1,5 @@
 import { interrupt, InvalidUpdateError } from "@langchain/langgraph";
-import { graphResumeEnvelopeSchema, type DecisionKind } from "@odft/contracts";
+import { graphResumeEnvelopeSchema, mealSchema, type DecisionKind } from "@odft/contracts";
 import { OPERATION_LOCAL_RESETS, type TravelState, type TravelUpdate } from "../travel/state.js";
 
 /**
@@ -100,12 +100,26 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       throw new InvalidUpdateError("program choices accept only submit_program");
     }
     const allowed = new Set(state.allowedOfferIds);
-    const { breakfast, lunch, dinner } = response.mealOfferIds;
-    if (!allowed.has(breakfast) || !allowed.has(lunch)) {
-      throw new InvalidUpdateError("breakfast and lunch must be offered meal ids");
-    }
-    if (dinner !== null && !allowed.has(dinner)) {
-      throw new InvalidUpdateError("the selected dinner is not an offered meal id");
+    const selfArranged = new Set(response.selfArrangedMeals);
+    for (const meal of mealSchema.options) {
+      const offerId = response.mealOfferIds[meal];
+      if (selfArranged.has(meal)) {
+        if (offerId !== null) {
+          throw new InvalidUpdateError(`${meal} cannot be selected and self-arranged`);
+        }
+        continue;
+      }
+      if (offerId === null) {
+        if (meal !== "dinner") {
+          throw new InvalidUpdateError(`${meal} must be an offered meal id or self-arranged`);
+        }
+        // A null dinner without the self-arranged state is the deterministic
+        // no-slot result; planProgramSelections verifies it server-side.
+        continue;
+      }
+      if (!allowed.has(offerId)) {
+        throw new InvalidUpdateError(`the selected ${meal} is not an offered meal id`);
+      }
     }
     const activityIds = new Set(state.allowedOptionIds);
     for (const activityId of response.preferredActivityIds) {
@@ -117,6 +131,8 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       ...base,
       lastAction: "submit_program",
       submittedMealSelections: response.mealOfferIds,
+      submittedSelfArrangedMeals: response.selfArrangedMeals,
+      submittedActivitiesSelfArranged: response.activitiesSelfArranged,
       submittedActivityIds: response.preferredActivityIds,
     };
   }

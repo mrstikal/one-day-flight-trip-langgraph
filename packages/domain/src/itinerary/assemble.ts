@@ -122,6 +122,10 @@ export interface AssembleItineraryInput {
   readonly hotel: AssemblyHotel | null;
   readonly destinationAirport: AssemblyAirport | null;
   readonly dinnerExcludedReason: string | null;
+  /** Meals the traveler arranges themselves (never planned or costed). */
+  readonly selfArrangedMeals: readonly Meal[];
+  /** Activities the traveler arranges themselves (no activity candidates). */
+  readonly selfArrangedActivities: boolean;
   readonly returnDepartureInstant: string;
   readonly routing: ItineraryRouting;
   readonly routingRuleVersion: string;
@@ -830,6 +834,12 @@ function buildCosts(
   }
 
   const excludedNotes = [
+    ...[...input.selfArrangedMeals]
+      .sort()
+      .map((meal) => `${meal.charAt(0).toUpperCase()}${meal.slice(1)} is self-arranged and not part of the plan.`),
+    ...(input.selfArrangedActivities
+      ? ["Activities are self-arranged and not part of the plan."]
+      : []),
     "Meals outside the sightseeing day are not included.",
     "Home-to-origin-airport travel is not included.",
     "Souvenirs, insurance, and unselected services are not included.",

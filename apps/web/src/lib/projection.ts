@@ -5,6 +5,7 @@ import {
   loadApprovedItineraryVersion,
   loadLatestItinerary,
   loadPublicInspector,
+  loadSelfArrangedState,
 } from "@odft/persistence";
 import {
   publicClarificationSchema,
@@ -19,6 +20,7 @@ import {
   tripPreferencesSchema,
   workflowStatusSchema,
   type FlightCombination,
+  type Meal,
   type OperationStatus,
   type PublicActivityChoice,
   type PublicClarification,
@@ -660,6 +662,16 @@ export async function buildTripProjection(
       )
     : [];
 
+  // Explicit "I'll arrange it myself" program state: these meals/activities are
+  // never offered, planned, or costed; the UI hides their offers and the
+  // itinerary page lists them as intentionally not part of the plan.
+  const selfArranged = await loadSelfArrangedState(pool, tripId);
+  const selfArrangedMeals = {
+    breakfast: selfArranged.meals.includes("breakfast"),
+    lunch: selfArranged.meals.includes("lunch"),
+    dinner: selfArranged.meals.includes("dinner"),
+  };
+
   // Phase 09: latest per-domain research outcomes from persisted events, and the
   // artifact that matches each domain's current research fingerprint (never the
   // newest row by time: returning to an earlier category re-upserts the older
@@ -805,7 +817,12 @@ export async function buildTripProjection(
       const dinnerOffers = meals.filter((offer) => offer.meal === "dinner");
       const defaultBreakfast = pickDefaultId(breakfastOffers);
       const defaultLunch = pickDefaultId(lunchOffers);
-      if (activities.length > 0 && defaultBreakfast && defaultLunch) {
+      // A self-arranged meal needs no default; the program still renders so the
+      // traveler can keep (or lift) the "I'll arrange it myself" state.
+      const mealsReady =
+        (selfArrangedMeals.breakfast || defaultBreakfast !== null) &&
+        (selfArrangedMeals.lunch || defaultLunch !== null);
+      if ((activities.length > 0 || selfArranged.activities) && mealsReady) {
         program = {
           mealDefaults: {
             breakfast: defaultBreakfast,
@@ -813,14 +830,21 @@ export async function buildTripProjection(
             dinner: dinnerNotIncludedReason ? null : pickDefaultId(dinnerOffers),
           },
           selectedMeals: {
-            breakfast: selectedByMeal.get("breakfast") ?? null,
-            lunch: selectedByMeal.get("lunch") ?? null,
+            breakfast: selfArrangedMeals.breakfast
+              ? null
+              : (selectedByMeal.get("breakfast") ?? null),
+            lunch: selfArrangedMeals.lunch ? null : (selectedByMeal.get("lunch") ?? null),
             // A dinner the deterministic slot check excluded is never part of the
             // program, even if an earlier selection exists for the trip.
-            dinner: dinnerNotIncludedReason ? null : (selectedByMeal.get("dinner") ?? null),
+            dinner:
+              selfArrangedMeals.dinner || dinnerNotIncludedReason
+                ? null
+                : (selectedByMeal.get("dinner") ?? null),
           },
+          selfArrangedMeals,
           dinnerNotIncludedReason,
           preferredActivityIds,
+          activitiesSelfArranged: selfArranged.activities,
           activities,
         };
       }
@@ -895,6 +919,8 @@ export async function buildTripProjection(
             row.approved_itinerary_id !== null
               ? await loadApprovedItineraryVersion(pool, tripId)
               : null,
+          selfArrangedMeals: selfArranged.meals,
+          selfArrangedActivities: selfArranged.activities,
         });
 
   // Phase 11: the execution inspector is demo-controls gated and assembled from
@@ -949,6 +975,8 @@ async function buildPublicItinerary(
   inputs: ItineraryMarkerInputs & {
     readonly currentItineraryId: string;
     readonly approvedVersion: number | null;
+    readonly selfArrangedMeals: readonly Meal[];
+    readonly selfArrangedActivities: boolean;
   },
 ): Promise<PublicItinerary | null> {
   const record = await loadLatestItinerary(pool, tripId);
@@ -1044,6 +1072,10 @@ async function buildPublicItinerary(
     costs: record.costs,
     simulatedFailure: record.simulatedFailure,
     simulatedFailureNote: record.simulatedFailureNote,
+    selfArranged: {
+      meals: [...inputs.selfArrangedMeals],
+      activities: inputs.selfArrangedActivities,
+    },
     approvedVersion: inputs.approvedVersion,
     markers,
   };

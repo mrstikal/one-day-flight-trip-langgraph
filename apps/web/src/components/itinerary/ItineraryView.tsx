@@ -227,6 +227,23 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
         />
       ) : null}
 
+      {itinerary.selfArranged.meals.length > 0 || itinerary.selfArranged.activities ? (
+        <p
+          role="note"
+          data-testid="self-arranged-note"
+          className="rounded border border-border bg-cream p-3 text-sm text-ink-muted"
+        >
+          You arrange these yourself, so they are not part of this plan:{" "}
+          {[
+            ...itinerary.selfArranged.meals.map(
+              (meal) => `${meal.charAt(0).toUpperCase()}${meal.slice(1)}`,
+            ),
+            ...(itinerary.selfArranged.activities ? ["activities"] : []),
+          ].join(", ")}
+          .
+        </p>
+      ) : null}
+
       <ValidationSummary itinerary={itinerary} />
 
       {approvalPending ? (

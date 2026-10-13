@@ -164,11 +164,19 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
     const slot = await dinnerSlotAvailable(pool, tripId, content);
     if (slot.available) {
       await expect(
-        planProgramSelections(pool, { tripId, mealSelections: { breakfast, lunch, dinner: null } }),
+        planProgramSelections(pool, {
+          tripId,
+          mealSelections: { breakfast, lunch, dinner: null },
+          selfArrangedMeals: [],
+        }),
       ).rejects.toBeInstanceOf(ServiceSelectionError);
     } else {
       await expect(
-        planProgramSelections(pool, { tripId, mealSelections: { breakfast, lunch, dinner: null } }),
+        planProgramSelections(pool, {
+          tripId,
+          mealSelections: { breakfast, lunch, dinner: null },
+          selfArrangedMeals: [],
+        }),
       ).resolves.toBeDefined();
     }
 

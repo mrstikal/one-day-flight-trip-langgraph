@@ -4,6 +4,7 @@ import {
   clarificationOptionSchema,
   decisionKindSchema,
   domainCommandSchema,
+  mealSchema,
   preservableKeySchema,
   publicRouteChangeReservationSchema,
   publicRouteSummarySchema,
@@ -196,12 +197,15 @@ export const travelStateFields = {
   dinnerNotIncludedReason: z.string().nullable().default(null),
   submittedMealSelections: z
     .object({
-      breakfast: z.string().min(1),
-      lunch: z.string().min(1),
+      breakfast: z.string().min(1).nullable(),
+      lunch: z.string().min(1).nullable(),
       dinner: z.string().min(1).nullable(),
     })
     .nullable()
     .default(null),
+  /** Meals the traveler arranges themselves ("I'll arrange it myself"). */
+  submittedSelfArrangedMeals: z.array(mealSchema).default(() => []),
+  submittedActivitiesSelfArranged: z.boolean().default(false),
   submittedActivityIds: z.array(z.string().min(1)).default(() => []),
   programApplied: z.boolean().default(false),
   replacementStaged: z.boolean().default(false),
@@ -348,6 +352,10 @@ export const OPERATION_LOCAL_RESETS = {
   nextDecisionKind: "flight_choice",
   searchTargetDomains: [],
   searchIntent: null,
+  // A new operation must not inherit a previous run's program submission: the
+  // self-arranged state is written explicitly by the admission/routing update.
+  submittedSelfArrangedMeals: [],
+  submittedActivitiesSelfArranged: false,
 } satisfies Partial<TravelUpdate>;
 
 /**

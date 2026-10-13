@@ -36,6 +36,7 @@ export const MIGRATION_VERSIONS: readonly string[] = [
   "0008-ai",
   "0009-research",
   "0010-itinerary",
+  "0011-self-arranged",
 ];
 
 export interface MigrationResult {

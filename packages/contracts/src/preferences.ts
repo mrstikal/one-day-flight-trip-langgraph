@@ -2,9 +2,11 @@ import { z } from "zod";
 import {
   activityPaceSchema,
   activityTagSchema,
+  mealSchema,
   serviceKeySchema,
   serviceLevelSchema,
   travelVariantSchema,
+  type Meal,
 } from "./enums.js";
 import { moneyMinorSchema, nonEmptyStringSchema } from "./primitives.js";
 
@@ -88,15 +90,65 @@ export const tripPreferencesSchema = z
 
 export type TripPreferences = z.infer<typeof tripPreferencesSchema>;
 
+/**
+ * Meal choices of one program. A `null` meal is never a plain "not chosen":
+ * breakfast/lunch must be listed in `selfArrangedMeals` ("I'll arrange it
+ * myself"), and a null dinner is either self-arranged or the deterministic
+ * no-slot result the server verifies separately.
+ */
 export const mealSelectionsSchema = z
   .object({
-    breakfast: nonEmptyStringSchema,
-    lunch: nonEmptyStringSchema,
+    breakfast: nonEmptyStringSchema.nullable(),
+    lunch: nonEmptyStringSchema.nullable(),
     dinner: z.union([nonEmptyStringSchema, z.null()]),
   })
   .strict();
 
 export type MealSelections = z.infer<typeof mealSelectionsSchema>;
+
+/** Meals the traveler arranges themselves; they are never planned or offered. */
+export const selfArrangedMealsSchema = z
+  .array(mealSchema)
+  .max(3)
+  .refine((meals) => new Set(meals).size === meals.length, "self-arranged meals must be unique")
+  .default(() => []);
+
+/** Program activity ids (no booking; preferences only). */
+export const preferredActivityIdsSchema = z.array(nonEmptyStringSchema).max(20);
+
+/**
+ * Consistency of one program selection: a self-arranged meal never carries an
+ * offer id, and breakfast/lunch must be either selected or explicitly
+ * self-arranged (a null dinner without the state stays the deterministic
+ * no-slot result).
+ */
+export function refineProgramSelection(
+  value: {
+    readonly mealOfferIds: MealSelections;
+    readonly selfArrangedMeals: readonly Meal[];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const selfArranged = new Set(value.selfArrangedMeals);
+  for (const meal of mealSchema.options) {
+    if (selfArranged.has(meal) && value.mealOfferIds[meal] !== null) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${meal} cannot be selected and self-arranged at the same time`,
+        path: ["selfArrangedMeals"],
+      });
+    }
+  }
+  for (const meal of ["breakfast", "lunch"] as const) {
+    if (value.mealOfferIds[meal] === null && !selfArranged.has(meal)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${meal} must either be selected or marked as self-arranged`,
+        path: ["mealOfferIds", meal],
+      });
+    }
+  }
+}
 
 export const DEFAULT_TRIP_PREFERENCES: TripPreferences = {
   travelVariant: "two_nights",

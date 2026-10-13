@@ -15,7 +15,7 @@ import {
   moneyMinorSchema,
   nonEmptyStringSchema,
 } from "./primitives.js";
-import { interestsSchema, mealSelectionsSchema } from "./preferences.js";
+import { interestsSchema, mealSelectionsSchema, refineProgramSelection, selfArrangedMealsSchema } from "./preferences.js";
 
 /** The exhaustive initial command family (04-domain-model.md section 6). */
 
@@ -83,9 +83,12 @@ const conversationalMembers = [
     .object({
       type: z.literal("set_program"),
       mealOfferIds: mealSelectionsSchema,
+      selfArrangedMeals: selfArrangedMealsSchema,
       preferredActivityIds: z.array(nonEmptyStringSchema).max(20),
+      activitiesSelfArranged: z.boolean().default(false),
     })
-    .strict(),
+    .strict()
+    .superRefine(refineProgramSelection),
   z.object({ type: z.literal("build_itinerary") }).strict(),
   z.object({ type: z.literal("retry_failed_domains") }).strict(),
 ] as const;

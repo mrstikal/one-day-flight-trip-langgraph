@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
-import type { PublicDecisionResponse, PublicMealOffer, Meal } from "@odft/contracts";
+import type { PublicDecisionResponse, PublicMealOffer, PublicProgramChoices, Meal } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
@@ -54,6 +54,26 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
   const [actionError, setActionError] = useState<string | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [mealSelection, setMealSelection] = useState<Record<Meal, string | null> | null>(null);
+  const [selfArrangedOverride, setSelfArrangedOverride] = useState<Record<Meal, boolean> | null>(
+    null,
+  );
+
+  const selfArrangedFlags = useCallback(
+    (program: { selfArrangedMeals: Record<Meal, boolean> }): Record<Meal, boolean> =>
+      selfArrangedOverride ?? {
+        breakfast: program.selfArrangedMeals.breakfast,
+        lunch: program.selfArrangedMeals.lunch,
+        dinner: program.selfArrangedMeals.dinner,
+      },
+    [selfArrangedOverride],
+  );
+
+  /** Offer id the meal would carry when it is not self-arranged. */
+  const offerFor = useCallback(
+    (program: PublicProgramChoices | null, meal: Meal): string | null =>
+      program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null,
+    [],
+  );
 
   const handleError = useCallback(
     (caught: unknown): void => {
@@ -70,6 +90,50 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
       }
     },
     [refresh],
+  );
+
+  /** Save a per-meal "I'll arrange it myself" toggle from the saved-program view. */
+  const toggleSelfArranged = useCallback(
+    async (meal: Meal, next: boolean): Promise<void> => {
+      if (!projection?.program) {
+        return;
+      }
+      const program = projection.program;
+      const flags: Record<Meal, boolean> = {
+        ...selfArrangedFlags(program),
+        [meal]: next,
+      };
+      if (!next && offerFor(program, meal) === null) {
+        return;
+      }
+      const mealOfferIds = {
+        breakfast: flags.breakfast ? null : offerFor(program, "breakfast"),
+        lunch: flags.lunch ? null : offerFor(program, "lunch"),
+        dinner: program.dinnerNotIncludedReason || flags.dinner ? null : offerFor(program, "dinner"),
+      };
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitCommand(tripId, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: projection.trip.revision,
+          command: {
+            type: "set_program",
+            mealOfferIds,
+            selfArrangedMeals: MEALS.filter((candidate) => flags[candidate]),
+            preferredActivityIds: [...program.preferredActivityIds],
+            activitiesSelfArranged: program.activitiesSelfArranged,
+          },
+        });
+        setSelfArrangedOverride(null);
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, offerFor, projection, refresh, selfArrangedFlags, tripId],
   );
 
   const submitResponse = useCallback(
@@ -149,6 +213,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
 
   if (pendingDecision?.kind === "program_choices" && program) {
     const dinnerOptional = program.dinnerNotIncludedReason !== null;
+    const selfArranged = selfArrangedFlags(program);
+    const confirmedMealServices = new Set(confirmedMeals.map((row) => row.serviceKey));
     const selection: Record<Meal, string | null> = mealSelection ?? {
       breakfast: program.selectedMeals.breakfast ?? program.mealDefaults.breakfast,
       lunch: program.selectedMeals.lunch ?? program.mealDefaults.lunch,
@@ -157,10 +223,12 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         ? null
         : (program.selectedMeals.dinner ?? program.mealDefaults.dinner),
     };
-    const ready =
-      selection.breakfast !== null &&
-      selection.lunch !== null &&
-      (selection.dinner !== null || dinnerOptional);
+    const ready = MEALS.every(
+      (meal) =>
+        selfArranged[meal] ||
+        selection[meal] !== null ||
+        (meal === "dinner" && dinnerOptional),
+    );
     return (
       <div className="flex flex-col gap-6">
         {banner}
@@ -169,7 +237,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           <h1 className="text-2xl">Plan your day</h1>
           <p className="text-sm text-ink-muted">
             Choose one option per meal; activities live on their own step. Selecting a meal here does
-            not book it; restaurant reservations are optional and confirmed separately.
+            not book it; restaurant reservations are optional and confirmed separately. Tick
+            &quot;I&apos;ll arrange it myself&quot; to leave a meal out of the plan.
           </p>
         </header>
         {actionError ? (
@@ -188,9 +257,37 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         {MEALS.map((meal) => {
           const offers = meals.filter((offer) => offer.meal === meal);
           const dinnerBlocked = meal === "dinner" && dinnerOptional;
+          const isSelfArranged = selfArranged[meal];
+          const confirmedHere = confirmedMealServices.has(meal);
           return (
             <section key={meal} className="flex flex-col gap-3" aria-label={`${meal} options`}>
-              <h2 className="text-lg capitalize">{meal}</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg capitalize">{meal}</h2>
+                {!dinnerBlocked ? (
+                  <label
+                    className="flex items-center gap-2 text-sm"
+                    title={
+                      confirmedHere
+                        ? `A confirmed ${meal} reservation keeps this meal in the plan; cancel it first.`
+                        : undefined
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid={`self-arranged-${meal}`}
+                      checked={isSelfArranged}
+                      disabled={busy || activeWork || confirmedHere}
+                      onChange={(event) =>
+                        setSelfArrangedOverride({
+                          ...selfArranged,
+                          [meal]: event.target.checked,
+                        })
+                      }
+                    />
+                    I&apos;ll arrange this {meal} myself
+                  </label>
+                ) : null}
+              </div>
               {dinnerBlocked ? (
                 // The deterministic slot check excluded dinner: no category and no
                 // tiles are offered, only the prominent reason.
@@ -202,6 +299,15 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
                   <p className="font-medium">Dinner is not included in this trip</p>
                   <p>{program.dinnerNotIncludedReason}</p>
                 </div>
+              ) : isSelfArranged ? (
+                <p
+                  role="note"
+                  data-testid={`self-arranged-note-${meal}`}
+                  className="rounded border border-border bg-cream p-3 text-sm text-ink-muted"
+                >
+                  You arrange the {meal} yourself. It will not be included in the plan or the cost
+                  breakdown.
+                </p>
               ) : (
                 <>
                   <ServiceLevelSelect
@@ -252,11 +358,13 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
               void submitResponse(pendingDecision.id, projection.trip.revision, {
                 action: "submit_program",
                 mealOfferIds: {
-                  breakfast: selection.breakfast as string,
-                  lunch: selection.lunch as string,
-                  dinner: selection.dinner,
+                  breakfast: selfArranged.breakfast ? null : selection.breakfast,
+                  lunch: selfArranged.lunch ? null : selection.lunch,
+                  dinner: dinnerOptional || selfArranged.dinner ? null : selection.dinner,
                 },
+                selfArrangedMeals: MEALS.filter((meal) => selfArranged[meal]),
                 preferredActivityIds: [...program.preferredActivityIds],
+                activitiesSelfArranged: program.activitiesSelfArranged,
               })
             }
             className="rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
@@ -371,6 +479,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
   }
 
   if (program || confirmedMeals.length > 0) {
+    const selfArranged = program ? selfArrangedFlags(program) : null;
+    const confirmedMealServices = new Set(confirmedMeals.map((row) => row.serviceKey));
     return (
       <div className="flex flex-col gap-6">
         {banner}
@@ -384,27 +494,53 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           <h1 className="text-2xl">Meals</h1>
           <p className="text-sm text-ink-muted">
             Meal selections are saved. Restaurant reservations are optional and confirmed one meal
-            at a time.
+            at a time. Tick &quot;I&apos;ll arrange it myself&quot; to leave a meal out of the plan.
           </p>
         </header>
-        <dl className="grid grid-cols-2 gap-2 text-sm">
+        <ul className="flex flex-col gap-2" aria-label="Saved meal choices">
           {MEALS.map((meal) => {
-            const blocked = meal === "dinner" && program?.dinnerNotIncludedReason;
+            const blocked = meal === "dinner" && Boolean(program?.dinnerNotIncludedReason);
+            const isSelfArranged = selfArranged?.[meal] ?? false;
+            const confirmedHere = confirmedMealServices.has(meal);
+            const offerId = offerFor(program, meal);
             return (
-              <div key={meal} className="contents">
-                <dt className="capitalize text-ink-muted">{meal}</dt>
-                <dd>
-                  {blocked
-                    ? "Not included"
-                    : mealOfferLabel(
-                        meals,
-                        program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null,
-                      )}
-                </dd>
-              </div>
+              <li
+                key={meal}
+                className="flex flex-wrap items-center justify-between gap-3 rounded border border-border p-3 text-sm"
+              >
+                <div className="flex flex-col">
+                  <span className="capitalize text-ink-muted">{meal}</span>
+                  <span>
+                    {isSelfArranged
+                      ? "You arrange this yourself — not part of the plan."
+                      : blocked
+                        ? "Not included"
+                        : mealOfferLabel(meals, offerId)}
+                  </span>
+                </div>
+                {program && !blocked && !confirmedHere ? (
+                  <label
+                    className="flex items-center gap-2"
+                    title={
+                      !isSelfArranged && offerId === null
+                        ? `No ${meal} offer is available, so this meal cannot rejoin the plan.`
+                        : undefined
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid={`saved-self-arranged-${meal}`}
+                      checked={isSelfArranged}
+                      disabled={busy || activeWork || (!isSelfArranged && offerId === null)}
+                      onChange={(event) => void toggleSelfArranged(meal, event.target.checked)}
+                    />
+                    I&apos;ll arrange it myself
+                  </label>
+                ) : null}
+              </li>
             );
           })}
-        </dl>
+        </ul>
         {program?.dinnerNotIncludedReason ? (
           <div
             role="note"
@@ -418,7 +554,9 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         {pendingDecision === null ? (
           <div className="grid gap-3 sm:grid-cols-3">
             {MEALS.filter(
-              (meal) => !(meal === "dinner" && program?.dinnerNotIncludedReason),
+              (meal) =>
+                !(meal === "dinner" && program?.dinnerNotIncludedReason) &&
+                !(selfArranged?.[meal] ?? false),
             ).map((meal) => (
               <ServiceLevelSelect
                 key={meal}
@@ -435,10 +573,11 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
         ) : null}
         <div className="flex flex-col gap-3">
           {MEALS.map((meal) => {
-            const offerId = program?.selectedMeals[meal] ?? program?.mealDefaults[meal] ?? null;
+            const offerId = offerFor(program, meal);
             const already = confirmedMeals.some((row) => row.serviceKey === meal);
             const blocked = meal === "dinner" && program?.dinnerNotIncludedReason;
-            if (!offerId || already || blocked) {
+            const isSelfArranged = selfArranged?.[meal] ?? false;
+            if (!offerId || already || blocked || isSelfArranged) {
               return null;
             }
             return (

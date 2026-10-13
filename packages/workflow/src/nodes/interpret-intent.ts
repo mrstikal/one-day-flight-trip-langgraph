@@ -50,6 +50,8 @@ function routingFor(commands: readonly DomainCommand[]): {
   commandType: string;
   commandPayload: unknown;
   submittedMealSelections?: TravelUpdate["submittedMealSelections"];
+  submittedSelfArrangedMeals?: TravelUpdate["submittedSelfArrangedMeals"];
+  submittedActivitiesSelfArranged?: boolean;
   submittedActivityIds?: string[];
 } {
   // A route change outranks every other command in a batch: Stage A and Stage B
@@ -65,6 +67,8 @@ function routingFor(commands: readonly DomainCommand[]): {
       commandType: "set_program",
       commandPayload: program,
       submittedMealSelections: program.mealOfferIds,
+      submittedSelfArrangedMeals: program.selfArrangedMeals,
+      submittedActivitiesSelfArranged: program.activitiesSelfArranged,
       submittedActivityIds: program.preferredActivityIds,
     };
   }

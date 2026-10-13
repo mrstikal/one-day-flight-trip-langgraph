@@ -6,6 +6,7 @@ import type {
   ItineraryIssue,
   ItineraryReview,
   ItineraryValidation,
+  Meal,
 } from "@odft/contracts";
 import { fingerprint } from "../fingerprints.js";
 import { computeItineraryMetrics, paceGuidelineMessage } from "./metrics.js";
@@ -39,6 +40,10 @@ export interface ItinerarySourceFingerprintInput {
   readonly confirmedMealIds: readonly string[];
   readonly confirmedFlightOfferId: string | null;
   readonly confirmedHotelOfferId: string | null;
+  /** Meals the traveler arranges themselves: never required in the plan. */
+  readonly selfArrangedMeals: readonly Meal[];
+  /** Activities the traveler arranges themselves: no sightings required. */
+  readonly selfArrangedActivities: boolean;
 }
 
 /** Inputs-only fingerprint re-verified at approval time. */
@@ -58,6 +63,8 @@ export function computeItinerarySourceFingerprint(input: ItinerarySourceFingerpr
     confirmedMealIds: [...input.confirmedMealIds].sort(),
     confirmedFlightOfferId: input.confirmedFlightOfferId,
     confirmedHotelOfferId: input.confirmedHotelOfferId,
+    selfArrangedMeals: [...input.selfArrangedMeals].sort(),
+    selfArrangedActivities: input.selfArrangedActivities,
   });
 }
 
@@ -122,13 +129,18 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
     walkingKm: input.walkingKm,
   });
 
-  // Missing required meals: breakfast and lunch always; dinner only when a slot
-  // exists or when the user selected one that the assembly could not place.
+  // Missing required meals: breakfast and lunch always, except when the traveler
+  // arranges that meal themselves; dinner only when a slot exists or when the
+  // user selected one that the assembly could not place.
+  const selfArrangedMeals = new Set(input.source.selfArrangedMeals);
   const mealEvents = input.events.filter((event) => event.kind === "meal");
   const placedMeals = new Set(
     mealEvents.map((event) => mealNameForEvent(event, input.source.mealSelectionIds)),
   );
   for (const meal of REQUIRED_MEALS) {
+    if (selfArrangedMeals.has(meal)) {
+      continue;
+    }
     if (!placedMeals.has(meal)) {
       errors.push({
         severity: "error",
@@ -139,7 +151,7 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
       });
     }
   }
-  if (!placedMeals.has("dinner")) {
+  if (!selfArrangedMeals.has("dinner") && !placedMeals.has("dinner")) {
     if (input.dinnerSelected || input.dinnerExcludedReason === null) {
       errors.push({
         severity: "error",
@@ -164,7 +176,11 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
 
   // Insufficient sightseeing: at least one visit, and meal/activity content must
   // span at least seven hours (the Stage B core window is 09:00 through 18:00).
-  if (metrics.activityCount === 0) {
+  // A trip where the traveler arranges the activities themselves has no planned
+  // sightings, so neither target applies.
+  if (input.source.selfArrangedActivities) {
+    // No sightseeing target: the traveler arranges the visits themselves.
+  } else if (metrics.activityCount === 0) {
     errors.push({
       severity: "error",
       code: "insufficient_sightseeing",
@@ -234,7 +250,7 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
     number | undefined,
   ][];
   for (const [tag, minimum] of minimumEntries) {
-    if (minimum === undefined || minimum === null) {
+    if (minimum === undefined || minimum === null || input.source.selfArrangedActivities) {
       continue;
     }
     const actual = metrics.activityTagCounts[tag] ?? 0;
@@ -279,7 +295,7 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
 
   // Explicitly selected activities are honored independently of candidate order;
   // one that did not fit is surfaced instead of silently dropped.
-  for (const preferred of input.preferredActivities ?? []) {
+  for (const preferred of input.source.selfArrangedActivities ? [] : (input.preferredActivities ?? [])) {
     const included = input.events.some(
       (event) => event.kind === "activity" && event.refId === preferred.id,
     );

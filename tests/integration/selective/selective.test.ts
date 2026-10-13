@@ -623,7 +623,9 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
         lunch: defaults?.lunch as string,
         dinner: defaults?.dinner ?? null,
       },
+      selfArrangedMeals: [],
       preferredActivityIds: projection?.program?.preferredActivityIds ?? [],
+      activitiesSelfArranged: false,
     });
 
     const state = await readTravelState(pools, harness.tripId);

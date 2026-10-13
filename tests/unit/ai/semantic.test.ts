@@ -146,7 +146,9 @@ describe("intent semantic validation", () => {
           {
             type: "set_program",
             mealOfferIds: { breakfast: "restaurant-1", lunch: "restaurant-2", dinner: "invented" },
+            selfArrangedMeals: [],
             preferredActivityIds: ["activity-1"],
+            activitiesSelfArranged: false,
           },
         ],
         preserve: [],
@@ -163,7 +165,9 @@ describe("intent semantic validation", () => {
           {
             type: "set_program",
             mealOfferIds: { breakfast: "restaurant-1", lunch: "restaurant-2", dinner: null },
+            selfArrangedMeals: [],
             preferredActivityIds: ["invented-activity"],
+            activitiesSelfArranged: false,
           },
         ],
         preserve: [],
@@ -181,7 +185,9 @@ describe("intent semantic validation", () => {
           {
             type: "set_program",
             mealOfferIds: { breakfast: "restaurant-1", lunch: "restaurant-2", dinner: "restaurant-1" },
+            selfArrangedMeals: [],
             preferredActivityIds: [],
+            activitiesSelfArranged: false,
           },
         ],
         preserve: ["dinner"],

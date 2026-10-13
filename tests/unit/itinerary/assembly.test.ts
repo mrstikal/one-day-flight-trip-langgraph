@@ -111,6 +111,8 @@ function input(overrides: Partial<AssembleItineraryInput> = {}): AssembleItinera
       anchor: { lat: 41.8003, lon: 12.2389 },
     },
     dinnerExcludedReason: null,
+    selfArrangedMeals: [],
+    selfArrangedActivities: false,
     returnDepartureInstant: "2026-07-10T21:00:00Z",
     routing: ROUTING,
     routingRuleVersion: "test",
@@ -227,6 +229,24 @@ describe("itinerary assembly (Phase 10)", () => {
     expect(result.dinnerExcluded).toBe(true);
     expect(result.costs.dinnerExcluded).toBe(true);
     expect(result.costs.dinnerExcludedReason).toContain("return flight leaves");
+  });
+
+  it("states self-arranged meals and activities in the excluded notes", () => {
+    const result = assembleItinerary(
+      input({
+        selfArrangedMeals: ["dinner", "breakfast"],
+        selfArrangedActivities: true,
+      }),
+    );
+    expect(result.costs.excludedNotes).toContain(
+      "Breakfast is self-arranged and not part of the plan.",
+    );
+    expect(result.costs.excludedNotes).toContain(
+      "Dinner is self-arranged and not part of the plan.",
+    );
+    expect(result.costs.excludedNotes).toContain(
+      "Activities are self-arranged and not part of the plan.",
+    );
   });
 
   it("produces deterministic event ids per attempt scope", () => {

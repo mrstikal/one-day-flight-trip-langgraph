@@ -71,6 +71,8 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     programDefaults: { breakfast: null, lunch: null, dinner: null },
     dinnerNotIncludedReason: null,
     submittedMealSelections: null,
+    submittedSelfArrangedMeals: [],
+    submittedActivitiesSelfArranged: false,
     submittedActivityIds: [],
     programApplied: false,
     replacementStaged: false,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { activityTagSchema, activityPaceSchema, travelVariantSchema } from "./enums.js";
+import { activityTagSchema, activityPaceSchema, mealSchema, travelVariantSchema } from "./enums.js";
 import {
   coordinatesSchema,
   fingerprintSchema,
@@ -271,6 +271,16 @@ export const publicItinerarySchema = z
     costs: itineraryCostsSchema,
     simulatedFailure: z.boolean(),
     simulatedFailureNote: z.string().max(400).nullable(),
+    /**
+     * Current "I'll arrange it myself" program state, displayed on the itinerary
+     * page: these meals/activities are intentionally not part of the plan.
+     */
+    selfArranged: z
+      .object({
+        meals: z.array(mealSchema),
+        activities: z.boolean(),
+      })
+      .strict(),
     /** Latest approved version of this trip (badge context for a newer draft). */
     approvedVersion: z.number().int().min(1).nullable(),
     markers: z.array(publicMapMarkerSchema).max(80),

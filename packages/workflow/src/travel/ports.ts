@@ -3,6 +3,7 @@ import type {
   IntentResult,
   ItineraryIssue,
   ItineraryMetrics,
+  Meal,
   MealSelections,
   ResearchDomain,
   ResearchDomainStatus,
@@ -257,7 +258,11 @@ export interface TravelPorts {
     tripId: string;
     operationId: string;
     mealSelections: MealSelections;
+    /** Meals the traveler arranges themselves: never selected or planned. */
+    selfArrangedMeals: Meal[];
     preferredActivityIds: string[];
+    /** Activities the traveler arranges themselves: never planned. */
+    activitiesSelfArranged: boolean;
   }): Promise<TravelProgramResult>;
   /** Phase 07: deterministic hotel/airport transfer and confirmed-meal window check. */
   validateSelectedLogistics(input: { tripId: string }): Promise<TravelLogisticsResult>;

@@ -215,8 +215,8 @@ export const publicProgramChoicesSchema = z
   .object({
     mealDefaults: z
       .object({
-        breakfast: nonEmptyStringSchema,
-        lunch: nonEmptyStringSchema,
+        breakfast: nonEmptyStringSchema.nullable(),
+        lunch: nonEmptyStringSchema.nullable(),
         dinner: nonEmptyStringSchema.nullable(),
       })
       .strict(),
@@ -228,10 +228,20 @@ export const publicProgramChoicesSchema = z
         dinner: nonEmptyStringSchema.nullable(),
       })
       .strict(),
+    /** Explicit "I'll arrange it myself" state per meal (never planned). */
+    selfArrangedMeals: z
+      .object({
+        breakfast: z.boolean(),
+        lunch: z.boolean(),
+        dinner: z.boolean(),
+      })
+      .strict(),
     /** Deterministic reason dinner is optional (null), or null when a slot exists. */
     dinnerNotIncludedReason: nonEmptyStringSchema.nullable(),
     /** Persisted program activity preferences (safe ids). */
     preferredActivityIds: z.array(nonEmptyStringSchema),
+    /** Explicit "I'll arrange the activities myself" state (never planned). */
+    activitiesSelfArranged: z.boolean(),
     activities: z.array(publicActivityChoiceSchema),
   })
   .strict();

@@ -13,6 +13,8 @@ import { InterestControls } from "@/components/program/InterestControls";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 
+const MEALS = ["breakfast", "lunch", "dinner"] as const;
+
 /** Activities step: program choices focused on the sightseeing activity list. */
 export function ActivitiesView({ tripId }: { readonly tripId: string }): React.JSX.Element {
   const { projection, error, refresh } = useTripProjection(tripId);
@@ -21,6 +23,7 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>();
   const [selectedOverride, setSelectedOverride] = useState<readonly string[] | null>(null);
+  const [selfArrangedOverride, setSelfArrangedOverride] = useState<boolean | null>(null);
 
   const submitResponse = useCallback(
     async (
@@ -61,6 +64,7 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
 
   const { program, pendingDecision } = projection;
   const selectedIds = selectedOverride ?? program?.preferredActivityIds ?? [];
+  const activitiesSelfArranged = selfArrangedOverride ?? program?.activitiesSelfArranged ?? false;
 
   function toggleActivity(id: string): void {
     setSelectedOverride(
@@ -81,14 +85,24 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
         command: {
           type: "set_program",
           mealOfferIds: {
-            breakfast: program.selectedMeals.breakfast ?? program.mealDefaults.breakfast,
-            lunch: program.selectedMeals.lunch ?? program.mealDefaults.lunch,
-            dinner: program.selectedMeals.dinner ?? program.mealDefaults.dinner,
+            breakfast: program.selfArrangedMeals.breakfast
+              ? null
+              : (program.selectedMeals.breakfast ?? program.mealDefaults.breakfast),
+            lunch: program.selfArrangedMeals.lunch
+              ? null
+              : (program.selectedMeals.lunch ?? program.mealDefaults.lunch),
+            dinner:
+              program.dinnerNotIncludedReason || program.selfArrangedMeals.dinner
+                ? null
+                : (program.selectedMeals.dinner ?? program.mealDefaults.dinner),
           },
+          selfArrangedMeals: MEALS.filter((meal) => program.selfArrangedMeals[meal]),
           preferredActivityIds: [...selectedIds],
+          activitiesSelfArranged,
         },
       });
       setSelectedOverride(null);
+      setSelfArrangedOverride(null);
       refresh();
     } catch (caught) {
       setActionError(caught instanceof ApiError ? caught.message : "The activity change failed.");
@@ -139,6 +153,26 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
         </header>
         {pendingDecision === null ? (
           <>
+            <label className="flex w-fit items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                data-testid="self-arranged-activities"
+                checked={activitiesSelfArranged}
+                disabled={busy || activeWork}
+                onChange={(event) => setSelfArrangedOverride(event.target.checked)}
+              />
+              I&apos;ll arrange the activities myself
+            </label>
+            {activitiesSelfArranged ? (
+              <p
+                role="note"
+                data-testid="self-arranged-activities-note"
+                className="rounded border border-border bg-cream p-3 text-sm text-ink-muted"
+              >
+                You arrange the activities yourself. The plan will contain no sightseeing stops; your
+                activity preferences are kept for when you opt back in.
+              </p>
+            ) : null}
             <InterestControls
               tripId={tripId}
               revision={projection.trip.revision}
@@ -150,17 +184,19 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
                 {actionError}
               </p>
             ) : null}
-            <ul className="flex flex-col gap-2" aria-label="Activity choices">
-              {program.activities.map((activity) => (
-                <ActivityCard
-                  key={activity.id}
-                  activity={activity}
-                  selected={selectedIds.includes(activity.id)}
-                  disabled={busy || activeWork}
-                  onToggle={() => toggleActivity(activity.id)}
-                />
-              ))}
-            </ul>
+            {activitiesSelfArranged ? null : (
+              <ul className="flex flex-col gap-2" aria-label="Activity choices">
+                {program.activities.map((activity) => (
+                  <ActivityCard
+                    key={activity.id}
+                    activity={activity}
+                    selected={selectedIds.includes(activity.id)}
+                    disabled={busy || activeWork}
+                    onToggle={() => toggleActivity(activity.id)}
+                  />
+                ))}
+              </ul>
+            )}
             <div>
               <button
                 type="button"
@@ -195,17 +231,27 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
                 </>
               )}
             </p>
-            <ul className="flex flex-col gap-2" aria-label="Activity choices">
-              {program.activities.map((activity) => (
-                <ActivityCard
-                  key={activity.id}
-                  activity={activity}
-                  selected={selectedIds.includes(activity.id)}
-                  disabled
-                  onToggle={() => undefined}
-                />
-              ))}
-            </ul>
+            {activitiesSelfArranged ? (
+              <p
+                role="note"
+                data-testid="self-arranged-activities-note"
+                className="rounded border border-border bg-cream p-3 text-sm text-ink-muted"
+              >
+                You arrange the activities yourself. The plan will contain no sightseeing stops.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-2" aria-label="Activity choices">
+                {program.activities.map((activity) => (
+                  <ActivityCard
+                    key={activity.id}
+                    activity={activity}
+                    selected={selectedIds.includes(activity.id)}
+                    disabled
+                    onToggle={() => undefined}
+                  />
+                ))}
+              </ul>
+            )}
           </>
         )}
         <p role="note" className="text-sm text-ink-muted">

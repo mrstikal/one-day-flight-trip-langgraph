@@ -81,7 +81,7 @@ describe("interpret_intent node (Phase 08 CR fixes)", () => {
       { type: "propose_selection", service: "hotel", offerId: "o" },
       { type: "set_budget", maxBudgetMinor: 100 },
       { type: "set_route", destinationCityId: "c" },
-      { type: "set_program", mealOfferIds: { breakfast: "b", lunch: "l", dinner: null }, preferredActivityIds: [] },
+      { type: "set_program", mealOfferIds: { breakfast: "b", lunch: "l", dinner: null }, selfArrangedMeals: [], preferredActivityIds: [], activitiesSelfArranged: false },
     ]);
     expect(ordered.map((command) => command.type)).toEqual([
       "set_route",
@@ -124,7 +124,7 @@ describe("interpret_intent node (Phase 08 CR fixes)", () => {
         {
           kind: "commands",
           commands: [
-            { type: "set_program", mealOfferIds: { breakfast: "b", lunch: "l", dinner: null }, preferredActivityIds: [] },
+            { type: "set_program", mealOfferIds: { breakfast: "b", lunch: "l", dinner: null }, selfArrangedMeals: [], preferredActivityIds: [], activitiesSelfArranged: false },
             { type: "propose_selection", service: "hotel", offerId: "o" },
           ],
           preserve: [],

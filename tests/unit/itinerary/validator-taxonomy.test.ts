@@ -102,6 +102,8 @@ function baseInput(overrides: Partial<ValidateItineraryInput> = {}): ValidateIti
       confirmedMealIds: ["m-l"],
       confirmedFlightOfferId: "flight-1",
       confirmedHotelOfferId: "hotel-1",
+      selfArrangedMeals: [],
+      selfArrangedActivities: false,
     },
     ...overrides,
   };
@@ -187,6 +189,60 @@ describe("itinerary validator taxonomy (Phase 10 section 4)", () => {
   it("blocks excessive walking above the pace cap", () => {
     expect(codes(baseInput({ walkingKm: 4.5 }))).toContain("excessive_walking");
     expect(codes(baseInput({ walkingKm: 4 }))).not.toContain("excessive_walking");
+  });
+
+  it("accepts a day whose breakfast and activities are self-arranged", () => {
+    const selfArranged = validDay().filter(
+      (entry) => entry.refId !== "m-b" && entry.kind !== "activity",
+    );
+    // Without the explicit state both the missing breakfast and the missing
+    // sightseeing are errors; the state suppresses them.
+    const asErrors = codes(baseInput({ events: selfArranged }));
+    expect(asErrors).toContain("missing_required_meal");
+    expect(asErrors).toContain("insufficient_sightseeing");
+
+    const result = validateItinerary(
+      baseInput({
+        events: selfArranged,
+        source: {
+          ...baseInput().source,
+          selfArrangedMeals: ["breakfast"],
+          selfArrangedActivities: true,
+        },
+      }),
+    );
+    const errorCodes = result.errors.map((error) => error.code);
+    expect(errorCodes).not.toContain("missing_required_meal");
+    expect(errorCodes).not.toContain("insufficient_sightseeing");
+    // The numeric minimum does not apply to visits the traveler arranges.
+    expect(errorCodes).not.toContain("unmet_minimum_activity_count");
+    expect(result.status).toBe("valid");
+  });
+
+  it("only requires a self-arranged meal when it is not marked", () => {
+    const noLunch = validDay().filter((entry) => entry.refId !== "m-l");
+    expect(codes(baseInput({ events: noLunch }))).toContain("missing_required_meal");
+    const result = validateItinerary(
+      baseInput({
+        events: noLunch,
+        source: { ...baseInput().source, selfArrangedMeals: ["lunch"] },
+      }),
+    );
+    expect(result.errors.map((error) => error.code)).not.toContain("missing_required_meal");
+  });
+
+  it("drops the preferred-activity warning when the traveler arranges the activities", () => {
+    const result = validateItinerary(
+      baseInput({
+        events: validDay().filter((entry) => entry.kind !== "activity"),
+        preferredActivities: [{ id: "a-1", name: "Museum" }],
+        source: { ...baseInput().source, selfArrangedActivities: true },
+      }),
+    );
+    expect(result.warnings.some((entry) => entry.code === "preferred_activity_missing")).toBe(
+      false,
+    );
+    expect(result.status).toBe("valid");
   });
 
   it("blocks a visit-time preference conflict and keeps the numeric requirement", () => {
