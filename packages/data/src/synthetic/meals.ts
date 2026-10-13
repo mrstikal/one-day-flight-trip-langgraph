@@ -23,12 +23,27 @@ const LEVELS: readonly ServiceLevel[] = ["budget", "standard", "luxury"];
 const PER_LEVEL = 4;
 
 const CUISINES = [
-  "Demo Trattoria",
-  "Demo Bistro",
-  "Demo Kitchen",
-  "Demo Grill",
-  "Demo Garden",
-  "Demo Table",
+  "Trattoria",
+  "Bistro",
+  "Brasserie",
+  "Osteria",
+  "Taverna",
+  "Cantina",
+  "Kitchen",
+  "Grill",
+  "Garden",
+  "Table",
+  "Eatery",
+  "Diner",
+  "Cellar",
+  "Terrace",
+  "Parlour",
+  "Lodge",
+  "Pantry",
+  "Bodega",
+  "Rotisserie",
+  "Smokehouse",
+  "Steakhouse",
 ];
 
 const WINDOWS: Record<Meal, { start: string; end: string }> = {

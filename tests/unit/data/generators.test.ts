@@ -104,6 +104,18 @@ describe("generators keep anchors inside the city envelope", () => {
     expect(breakfast.map((offer) => offer.id)).not.toEqual(dinner.map((offer) => offer.id));
   });
 
+  it("labels every meal name with exactly one Demo prefix", () => {
+    for (const meal of ["breakfast", "lunch", "dinner"] as const) {
+      const offers = generateMeals({ ...gen, meal });
+      expect(offers).toHaveLength(12);
+      for (const offer of offers) {
+        expect(offer.name.startsWith("Demo ")).toBe(true);
+        expect(offer.name.startsWith("Demo Demo")).toBe(false);
+        expect(offer.name.match(/\bDemo\b/g)).toHaveLength(1);
+      }
+    }
+  });
+
   it("uses curated references for curated cities and generic categories otherwise", () => {
     const curated = generateActivities({
       ...gen,
