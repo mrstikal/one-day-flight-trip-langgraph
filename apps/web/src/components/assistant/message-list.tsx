@@ -17,8 +17,11 @@ export function MessageList({
     );
   }
   return (
-    <ol data-testid="conversation-messages" className="flex max-h-80 flex-col gap-3 overflow-y-auto pr-1">
-      {messages.map((message) => (
+    <ol
+      data-testid="conversation-messages"
+      className="flex max-h-[340px] min-h-[340px] flex-col gap-3 overflow-y-auto pr-1"
+    >
+      {[...messages].reverse().map((message) => (
         <li
           key={message.id}
           className={

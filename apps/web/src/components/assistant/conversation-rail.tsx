@@ -150,20 +150,6 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     projection?.pendingDecision?.kind === "route_change_confirmation"
       ? (projection.routeChange ?? null)
       : null;
-  // Decisions rendered in the rail itself (clarification, route change) need no
-  // link; every other pending decision is presented on its step page, so the
-  // rail points there instead of leaving "alternatives are ready" dangling.
-  const pendingStep =
-    projection?.pendingDecision && !pendingClarification && !routeChange
-      ? nextTripStep({
-          tripId,
-          reservations: projection.reservations,
-          hasProgram: hasSavedProgram(projection.program),
-          hasItinerary: projection.itinerary !== null,
-          pendingDecisionKind: projection.pendingDecision.kind,
-          proposalServiceKey: projection.proposal?.serviceKey ?? null,
-        })
-      : null;
   const inspectorHref =
     projection?.display.demoControlsEnabled === true ? `/trips/${tripId}/inspector` : null;
 
@@ -252,19 +238,6 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
             void confirmRouteChange();
           }}
         />
-      ) : null}
-
-      {pendingStep ? (
-        <p className="text-sm text-ink-muted">
-          Next step:{" "}
-          <Link
-            href={pendingStep.href}
-            className="text-teal underline"
-            data-testid="pending-step-link"
-          >
-            {pendingStep.open}
-          </Link>
-        </p>
       ) : null}
 
       {actionError ? (

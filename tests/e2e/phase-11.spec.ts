@@ -242,11 +242,6 @@ test("a chat refresh from another page opens the step with the fresh offers", as
   const cheaperCard = page.getByTestId("hotel-offer").first();
   await expect(cheaperCard).toBeVisible({ timeout: 120_000 });
   expect(await readHotelReference(page, tripId)).toBe(hotelReference);
-  // The rail also points at the step while the decision is pending.
-  await expect(page.getByTestId("pending-step-link")).toHaveAttribute(
-    "href",
-    `/trips/${tripId}/hotel`,
-  );
 });
 
 test("the summary hotel row offers a direct change action", async ({ page }) => {
