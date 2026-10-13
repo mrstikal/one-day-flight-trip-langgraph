@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { GraphDefinition, PublicInspectorNode } from "@odft/contracts";
+import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from "./execution-graph-layout";
 
 /**
  * Phase 11 execution graph (08-frontend-ux.md section 10).
@@ -11,85 +12,6 @@ import type { GraphDefinition, PublicInspectorNode } from "@odft/contracts";
  * the node table below carries the same facts as text, and the SVG is marked
  * `aria-hidden`.
  */
-
-const COLUMN_WIDTH = 190;
-const ROW_HEIGHT = 44;
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 30;
-
-interface Positioned {
-  readonly id: string;
-  readonly label: string;
-  readonly x: number;
-  readonly y: number;
-  readonly status: PublicInspectorNode["status"];
-}
-
-interface Layout {
-  readonly nodes: Positioned[];
-  readonly edges: readonly { from: Positioned; to: Positioned; label: string | null }[];
-  readonly width: number;
-  readonly height: number;
-}
-
-/** Deterministic layered layout: BFS depth from the entry; rows per column. */
-export function layoutGraph(
-  definition: GraphDefinition,
-  statusByName: ReadonlyMap<string, PublicInspectorNode["status"]>,
-): Layout {
-  const outgoing = new Map<string, string[]>();
-  for (const edge of definition.edges) {
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
-  }
-  const depth = new Map<string, number>();
-  const queue: string[] = ["__start__"];
-  depth.set("__start__", 0);
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
-    for (const next of outgoing.get(current) ?? []) {
-      if (next === "__end__" || depth.has(next)) {
-        continue;
-      }
-      depth.set(next, (depth.get(current) ?? 0) + 1);
-      queue.push(next);
-    }
-  }
-  const columns = new Map<number, string[]>();
-  for (const node of definition.nodes) {
-    const column = depth.get(node.id) ?? 0;
-    columns.set(column, [...(columns.get(column) ?? []), node.id]);
-  }
-  const positioned = new Map<string, Positioned>();
-  let maxRows = 0;
-  for (const [column, ids] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
-    ids.sort((a, b) => a.localeCompare(b));
-    maxRows = Math.max(maxRows, ids.length);
-    ids.forEach((id, rowIndex) => {
-      const label = definition.nodes.find((node) => node.id === id)?.label ?? id;
-      positioned.set(id, {
-        id,
-        label,
-        x: 20 + column * COLUMN_WIDTH,
-        y: 20 + rowIndex * ROW_HEIGHT,
-        status: statusByName.get(id) ?? "pending",
-      });
-    });
-  }
-  const edges: { from: Positioned; to: Positioned; label: string | null }[] = [];
-  for (const edge of definition.edges) {
-    const from = positioned.get(edge.from);
-    const to = positioned.get(edge.to);
-    if (from && to) {
-      edges.push({ from, to, label: edge.label });
-    }
-  }
-  return {
-    nodes: [...positioned.values()],
-    edges,
-    width: 40 + Math.max(1, columns.size) * COLUMN_WIDTH,
-    height: 40 + Math.max(1, maxRows) * ROW_HEIGHT,
-  };
-}
 
 const STATUS_FILL: Readonly<Record<PublicInspectorNode["status"], string>> = {
   pending: "#f5f0e6",
