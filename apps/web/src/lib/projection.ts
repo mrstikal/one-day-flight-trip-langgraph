@@ -89,6 +89,7 @@ interface TripRow {
   preferences: unknown;
   workflow_status: string;
   recovery_required: boolean;
+  last_unfinished_operation_id: string | null;
   current_route_validation_id: string | null;
   current_schedule_validation_id: string | null;
   active_scenario_snapshot_id: string | null;
@@ -418,7 +419,7 @@ export async function buildTripProjection(
             destination_country_key, sightseeing_date::text AS sightseeing_date, travel_variant,
             preferences, workflow_status, recovery_required, current_route_validation_id,
             current_schedule_validation_id, active_scenario_snapshot_id,
-            current_itinerary_id, approved_itinerary_id
+            current_itinerary_id, approved_itinerary_id, last_unfinished_operation_id
        FROM odft_app.trips WHERE id = $1`,
     [tripId],
   );
@@ -440,6 +441,7 @@ export async function buildTripProjection(
     preferences: tripPreferencesSchema.parse(row.preferences),
     workflowStatus: workflowStatusSchema.parse(row.workflow_status),
     recoveryRequired: row.recovery_required,
+    recoveryOperationId: row.last_unfinished_operation_id,
   };
 
   const operationsResult = await pool.query<{

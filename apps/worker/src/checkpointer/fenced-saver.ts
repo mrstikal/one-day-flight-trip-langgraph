@@ -40,8 +40,57 @@ export class FencedSaver extends BaseCheckpointSaver {
     return this.delegate.get(config);
   }
 
+  /**
+   * Head reads must resolve the thread's causal leaf, not `ORDER BY
+   * checkpoint_id DESC`.
+   *
+   * The upstream checkpoint-id generator keeps a monotonic (msecs, nsecs) clock
+   * per module instance, and the package ships ESM and CJS builds with separate
+   * state. Ids written by different instances within one run can therefore sort
+   * backwards, and the saver's latest-checkpoint query then returns a checkpoint
+   * from the MIDDLE of the run (observed live 2026-10-13: a completed creation
+   * run finalized against a stale mid-run view, so its flight-choice interrupt
+   * was never persisted and the trip stayed on "Preparing flight options…").
+   *
+   * Resolve "latest" causally instead: the newest checkpoint (max id) that no
+   * other checkpoint names as its parent. Explicit `checkpoint_id` reads (resume,
+   * time travel, delta reconstruction) are untouched, and the library's own ids
+   * still back task-id derivation, so interruption semantics are unchanged.
+   */
   override async getTuple(config: RunnableConfig): Promise<CheckpointTuple | undefined> {
-    return this.delegate.getTuple(config);
+    const explicit = config.configurable?.["checkpoint_id"];
+    const threadId = config.configurable?.["thread_id"];
+    if (typeof explicit === "string" || typeof threadId !== "string") {
+      return this.delegate.getTuple(config);
+    }
+    const tuples: CheckpointTuple[] = [];
+    for await (const tuple of this.delegate.list(config, { limit: 1000 })) {
+      tuples.push(tuple);
+    }
+    const parents = new Set<string>();
+    for (const tuple of tuples) {
+      const parentId = tuple.parentConfig?.configurable?.["checkpoint_id"];
+      if (typeof parentId === "string") {
+        parents.add(parentId);
+      }
+    }
+    const leaves = tuples.filter((tuple) => {
+      const id = tuple.config.configurable?.["checkpoint_id"];
+      return typeof id === "string" && !parents.has(id);
+    });
+    if (leaves.length === 0) {
+      return this.delegate.getTuple(config);
+    }
+    const head = leaves.sort((left, right) =>
+      String(right.config.configurable?.["checkpoint_id"]).localeCompare(
+        String(left.config.configurable?.["checkpoint_id"]),
+      ),
+    )[0];
+    // Hydrate through the explicit-id path so pending writes load exactly like a
+    // resume read, and fall back to the delegate's own resolution if the leaf
+    // cannot be read back (defensive).
+    const hydrated = head ? await this.delegate.getTuple(head.config) : undefined;
+    return hydrated ?? this.delegate.getTuple(config);
   }
 
   override list(

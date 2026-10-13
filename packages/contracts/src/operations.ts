@@ -93,6 +93,12 @@ export const tripSummarySchema = z
     preferences: tripPreferencesSchema,
     workflowStatus: workflowStatusSchema,
     recoveryRequired: z.boolean(),
+    /**
+     * Failed unfinished operation the owner must recover: present exactly while
+     * `recoveryRequired` is set, so the UI retries the operation that owns the
+     * unfinished checkpoint (never a newer rejected conflict row).
+     */
+    recoveryOperationId: uuidSchema.nullable(),
   })
   .strict();
 export type TripSummary = z.infer<typeof tripSummarySchema>;

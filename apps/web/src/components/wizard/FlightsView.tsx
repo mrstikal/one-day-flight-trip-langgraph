@@ -5,16 +5,16 @@ import { useCallback, useMemo, useState } from "react";
 import type { PublicDecisionResponse } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
-import { submitCommand, submitDecision, retryOperation } from "@/lib/decision-client";
+import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { BookingDialog } from "./BookingDialog";
 import { FlightCard } from "./FlightCard";
+import { PlanningStoppedCard } from "./PlanningStoppedCard";
 import { RouteFix } from "./RouteFix";
 import {
   ErrorPanel,
   ExpiredProposalCard,
-  FailedCard,
   RouteRejectionCard,
   ScheduleEmptyCard,
   StatusPanel,
@@ -31,7 +31,6 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
   const [actionError, setActionError] = useState<string | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [variantBusy, setVariantBusy] = useState(false);
-  const [retryBusy, setRetryBusy] = useState(false);
 
   const activeWork = useMemo(
     () =>
@@ -121,25 +120,6 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     }
   }, [handleError, projection, refresh, tripId]);
 
-  const retryPlanning = useCallback(
-    async (operationId: string): Promise<void> => {
-      if (!projection) {
-        return;
-      }
-      setRetryBusy(true);
-      setActionError(undefined);
-      try {
-        await retryOperation(tripId, operationId, projection.trip.revision);
-        refresh();
-      } catch (caught) {
-        handleError(caught);
-      } finally {
-        setRetryBusy(false);
-      }
-    },
-    [handleError, projection, refresh, tripId],
-  );
-
   if (!projection) {
     if (error) {
       return <ErrorPanel message={error.message} onRetry={refresh} />;
@@ -151,10 +131,6 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
   const confirmedFlight = reservations.find(
     (row) => row.serviceKey === "flights" && row.status === "confirmed",
   );
-
-  const failedOperation = [...projection.operations]
-    .reverse()
-    .find((operation) => operation.status === "failed");
 
   const stalenessBanner = error ? (
     <p role="status" className="rounded border border-clay bg-cream p-3 text-sm text-clay">
@@ -175,16 +151,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
 
   if (projection.trip.recoveryRequired || projection.trip.workflowStatus === "failed") {
     return wrap(
-      <FailedCard
-        message="The planner stopped before finishing this trip. Retrying re-runs only the unfinished work."
-        canRetry={Boolean(failedOperation)}
-        busy={retryBusy}
-        onRetry={() => {
-          if (failedOperation) {
-            void retryPlanning(failedOperation.operationId);
-          }
-        }}
-      />,
+      <PlanningStoppedCard tripId={tripId} projection={projection} onRetried={refresh} />,
     );
   }
 

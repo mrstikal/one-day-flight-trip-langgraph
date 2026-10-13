@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TravelState } from "../../packages/workflow/src/travel/state.js";
 import { loadContextNode } from "../../packages/workflow/src/nodes/load-context.js";
 import { applyDecisionNode } from "../../packages/workflow/src/nodes/apply-decision.js";
+import { detectProgressNode } from "../../packages/workflow/src/nodes/detect-progress.js";
 import { publishSummaryNode } from "../../packages/workflow/src/nodes/publish-summary.js";
 import { prepareDecisionNode } from "../../packages/workflow/src/nodes/prepare-decision.js";
 import {
@@ -225,6 +226,39 @@ describe("prepare_decision phase 07 kinds", () => {
       state({ lastAction: "choose_option", lastOptionId: "change_meals" }),
     );
     expect(meals.nextDecisionKind).toBe("program_choices");
+  });
+
+  it("detect_progress keeps a reselection's explicit step (recovery reopen)", async () => {
+    // A confirmed hotel derives program_choices; the reselection target must win
+    // or "Adjust the hotel" would open the meals step.
+    const runtime = {
+      context: {
+        ports: {
+          loadProgress: async () => ({
+            flightConfirmed: true,
+            hotelConfirmed: true,
+            confirmedServices: ["flights", "hotel"],
+            selectedServices: [],
+          }),
+        },
+      },
+    };
+    const hotel = await detectProgressNode(
+      state({ pendingStage: "reselection", nextDecisionKind: "hotel_choice", tripId: "t" }),
+      runtime,
+    );
+    expect(hotel.nextDecisionKind).toBe("hotel_choice");
+    const program = await detectProgressNode(
+      state({ pendingStage: "reselection", nextDecisionKind: "program_choices", tripId: "t" }),
+      runtime,
+    );
+    expect(program.nextDecisionKind).toBe("program_choices");
+    // Outside a reselection the progress-derived kind still wins.
+    const derived = await detectProgressNode(
+      state({ nextDecisionKind: "hotel_choice", tripId: "t" }),
+      runtime,
+    );
+    expect(derived.nextDecisionKind).toBe("program_choices");
   });
 });
 

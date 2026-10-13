@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasSavedProgram,
   nextTripStep,
+  recoveryOptionHref,
   tripStepStates,
 } from "../../apps/web/src/lib/trip-step.js";
 
@@ -289,5 +290,14 @@ describe("nextTripStep (no server calls)", () => {
       cta: "Review activities",
       open: "Open activities",
     });
+  });
+});
+describe("recoveryOptionHref (recovery card navigation)", () => {
+  it("sends the option to the step it reopens and stays for change_program", () => {
+    expect(recoveryOptionHref(tripId, "change_hotel")).toBe(`/trips/${tripId}/hotel`);
+    expect(recoveryOptionHref(tripId, "change_meals")).toBe(`/trips/${tripId}/meals`);
+    // A `change_program` research failure ends the run on the affected page.
+    expect(recoveryOptionHref(tripId, "change_program")).toBeNull();
+    expect(recoveryOptionHref(tripId, "unknown_option")).toBeNull();
   });
 });

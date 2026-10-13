@@ -29,6 +29,8 @@ export interface TripRecord {
   readonly currentScheduleValidationId?: string;
   readonly workflowStatus: string;
   readonly recoveryRequired: boolean;
+  /** Failed unfinished operation the owner must recover (set with recoveryRequired). */
+  readonly lastUnfinishedOperationId?: string;
 }
 
 export interface OfferRecord {

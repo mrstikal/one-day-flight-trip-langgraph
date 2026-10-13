@@ -381,6 +381,7 @@ function normalizePlannerSchedule(
             : meal
               ? Math.max(meal.windowStartMinute, meal.windowEndMinute - stop.durationMinutes)
               : null,
+          earliestStartMinute: confirmed ? stop.startMinute : (meal?.windowStartMinute ?? null),
           startMinute: stop.startMinute,
           durationMinutes: stop.durationMinutes,
         };
@@ -392,6 +393,7 @@ function normalizePlannerSchedule(
           refId: stop.refId,
           anchor: activity?.anchor ?? null,
           latestStartMinute: null,
+          earliestStartMinute: null,
           startMinute: stop.startMinute,
           durationMinutes: stop.durationMinutes,
         };
@@ -401,6 +403,7 @@ function normalizePlannerSchedule(
         refId: null,
         anchor: null,
         latestStartMinute: null,
+        earliestStartMinute: null,
         startMinute: stop.startMinute,
         durationMinutes: stop.durationMinutes,
       };

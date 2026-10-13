@@ -31,6 +31,11 @@ export interface AllowanceStop {
    * minus its duration), or null when the stop is flexible.
    */
   readonly latestStartMinute: number | null;
+  /**
+   * Earliest start the stop's window allows (a meal's window start; a confirmed
+   * meal pins start and end), or null when the stop may move earlier freely.
+   */
+  readonly earliestStartMinute?: number | null;
   readonly startMinute: number;
   readonly durationMinutes: number;
 }
@@ -107,5 +112,76 @@ export function ensureTransferAllowance(input: TransferAllowanceInput): Allowanc
       lastBlockEnd = Math.max(lastBlockEnd, start + stop.durationMinutes);
     }
   }
-  return out;
+  return pullBackward(input, out);
+}
+
+/**
+ * Phase 10 follow-up: the forward pass can only widen a packed pair by moving the
+ * LATER stop, and a fixed window (a confirmed meal at 12:00) clamps it straight
+ * back, so a live planner's "activity ends 30 minutes before the fixed meal"
+ * reliably failed as `transfer_gap`. When the later stop sits at its fixed
+ * window, pull the earlier located stop — and the planner blocks between the pair
+ * — earlier instead, bounded by its own earliest allowed start and by the room
+ * that exists after the stop before it (each earlier pair is re-checked in the
+ * same backward sweep). A pair that still cannot fit is left to the validator.
+ */
+function pullBackward(
+  input: TransferAllowanceInput,
+  out: readonly AllowanceStop[],
+): AllowanceStop[] {
+  const stops = [...out];
+  for (let index = stops.length - 1; index > 0; index -= 1) {
+    const current = stops[index];
+    if (!current?.anchor) {
+      continue;
+    }
+    let previousIndex = index - 1;
+    while (previousIndex >= 0 && !stops[previousIndex]?.anchor) {
+      previousIndex -= 1;
+    }
+    const previous = previousIndex >= 0 ? stops[previousIndex] : undefined;
+    if (!previous?.anchor) {
+      continue;
+    }
+    const required = requiredMinutes(
+      input,
+      previous.anchor,
+      current.anchor,
+      previous.refId ?? previous.kind,
+      current.refId ?? current.kind,
+    );
+    let blockEnd = previous.startMinute + previous.durationMinutes;
+    for (let between = previousIndex + 1; between < index; between += 1) {
+      const block = stops[between];
+      if (block) {
+        blockEnd = Math.max(blockEnd, block.startMinute + block.durationMinutes);
+      }
+    }
+    const free = current.startMinute - blockEnd;
+    if (free >= required) {
+      continue;
+    }
+    // The stop may not move before its own earliest window nor on top of any
+    // earlier stop: a pair that still cannot fit is left to the validator.
+    let precedingEnd = 0;
+    for (let before = 0; before < previousIndex; before += 1) {
+      const earlier = stops[before];
+      if (earlier) {
+        precedingEnd = Math.max(precedingEnd, earlier.startMinute + earlier.durationMinutes);
+      }
+    }
+    const floor = Math.max(0, previous.earliestStartMinute ?? 0, precedingEnd);
+    const target = Math.max(floor, previous.startMinute - (required - free));
+    const shift = previous.startMinute - target;
+    if (shift <= 0) {
+      continue;
+    }
+    for (let moved = previousIndex; moved < index; moved += 1) {
+      const stop = stops[moved];
+      if (stop) {
+        stops[moved] = { ...stop, startMinute: stop.startMinute - shift };
+      }
+    }
+  }
+  return stops;
 }

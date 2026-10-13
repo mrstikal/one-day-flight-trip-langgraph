@@ -144,13 +144,19 @@ export async function retryOperation(
     // The retry target must be the latest operation of the trip: ANY newer
     // operation (including succeeded/waiting) means this is not the latest
     // unfinished failure, so retrying it would re-run stale input past a newer run.
+    // While the trip requires recovery, the recorded unfinished operation is the
+    // exact target even when a newer rejected conflict row exists: a rejected
+    // operation never advanced the graph, so it cannot supersede the owner of the
+    // unfinished checkpoint (admission has blocked new work since the flag was set).
+    const recordedUnfinished =
+      trip.recoveryRequired && trip.lastUnfinishedOperationId === operationId;
     const newer = await client.query<{ id: string }>(
       `SELECT id FROM odft_app.workflow_operations
         WHERE trip_id = $1 AND created_at > $2
         LIMIT 1`,
       [tripId, row.created_at],
     );
-    if (newer.rows[0]) {
+    if (newer.rows[0] && !recordedUnfinished) {
       await client.query("ROLLBACK");
       return error("CONFLICT", "a newer operation exists; retry the latest failure");
     }
@@ -169,7 +175,8 @@ export async function retryOperation(
     );
     await client.query(
       `UPDATE odft_app.trips
-          SET recovery_required = false, workflow_status = 'queued', updated_at = now()
+          SET recovery_required = false, last_unfinished_operation_id = NULL,
+              workflow_status = 'queued', updated_at = now()
         WHERE id = $1`,
       [tripId],
     );

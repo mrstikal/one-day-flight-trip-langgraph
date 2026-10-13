@@ -468,10 +468,26 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
     // permanent conflict the client must resolve by refreshing; retrying can never
     // succeed and would only exhaust the claim budget into `recovery_required`.
     if (isTerminalConflictCode(code)) {
+      const message = error instanceof Error ? error.message : code;
+      if (claim.kind === "decision") {
+        // The resume consumed its interrupt before this failure, so the pending
+        // decision can no longer be answered (a new resume would only conflict).
+        // Expose the unfinished failed checkpoint for explicit owner recovery:
+        // retrying the SAME operation re-runs only the unfinished work.
+        const recovered = await finalizeFailure(
+          deps.operationsPool,
+          { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
+          { code, message, exhausted: true },
+        );
+        if (recovered) {
+          logger({ level: "warn", component: "driver", message: "decision resume failed terminally; owner recovery required", operationId: claim.operationId, code });
+        }
+        return;
+      }
       const committed = await finalizeConflict(
         deps.operationsPool,
         { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
-        { code, message: error instanceof Error ? error.message : code },
+        { code, message },
       );
       // A failed chat request must not stay silent in the conversation.
       if (committed && isChatOperation(claim)) {
@@ -630,10 +646,26 @@ export function createOperationDriver(deps: DriverDeps): OperationDriver {
 
       switch (choice.kind) {
         case "conflict": {
+          // A resume rejected because the checkpoint head is unfinished work owned
+          // by a different (failed) operation has no answerable interrupt left:
+          // restore owner recovery for that operation instead of a dead decision.
+          const unfinishedOwner =
+            claim.kind === "decision" &&
+            view !== null &&
+            view.interrupts.length === 0 &&
+            view.next.length > 0 &&
+            typeof view.values.operationId === "string" &&
+            view.values.operationId.length > 0
+              ? view.values.operationId
+              : undefined;
           await finalizeConflict(
             deps.operationsPool,
             { operationId: claim.operationId, tripId: claim.tripId, fencingToken: claim.fencingToken },
-            { code: "STALE_DECISION", message: choice.message },
+            {
+              code: "STALE_DECISION",
+              message: choice.message,
+              ...(unfinishedOwner ? { unfinishedOperationId: unfinishedOwner } : {}),
+            },
           );
           return;
         }

@@ -16,6 +16,7 @@ import { Timeline } from "@/components/itinerary/timeline";
 import { ValidationSummary } from "@/components/itinerary/validation-summary";
 import { MapPanel } from "@/components/map/map-panel";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
+import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 
 /**
  * Itinerary page (Phase 10 section 7): chronological destination-local timeline,
@@ -93,9 +94,9 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
   }, [handleError, projection, refresh, tripId]);
 
   const chooseRecovery = useCallback(
-    async (optionId: string): Promise<void> => {
+    async (optionId: string): Promise<boolean> => {
       if (!projection?.pendingDecision) {
-        return;
+        return false;
       }
       setBusy(true);
       setActionError(undefined);
@@ -107,8 +108,10 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
           response: { action: "choose_option", optionId },
         });
         refresh();
+        return true;
       } catch (caught) {
         handleError(caught);
+        return false;
       } finally {
         setBusy(false);
       }
@@ -129,6 +132,16 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
       return <ErrorPanel message={error.message} onRetry={refresh} />;
     }
     return <StatusPanel message="Loading your itinerary…" />;
+  }
+
+  // Unfinished failed planning outranks any pending decision: it can no longer
+  // be answered, so the page must offer owner recovery instead.
+  if (projection.trip.recoveryRequired || projection.trip.workflowStatus === "failed") {
+    return (
+      <section className="flex flex-col gap-4">
+        <PlanningStoppedCard tripId={tripId} projection={projection} onRetried={refresh} />
+      </section>
+    );
   }
 
   const itinerary = projection.itinerary;
@@ -221,9 +234,10 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
       {pending?.kind === "recovery" ? (
         <RecoveryCard
           decision={pending}
+          tripId={tripId}
           busy={busy}
           error={actionError}
-          onChoose={(optionId) => void chooseRecovery(optionId)}
+          onChoose={chooseRecovery}
         />
       ) : null}
 

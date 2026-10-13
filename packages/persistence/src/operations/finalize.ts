@@ -204,6 +204,8 @@ export interface FailureSpec {
   readonly code: string;
   /** True when the automatic-claim budget is exhausted (trip requires owner recovery). */
   readonly exhausted: boolean;
+  /** Diagnostic detail stored on the operation result (never sent to events). */
+  readonly message?: string;
 }
 
 /**
@@ -223,7 +225,11 @@ export async function finalizeFailure(
         client,
         fence,
         "status = 'failed', result = $3::jsonb, completed_at = now()",
-        [JSON.stringify({ code: spec.code })],
+        [
+          JSON.stringify(
+            spec.message ? { code: spec.code, message: spec.message } : { code: spec.code },
+          ),
+        ],
       );
       if (!committed) {
         await client.query("ROLLBACK");
@@ -264,11 +270,20 @@ export async function finalizeFailure(
   }
 }
 
-/** Persist a `failed` transition for a rejected operation (no recovery flag). */
+/**
+ * Persist a `failed` transition for a rejected operation.
+ *
+ * By default the trip projection is restored for the decision the client can
+ * still answer (`waiting_user` when one is pending, else `ready`). When the call
+ * rejected a run whose graph head is unfinished work owned by a *different*
+ * operation, pass `unfinishedOperationId`: there is no answerable interrupt left,
+ * so the trip must expose the unfinished failed checkpoint for owner recovery
+ * (RECOVERY_REQUIRED) instead of presenting a decision that can never be applied.
+ */
 export async function finalizeConflict(
   pool: Pool,
   fence: FinalizeFence,
-  spec: { code: string; message: string },
+  spec: { code: string; message: string; unfinishedOperationId?: string },
 ): Promise<boolean> {
   const client = await pool.connect();
   try {
@@ -286,20 +301,31 @@ export async function finalizeConflict(
     // Restore the trip projection: a rejected operation must not leave the trip
     // stuck in `queued`. It returns to `waiting_user` when a decision is still
     // pending (the usual pre-Phase-08 case) and to `ready` otherwise (e.g. a chat
-    // command that was admitted while the trip was decision-free).
-    await client.query(
-      `UPDATE odft_app.trips
-          SET workflow_status = CASE
-                WHEN EXISTS (
-                  SELECT 1 FROM odft_app.pending_decisions
-                   WHERE trip_id = $1 AND status = 'pending'
-                ) THEN 'waiting_user'
-                ELSE 'ready'
-              END,
-              updated_at = now()
-        WHERE id = $1`,
-      [fence.tripId],
-    );
+    // command that was admitted while the trip was decision-free). An unfinished
+    // failed checkpoint instead exposes owner recovery for its owning operation.
+    if (spec.unfinishedOperationId) {
+      await client.query(
+        `UPDATE odft_app.trips
+            SET recovery_required = true, workflow_status = 'failed',
+                last_unfinished_operation_id = $2, updated_at = now()
+          WHERE id = $1`,
+        [fence.tripId, spec.unfinishedOperationId],
+      );
+    } else {
+      await client.query(
+        `UPDATE odft_app.trips
+            SET workflow_status = CASE
+                  WHEN EXISTS (
+                    SELECT 1 FROM odft_app.pending_decisions
+                     WHERE trip_id = $1 AND status = 'pending'
+                  ) THEN 'waiting_user'
+                  ELSE 'ready'
+                END,
+                updated_at = now()
+          WHERE id = $1`,
+        [fence.tripId],
+      );
+    }
     await insertEvent(client, {
       tripId: fence.tripId,
       operationId: fence.operationId,

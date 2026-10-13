@@ -13,7 +13,8 @@ type Queryable = Pick<PoolClient, "query">;
 const TRIP_COLUMNS =
   "id, session_id, revision, adults, origin_airport_id, destination_city_id, destination_country_key, " +
   "sightseeing_date::text AS sightseeing_date, travel_variant, preferences, active_scenario_snapshot_id, " +
-  "current_route_validation_id, current_schedule_validation_id, workflow_status, recovery_required";
+  "current_route_validation_id, current_schedule_validation_id, workflow_status, recovery_required, " +
+  "last_unfinished_operation_id";
 
 export interface TripRow {
   id: string;
@@ -31,6 +32,7 @@ export interface TripRow {
   current_schedule_validation_id: string | null;
   workflow_status: WorkflowStatus;
   recovery_required: boolean;
+  last_unfinished_operation_id: string | null;
 }
 
 export function toTripRecord(row: TripRow): TripRecord {
@@ -54,6 +56,9 @@ export function toTripRecord(row: TripRow): TripRecord {
       : {}),
     workflowStatus: row.workflow_status,
     recoveryRequired: row.recovery_required,
+    ...(row.last_unfinished_operation_id
+      ? { lastUnfinishedOperationId: row.last_unfinished_operation_id }
+      : {}),
   };
 }
 

@@ -167,6 +167,22 @@ export function tripStepStates(input: TripStepInput): readonly TripStepEntry[] {
   return steps.map((step) => ({ ...step, next: step.href === nextHref }));
 }
 
+/**
+ * The trip page a recovery option reopens (null: stay on the current page).
+ * `change_hotel`/`change_meals` reopen that step's decision; a `change_program`
+ * research failure ends the run on the affected page, so the user stays there.
+ */
+export function recoveryOptionHref(tripId: string, optionId: string): string | null {
+  switch (optionId) {
+    case "change_hotel":
+      return `/trips/${tripId}/hotel`;
+    case "change_meals":
+      return `/trips/${tripId}/meals`;
+    default:
+      return null;
+  }
+}
+
 /** Returns null once the itinerary exists and no decision is pending. */
 export function nextTripStep(input: TripStepInput): TripStep | null {
   const confirmed = new Set(

@@ -332,6 +332,75 @@ describe("itinerary assembly (Phase 10)", () => {
     expect(buffer?.provenance.join(" ")).toContain("Airport transfer ~20 min");
   });
 
+  it("trims a trailing planner free-time block to the departure deadline", () => {
+    // Free time 18:30-21:00 runs past the 20:40 buffer start (departure 23:00
+    // local - 120-minute buffer - 20-minute transfer); filler is trimmed, never
+    // reported as an airport_buffer conflict.
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60, durationMinutes: 90 },
+            { kind: "free_time", startMinute: 18 * 60 + 30, durationMinutes: 150 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues).toEqual([]);
+    const freeTime = result.events.find((event) => event.kind === "free_time");
+    expect(freeTime?.endMinute).toBe(20 * 60 + 40);
+    // The derived display fields match the trimmed end, not the planner's original.
+    expect(freeTime?.endLocal).toBe("20:40");
+    const buffer = result.events.find((event) => event.kind === "airport_buffer");
+    expect(buffer?.startMinute).toBe(20 * 60 + 40);
+  });
+
+  it("starts the buffer after a trailing planner break instead of overlapping it", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 90 },
+            { kind: "break", startMinute: 15 * 60, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues).toEqual([]);
+    const buffer = result.events.find((event) => event.kind === "airport_buffer");
+    expect(buffer?.startMinute).toBe(16 * 60);
+  });
+
+  it("drops a trailing planner filler block that starts inside the buffer window", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60, durationMinutes: 90 },
+            { kind: "free_time", startMinute: 20 * 60 + 50, durationMinutes: 60 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues).toEqual([]);
+    expect(result.events.some((event) => event.kind === "free_time")).toBe(false);
+    const buffer = result.events.find((event) => event.kind === "airport_buffer");
+    expect(buffer).toBeDefined();
+  });
+
+  it("still reports a located visit that runs into the departure buffer", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [{ kind: "activity", refId: "act-park", startMinute: 21 * 60, durationMinutes: 60 }],
+        },
+      }),
+    );
+    const bufferIssue = result.issues.find((issue) => issue.code === "airport_buffer");
+    expect(bufferIssue).toBeDefined();
+    expect(result.events.some((event) => event.kind === "airport_buffer")).toBe(false);
+  });
+
   it("labels injected corruption on every recorded issue", () => {
     const result = assembleItinerary(
       input({

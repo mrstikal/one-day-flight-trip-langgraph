@@ -481,10 +481,6 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
     .sort((a, b) => a.event.endMinute - b.event.endMinute)
     .reverse()
     .find((entry) => entry.event.location !== null);
-  const lastContentEnd =
-    contentEvents.length === 0
-      ? 0
-      : Math.max(...contentEvents.map((entry) => entry.event.endMinute));
 
   // The return leg is the actual airport transfer from the last located stop
   // (fallback: the confirmed hotel) PLUS the full 120-minute departure buffer;
@@ -505,15 +501,58 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
       : null;
   const requiredBuffer = AIRPORT_BUFFER_MINUTES + (airportTransfer?.estimatedMinutes ?? 0);
   const bufferStart = departureMinute - requiredBuffer;
-  if (sameDayReturn && contentEvents.length > 0 && lastContentEnd <= bufferStart) {
+
+  // A planner-provided filler block (a trailing break or free-time block after
+  // the last located stop) is padding, not traveler content: the live planner
+  // reliably extends the day up to the return window, which would either push the
+  // plan past the deadline (`airport_buffer`) or overlap the inserted buffer
+  // (`overlap`). Trim such blocks to the deadline and drop one that would start
+  // inside the buffer window; visits and meals are never moved.
+  const lastLocatedContentEnd = contentEvents
+    .filter((entry) => entry.event.location !== null)
+    .reduce((max, entry) => Math.max(max, entry.event.endMinute), 0);
+  for (let index = placed.length - 1; index >= 0; index -= 1) {
+    const entry = placed[index];
+    if (!entry) {
+      continue;
+    }
+    if (entry.event.kind !== "break" && entry.event.kind !== "free_time") {
+      continue;
+    }
+    if (entry.event.startMinute < lastLocatedContentEnd) {
+      continue;
+    }
+    if (entry.event.startMinute >= bufferStart) {
+      placed.splice(index, 1);
+    } else if (entry.event.endMinute > bufferStart) {
+      entry.event.endMinute = bufferStart;
+      entry.event.durationMinutes = bufferStart - entry.event.startMinute;
+      entry.event.endLocal = minutesToLocal(bufferStart);
+      entry.event.endInstant = zonedAt(input.sightseeingDate, bufferStart, input.zone)
+        .toInstant()
+        .toString();
+    }
+  }
+  const remainingContent = placed.filter(
+    (entry) => entry.event.kind === "meal" || entry.event.kind === "activity" || entry.event.kind === "free_time",
+  );
+  const lastContentEnd =
+    remainingContent.length === 0
+      ? 0
+      : Math.max(...remainingContent.map((entry) => entry.event.endMinute));
+  // The buffer block starts after the trailing filler that was kept (never on
+  // top of it), so the complete assembled timeline stays non-overlapping.
+  const tailEnd = placed.reduce((max, entry) => Math.max(max, entry.event.endMinute), 0);
+
+  if (sameDayReturn && remainingContent.length > 0 && lastContentEnd <= bufferStart) {
     const title = "Airport buffer";
     placed.push({
       event: buildEvent(input, (eventIndex += 1), {
         kind: "airport_buffer",
         title,
-        startMinute: lastContentEnd,
+        startMinute: tailEnd,
         endMinute: departureMinute,
-        durationMinutes: departureMinute - lastContentEnd,
+        durationMinutes: departureMinute - tailEnd,
         refId: null,
         activityTags: [],
         provenance: [
@@ -533,7 +572,7 @@ export function assembleItinerary(input: AssembleItineraryInput): ItineraryAssem
       anchor: null,
       routeRef: null,
     });
-  } else if (sameDayReturn && contentEvents.length > 0) {
+  } else if (sameDayReturn && remainingContent.length > 0) {
     const transferText = airportTransfer
       ? `the simulated airport transfer (~${airportTransfer.estimatedMinutes} min) plus the ${AIRPORT_BUFFER_MINUTES}-minute departure buffer`
       : `the ${AIRPORT_BUFFER_MINUTES}-minute departure buffer`;

@@ -96,13 +96,14 @@ describe("ensureTransferAllowance (Phase 10)", () => {
     expect(normalized[3]?.startMinute).toBe(12 * 60 + 35);
   });
 
-  it("never moves a meal past its fixed window", () => {
+  it("keeps a fixed meal window and pulls the earlier stop back to make room", () => {
     const stops: AllowanceStop[] = [
       {
         kind: "activity",
         refId: "walk",
         anchor: at,
         latestStartMinute: null,
+        earliestStartMinute: null,
         startMinute: 11 * 60,
         durationMinutes: 60,
       },
@@ -112,14 +113,85 @@ describe("ensureTransferAllowance (Phase 10)", () => {
         // A 60-minute lunch whose window ends at 13:15 may start no later than 12:15.
         anchor: at,
         latestStartMinute: 12 * 60 + 15,
+        earliestStartMinute: 12 * 60,
         startMinute: 12 * 60,
         durationMinutes: 60,
       },
     ];
     const normalized = allowance(stops);
-    // The needed shift (60 + 35 = 12:35) exceeds the window: the window wins and
-    // the validator reports the remaining conflict.
+    // The forward pass moves the later stop, the window clamps it back, and the
+    // backward pass pulls the activity earlier until the pair fits (20 + 15).
     expect(normalized[1]?.startMinute).toBe(12 * 60 + 15);
+    expect(normalized[0]?.startMinute).toBe(12 * 60 + 15 - (20 + MODERATE_BUFFER) - 60);
+  });
+
+  it("pulls the earlier stop back when a confirmed meal is pinned to its window", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "activity",
+        refId: "walk",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: null,
+        startMinute: 11 * 60,
+        durationMinutes: 60,
+      },
+      {
+        kind: "meal",
+        refId: "lunch",
+        // Confirmed reservation: start and window are pinned to 12:00.
+        anchor: at,
+        latestStartMinute: 12 * 60,
+        earliestStartMinute: 12 * 60,
+        startMinute: 12 * 60,
+        durationMinutes: 60,
+      },
+    ];
+    const normalized = allowance(stops);
+    expect(normalized[1]?.startMinute).toBe(12 * 60);
+    expect(normalized[0]?.startMinute).toBe(12 * 60 - (20 + MODERATE_BUFFER) - 60);
+  });
+
+  it("stops pulling when the earlier window is reached and leaves the rest to the validator", () => {
+    const far = { lat: 42.5, lon: 12.5 };
+    const stops: AllowanceStop[] = [
+      {
+        kind: "meal",
+        refId: "breakfast",
+        // Confirmed breakfast pinned to 08:00-08:45.
+        anchor: at,
+        latestStartMinute: 8 * 60,
+        earliestStartMinute: 8 * 60,
+        startMinute: 8 * 60,
+        durationMinutes: 45,
+      },
+      {
+        kind: "activity",
+        refId: "walk",
+        anchor: far,
+        latestStartMinute: null,
+        earliestStartMinute: null,
+        startMinute: 9 * 60,
+        durationMinutes: 60,
+      },
+      {
+        kind: "meal",
+        refId: "lunch",
+        // Confirmed lunch pinned to 10:30.
+        anchor: far,
+        latestStartMinute: 10 * 60 + 30,
+        earliestStartMinute: 10 * 60 + 30,
+        startMinute: 10 * 60 + 30,
+        durationMinutes: 60,
+      },
+    ];
+    const normalized = allowance(stops);
+    // The activity makes room for the lunch, then cannot move before the
+    // breakfast: the remaining breakfast pair (40 required, 10 free) stays short
+    // for the validator.
+    expect(normalized[2]?.startMinute).toBe(10 * 60 + 30);
+    expect(normalized[1]?.startMinute).toBe(8 * 60 + 55);
+    expect(normalized[0]?.startMinute).toBe(8 * 60);
   });
 
   it("keeps an already valid plan unchanged", () => {

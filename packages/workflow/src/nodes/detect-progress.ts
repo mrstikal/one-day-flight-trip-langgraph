@@ -11,6 +11,10 @@ import { travelPorts } from "../travel/runtime.js";
  * Phase 11: a targeted routing decision (`nextWork: "research"`) keeps the
  * decision kind the invalidation matrix chose instead of overriding it with the
  * generic progress-derived kind.
+ *
+ * A reselection (`apply_decision` choose_option recovery or a rejected proposal)
+ * keeps its explicit kind for the same reason: the user asked to reopen THAT
+ * step, so a confirmed hotel must not turn `change_hotel` into `program_choices`.
  */
 export async function detectProgressNode(
   state: TravelState,
@@ -18,7 +22,9 @@ export async function detectProgressNode(
 ): Promise<TravelUpdate> {
   const ports = travelPorts(runtime);
   const progress = await ports.loadProgress(state.tripId);
-  const targeted = state.nextWork === "research" && state.nextDecisionKind !== null;
+  const targeted =
+    state.nextDecisionKind !== null &&
+    (state.nextWork === "research" || state.pendingStage === "reselection");
   const nextDecisionKind = targeted
     ? state.nextDecisionKind
     : progress.flightConfirmed

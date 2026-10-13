@@ -19,6 +19,7 @@ import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
 import { ServiceLevelSelect } from "@/components/preferences/ServiceLevelSelect";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
+import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
 
 function hotelDetails(offer: PublicHotelOffer): { label: string; value: string }[] {
@@ -65,15 +66,17 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
       decisionId: string,
       revision: number,
       response: PublicDecisionResponse,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       setBusy(true);
       setActionError(undefined);
       try {
         await submitDecision({ tripId, decisionId, expectedRevision: revision, response });
         setDialogOpen(false);
         refresh();
+        return true;
       } catch (caught) {
         handleError(caught);
+        return false;
       } finally {
         setBusy(false);
       }
@@ -136,16 +139,28 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     </p>
   ) : null;
 
+  // Unfinished failed planning outranks any pending decision: it can no longer
+  // be answered, so the step must offer owner recovery instead.
+  if (projection.trip.recoveryRequired || projection.trip.workflowStatus === "failed") {
+    return (
+      <div className="flex flex-col gap-6">
+        {banner}
+        <PlanningStoppedCard tripId={tripId} projection={projection} onRetried={refresh} />
+      </div>
+    );
+  }
+
   if (pendingDecision?.kind === "recovery") {
     return (
       <div className="flex flex-col gap-6">
         {banner}
         <RecoveryCard
           decision={pendingDecision}
+          tripId={tripId}
           busy={busy}
           error={actionError}
           onChoose={(optionId) =>
-            void submitResponse(pendingDecision.id, projection.trip.revision, {
+            submitResponse(pendingDecision.id, projection.trip.revision, {
               action: "choose_option",
               optionId,
             })

@@ -1,4 +1,8 @@
+"use client";
+
+import { useRouter } from "next/navigation";
 import type { PublicPendingDecision } from "@odft/contracts";
+import { recoveryOptionHref } from "@/lib/trip-step";
 
 const OPTION_LABELS: Readonly<Record<string, string>> = {
   change_hotel: "Adjust the hotel",
@@ -12,18 +16,38 @@ const OPTION_LABELS: Readonly<Record<string, string>> = {
  * opens this instead of editing a reservation: the user re-opens the affected
  * step. The reason itself is not carried in the decision DTO (no free text), only
  * the offered recovery options.
+ *
+ * Choosing an option runs in the background, so the card navigates to the
+ * reopened step itself once the resume is accepted — otherwise the click would
+ * look like a no-op on the current page (e.g. "Adjust the hotel" on meals).
  */
 export function RecoveryCard({
   decision,
+  tripId,
   busy,
   error,
   onChoose,
 }: {
   readonly decision: PublicPendingDecision;
+  readonly tripId: string;
   readonly busy: boolean;
   readonly error: string | undefined;
-  readonly onChoose: (optionId: string) => void;
+  /** Submits the choice; resolves true only when the resume was accepted. */
+  readonly onChoose: (optionId: string) => Promise<boolean>;
 }): React.JSX.Element {
+  const router = useRouter();
+
+  async function choose(optionId: string): Promise<void> {
+    const accepted = await onChoose(optionId);
+    if (!accepted) {
+      return;
+    }
+    const href = recoveryOptionHref(tripId, optionId);
+    if (href) {
+      router.push(href);
+    }
+  }
+
   return (
     <section
       className="flex flex-col gap-3 rounded border border-clay bg-paper p-6"
@@ -48,7 +72,9 @@ export function RecoveryCard({
             key={optionId}
             type="button"
             disabled={busy}
-            onClick={() => onChoose(optionId)}
+            onClick={() => {
+              void choose(optionId);
+            }}
             className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
           >
             {OPTION_LABELS[optionId] ?? optionId}
