@@ -134,6 +134,11 @@ export const publicConversationMessageSchema = z
     role: conversationRoleSchema,
     content: z.string().min(1).max(2000),
     interpretation: publicInterpretationSchema.nullable(),
+    /**
+     * Operation link for voice eligibility. Legacy messages have `null`; it is
+     * never inferred from list position or timestamps.
+     */
+    operationId: uuidSchema.nullable(),
     createdAt: z.string().min(1),
   })
   .strict();

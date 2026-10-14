@@ -14,6 +14,7 @@ export default tseslint.config(
       "**/playwright-report/**",
       "**/test-results/**",
       "**/*.tsbuildinfo",
+      "apps/web/public/voice-vad/**",
       "docs/**",
       "data/**",
     ],

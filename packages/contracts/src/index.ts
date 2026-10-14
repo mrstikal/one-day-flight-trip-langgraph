@@ -14,5 +14,6 @@ export * from "./scenario.js";
 export * from "./projection.js";
 export * from "./itinerary.js";
 export * from "./ai.js";
+export * from "./voice.js";
 export * from "./graph-definition.js";
 export * from "./inspector.js";

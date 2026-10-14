@@ -28,6 +28,14 @@ export class AiConfigError extends Error {
   }
 }
 
+/** Thrown when a repository-relative configuration file cannot be found. */
+export class ConfigFileNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigFileNotFoundError";
+  }
+}
+
 export const ROLE_DEFAULT_LIMITS: Readonly<Record<AIRole, RoleDefaultLimits>> = {
   intent: INTENT_LIMITS,
   recommendation: RECOMMENDATION_LIMITS,
@@ -62,13 +70,14 @@ export function aiConfigRepoRoot(): string {
 }
 
 /**
- * Resolve `AI_CONFIG_PATH`. A relative path is resolved against the current
- * working directory first and then against the repository root, so the documented
- * `./ai-profiles.json` works both for a root script and for the worker started via
- * its workspace (`npm run dev` runs it from `apps/worker`).
+ * Resolve a configuration file path against the current working directory first
+ * and then against the repository root, so the documented relative paths work
+ * both for a root script and for a process started via a workspace
+ * (`npm run dev` starts the web app and worker from their own directories).
  */
-export function resolveAiConfigPath(
+export function resolveRepoConfigPath(
   configPath: string,
+  label: string,
   exists: (candidate: string) => boolean = existsSync,
 ): string {
   if (isAbsolute(configPath)) {
@@ -82,9 +91,27 @@ export function resolveAiConfigPath(
   if (exists(fromRoot)) {
     return fromRoot;
   }
-  throw new AiConfigError([
-    `AI_CONFIG_PATH ${configPath} was not found (tried ${fromCwd} and ${fromRoot})`,
-  ]);
+  throw new ConfigFileNotFoundError(
+    `${label} ${configPath} was not found (tried ${fromCwd} and ${fromRoot})`,
+  );
+}
+
+/**
+ * Resolve `AI_CONFIG_PATH` (same repository-root rule as `resolveRepoConfigPath`,
+ * reported as an AI configuration error for the role-profile loader).
+ */
+export function resolveAiConfigPath(
+  configPath: string,
+  exists: (candidate: string) => boolean = existsSync,
+): string {
+  try {
+    return resolveRepoConfigPath(configPath, "AI_CONFIG_PATH", exists);
+  } catch (error) {
+    if (error instanceof ConfigFileNotFoundError) {
+      throw new AiConfigError([error.message]);
+    }
+    throw error;
+  }
 }
 
 export interface LoadRoleProfilesOptions {

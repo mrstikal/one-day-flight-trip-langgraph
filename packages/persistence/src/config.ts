@@ -33,6 +33,12 @@ export interface ServerConfig {
   readonly workerConcurrency: number;
   /** Trust `X-Forwarded-For`/`X-Real-IP` for client IP (only behind a known proxy). */
   readonly trustProxy: boolean;
+  /** Voice control is opt-in and off by default (VOICE_CONTROLL.md section 6). */
+  readonly voiceEnabled: boolean;
+  /** Operator voice profile file; required by live voice, never by other routes. */
+  readonly voiceConfigPath: string | undefined;
+  /** Dedicated STT key; never the shared `OPENROUTER_API_KEY` (section 5). */
+  readonly openrouterSttApiKey: string | undefined;
 }
 
 /** Configuration error whose message never contains secret values. */
@@ -81,6 +87,9 @@ const rawSchema = z
     MAP_TILE_URL: z.string().min(1).optional(),
     WORKER_CONCURRENCY: intEnv(1, 16, 2),
     TRUST_PROXY: booleanString.optional(),
+    VOICE_ENABLED: z.preprocess(emptyToUndefined, booleanString.optional()),
+    VOICE_CONFIG_PATH: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+    OPENROUTER_STT_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   })
   .superRefine((value, ctx) => {
     if (value.AI_MODE === "openrouter" && !value.OPENROUTER_API_KEY) {
@@ -165,5 +174,50 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
     mapTileUrl: raw.MAP_TILE_URL,
     workerConcurrency: raw.WORKER_CONCURRENCY,
     trustProxy: raw.TRUST_PROXY ?? false,
+    voiceEnabled: raw.VOICE_ENABLED ?? false,
+    voiceConfigPath: raw.VOICE_CONFIG_PATH,
+    openrouterSttApiKey: raw.OPENROUTER_STT_API_KEY,
   };
+}
+
+/**
+ * Resolved voice runtime state (VOICE_CONTROLL.md section 6).
+ *
+ * `disabled`: voice is off; `fixture`: enabled but credential-free and fully
+ * offline; `live`: every live prerequisite is present; `incomplete`: voice is
+ * enabled in openrouter mode but a required value is missing. Parsing the
+ * environment never fails because of voice, so unrelated BFF routes keep
+ * working; the server-only voice service maps `incomplete` to a voice-specific
+ * 503 (`VOICE_NOT_CONFIGURED`).
+ */
+export type VoiceRuntimeConfig =
+  | { readonly status: "disabled" }
+  | { readonly status: "fixture" }
+  | { readonly status: "live"; readonly configPath: string; readonly sttApiKey: string }
+  | { readonly status: "incomplete"; readonly issues: readonly string[] };
+
+export function resolveVoiceRuntimeConfig(config: ServerConfig): VoiceRuntimeConfig {
+  if (!config.voiceEnabled) {
+    return { status: "disabled" };
+  }
+  if (config.aiMode === "fixture") {
+    return { status: "fixture" };
+  }
+  if (config.voiceConfigPath && config.openrouterSttApiKey) {
+    return {
+      status: "live",
+      configPath: config.voiceConfigPath,
+      sttApiKey: config.openrouterSttApiKey,
+    };
+  }
+  const issues: string[] = [];
+  if (!config.voiceConfigPath) {
+    issues.push("VOICE_CONFIG_PATH is required when VOICE_ENABLED=true and AI_MODE=openrouter");
+  }
+  if (!config.openrouterSttApiKey) {
+    issues.push(
+      "OPENROUTER_STT_API_KEY is required for live speech-to-text; the shared OPENROUTER_API_KEY is not a substitute",
+    );
+  }
+  return { status: "incomplete", issues };
 }

@@ -900,6 +900,7 @@ export async function buildTripProjection(
       role: message.role,
       content: message.content,
       interpretation: parsedInterpretation?.success ? parsedInterpretation.data : null,
+      operationId: message.operationId,
       createdAt: message.createdAt,
     };
   });

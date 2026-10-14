@@ -15,8 +15,10 @@ export {
 export {
   aiConfigRepoRoot,
   AiConfigError,
+  ConfigFileNotFoundError,
   loadRoleProfiles,
   resolveAiConfigPath,
+  resolveRepoConfigPath,
   ROLE_DEFAULT_LIMITS,
   stampPricingVersion,
   type LoadedAiConfig,

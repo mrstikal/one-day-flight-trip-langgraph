@@ -25,6 +25,13 @@ test-results/
 /ai-profiles.json
 /ai-profiles*.capabilities.json
 
+# Operator voice profiles (speech models, limits) and their verified cache
+/voice-profiles.json
+/voice-profiles*.capabilities.json
+
+# Generated same-origin VAD assets (copied from pinned packages at dev/build)
+/apps/web/public/voice-vad/
+
 # Import cache (upstream downloads; never committed)
 .cache/
 /apps/web/next-env.d.ts

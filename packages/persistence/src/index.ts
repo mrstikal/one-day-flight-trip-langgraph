@@ -1,7 +1,7 @@
 export const PACKAGE_ID = "@odft/persistence" as const;
 
-export { ConfigError, parseServerConfig } from "./config.js";
-export type { AiMode, ServerConfig } from "./config.js";
+export { ConfigError, parseServerConfig, resolveVoiceRuntimeConfig } from "./config.js";
+export type { AiMode, ServerConfig, VoiceRuntimeConfig } from "./config.js";
 
 export { contentHash } from "./hash.js";
 
