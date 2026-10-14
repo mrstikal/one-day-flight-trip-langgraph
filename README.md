@@ -195,6 +195,7 @@ for the full list. Key values:
 | `PUBLIC_BASE_URL` | Exact origin used by cookie/CSRF checks |
 | `SESSION_HMAC_KEY` | Required random server secret (>= 32 chars) |
 | `DEMO_CONTROLS_ENABLED` | `true` enables the Inspector and protected simulation controls for owned trips in a local/demo deployment |
+| `WIKIDATA_DISCOVERY` | Optional (`true`): on the first trip to a city without reviewed landmarks, curate its notable attractions from Wikidata once and store them in the reference tables (see "Reference landmarks"); default off, tests never fetch |
 | `AI_MODE` | `fixture` (default, no credentials) or `openrouter` |
 | `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
 | `AI_CONFIG_PATH` | Required only in OpenRouter mode; path to the role-profile JSON file (see below) |
@@ -203,6 +204,22 @@ for the full list. Key values:
 
 Secrets stay on the server. They are never placed in `NEXT_PUBLIC_*` and never sent to the browser;
 `npm run build` scans the client bundle to confirm this.
+
+## Reference landmarks
+
+City coverage is imported offline and stays reproducible: `data/reference/*.ndjson` pins the reviewed
+landmark set (Rome, Paris, Barcelona) and leaves every other city `generic_only`, where the generator offers
+only explicitly synthetic activity categories (`Approximate city-center walk`, `Demo relaxation break`,
+`Unspecified local exploration`) instead of inventing real venues.
+
+With `WIKIDATA_DISCOVERY=true` the worker curates such a city on demand before the scenario snapshot fixes its
+`isCurated`: it fetches the city's notable attractions from Wikidata (CC0; instance-of attraction classes
+ordered by sitelink count, coordinates envelope-checked, English labels), stores them as `wikidata:Q…` rows in
+`odft_app.reference_landmarks` and flips the city to `curated_landmarks`, so every later trip reuses the stored
+rows with no further lookup (the first creation takes a few seconds longer). An empty result marks the city
+`insufficient_reference` and is not retried; a failed lookup leaves `generic_only` so the next trip retries,
+and it never fails a trip. Already-materialized snapshots keep their activities. Restaurant businesses are
+synthetic in every city; only landmark identity/coordinates come from reference data.
 
 ## Map tiles
 

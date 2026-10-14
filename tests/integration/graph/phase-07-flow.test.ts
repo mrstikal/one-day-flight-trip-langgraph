@@ -245,7 +245,8 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
     expect(trip.rows[0]?.workflow_status).toBe("ready");
 
     // A preference change after booking must resume at the relevant step, not
-    // restart the flight flow.
+    // restart the flight flow: with an applied program a pace change replans
+    // directly into a fresh itinerary approval (2026-10-13 product decision).
     const revisionRow = await pool.query<{ revision: number }>(
       `SELECT revision FROM odft_app.trips WHERE id = $1`,
       [tripId],
@@ -262,6 +263,6 @@ describe("travel graph phase 07 (real PostgreSQL)", () => {
     expect("operationId" in paced).toBe(true);
     await driver.runOperation(await claimNextOrFail(pools));
     const reDerived = await getPendingDecisionForTrip(pools.operations, tripId);
-    expect(reDerived?.kind).toBe("program_choices");
+    expect(reDerived?.kind).toBe("itinerary_approval");
   }, 90_000);
 });

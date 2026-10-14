@@ -67,6 +67,12 @@ export const plannerContextSchema = z
     pace: activityPaceSchema,
     interests: tripPreferencesSchema.shape.interests,
     minimumActivityCounts: tripPreferencesSchema.shape.minimumActivityCounts,
+    /**
+     * Explicitly pinned activity IDs (2026-10-14): visits are OPT-IN — the
+     * planner plans exactly these plus whatever satisfies the tag minimums and
+     * never adds any other visit.
+     */
+    preferredActivityIds: z.array(nonEmptyStringSchema).max(30).default(() => []),
     budgetMinor: moneyMinorSchema.nullable(),
     fixedWindows: z.array(fixedWindowSchema).max(24),
     candidates: z.array(plannerCandidateSchema).max(60),

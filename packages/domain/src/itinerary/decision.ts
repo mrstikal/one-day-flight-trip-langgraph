@@ -189,6 +189,60 @@ export function buildItineraryConflictDecision(
     };
   }
 
+  // A PACKING exhaustion (the planner cannot fit the chosen visits around the
+  // fixed meal windows, transfers, and opening hours) is not fixable by
+  // re-opening the program: offer a denser pace when one exists, a bounded
+  // reduction of the stored tag minimum the plan actually met, and the manual
+  // review path — otherwise the bound fell back to a recovery card whose
+  // change_meals/change_hotel options cannot free any room (2026-10-14 loop).
+  const packingCodes: readonly ItineraryIssue["code"][] = [
+    "transfer_gap",
+    "overlap",
+    "airport_buffer",
+    "opening_hours_mismatch",
+  ];
+  if (packingCodes.some((code) => errorCodes.has(code))) {
+    const denser = DENSER_PACE[input.pace];
+    const packingOptions: ItineraryConflictOption[] = [];
+    if (denser) {
+      packingOptions.push({
+        id: `denser_pace_${denser}`,
+        label: `Replan at a ${denser} pace (shorter meals and transfer buffers)`,
+        commands: [{ type: "set_activity_pace", pace: denser }, { type: "build_itinerary" }],
+      });
+    }
+    const reducible = minimumEntries.find(
+      ([tag, minimum]) =>
+        (minimum ?? 0) > 1 && (input.metrics.activityTagCounts[tag] ?? 0) >= (minimum ?? 0),
+    );
+    if (reducible) {
+      const [tag, minimum] = reducible;
+      packingOptions.push({
+        id: `reduce_${tag}`,
+        label: `Reduce the minimum ${tag} visits to ${(minimum ?? 2) - 1}`,
+        commands: [
+          { type: "set_activity_requirement", tag, minimumCount: (minimum ?? 2) - 1 },
+          { type: "build_itinerary" },
+        ],
+      });
+    }
+    packingOptions.push({
+      id: "review_program",
+      label: "Keep my request and review the meals and activities to free up time",
+      commands: [],
+    });
+    if (packingOptions.length >= 2) {
+      return {
+        kind: "clarification",
+        question:
+          "The day cannot fit these visits around the fixed meal times — transfers and opening windows leave too little room. Nothing was moved automatically; how should I proceed?",
+        options: packingOptions,
+        recoveryOptionIds: [],
+        requestedCommands: [],
+      };
+    }
+  }
+
   return {
     kind: "recovery",
     question: null,

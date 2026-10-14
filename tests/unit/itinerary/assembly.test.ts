@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assembleItinerary,
+  proposedStopWindow,
   type AssembleItineraryInput,
   type ItineraryRouteLeg,
 } from "../../../packages/domain/src/itinerary/assemble.js";
@@ -417,5 +418,88 @@ describe("itinerary assembly (Phase 10)", () => {
     for (const issue of result.issues) {
       expect(issue.simulatedFailure).toBe(true);
     }
+  });
+});
+
+describe("proposedStopWindow (assembly/normalization geometry contract)", () => {
+  const fixture = input();
+  const window = (
+    stop: { kind: string; refId: string | null; startMinute: number; durationMinutes: number },
+    options: { confirmed?: readonly string[]; pace?: "relaxed" } = {},
+  ) =>
+    proposedStopWindow({
+      stop: stop as never,
+      meals: fixture.meals,
+      activities: fixture.activities,
+      confirmedMealIds: options.confirmed ?? [],
+      pace: options.pace ?? "relaxed",
+    });
+
+  it("pins a confirmed meal to the offer's window start and fixed duration", () => {
+    // The planner proposes 13:00 for 30 minutes; the reservation runs 12:00 + 90.
+    const measured = window(
+      { kind: "meal", refId: "meal-lunch", startMinute: 13 * 60, durationMinutes: 30 },
+      { confirmed: ["meal-lunch"] },
+    );
+    expect(measured.startMinute).toBe(12 * 60);
+    expect(measured.durationMinutes).toBe(90);
+    expect(measured.earliestStartMinute).toBe(12 * 60);
+    expect(measured.latestStartMinute).toBe(12 * 60);
+  });
+
+  it("uses the pace duration and clamps an unbooked meal into its window", () => {
+    const measured = window({ kind: "meal", refId: "meal-dinner", startMinute: 10 * 60, durationMinutes: 45 });
+    // Relaxed dinner is 120 minutes: 10:00 clamps to the 18:30 window start.
+    expect(measured.durationMinutes).toBe(120);
+    expect(measured.startMinute).toBe(18 * 60 + 30);
+    expect(measured.earliestStartMinute).toBe(18 * 60 + 30);
+    expect(measured.latestStartMinute).toBe(20 * 60 + 30);
+  });
+
+  it("uses the candidate's fixed duration for an activity, never the proposal", () => {
+    const measured = window({ kind: "activity", refId: "act-museum", startMinute: 9 * 60, durationMinutes: 45 });
+    expect(measured.durationMinutes).toBe(90);
+    expect(measured.startMinute).toBe(9 * 60);
+    expect(measured.anchor).not.toBeNull();
+  });
+
+  it("caps a filler block at 180 minutes and reports no window", () => {
+    const measured = window({ kind: "free_time", refId: null, startMinute: 9 * 60, durationMinutes: 300 });
+    expect(measured.durationMinutes).toBe(180);
+    expect(measured.anchor).toBeNull();
+    expect(measured.latestStartMinute).toBeNull();
+  });
+});
+
+describe("activity opening-window clamping (2026-10-14)", () => {
+  it("clamps a proposed visit up to its simulated opening window", () => {
+    // The live planner starts the museum right after breakfast although it opens
+    // at 09:00; the resolver clamps it instead of failing opening_hours_mismatch.
+    const measured = proposedStopWindow({
+      stop: { kind: "activity", refId: "act-museum", startMinute: 8 * 60 + 30, durationMinutes: 90 } as never,
+      meals: input().meals,
+      activities: input().activities,
+      confirmedMealIds: [],
+      pace: "relaxed",
+    });
+    expect(measured.startMinute).toBe(9 * 60);
+    expect(measured.earliestStartMinute).toBe(9 * 60);
+    expect(measured.durationMinutes).toBe(90);
+  });
+
+  it("assembles an early museum at its opening minute without issues", () => {
+    const result = assembleItinerary(
+      input({
+        proposal: {
+          stops: [
+            { kind: "activity", refId: "act-museum", startMinute: 8 * 60 + 30, durationMinutes: 90 },
+            { kind: "meal", refId: "meal-lunch", startMinute: 12 * 60, durationMinutes: 90 },
+          ],
+        },
+      }),
+    );
+    expect(result.issues).toEqual([]);
+    const museum = result.events.find((event) => event.refId === "act-museum");
+    expect(museum?.startMinute).toBe(9 * 60);
   });
 });

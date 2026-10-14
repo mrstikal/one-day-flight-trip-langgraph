@@ -199,7 +199,7 @@ export const TRAVEL_GRAPH_EDGE_GROUPS: readonly TravelGraphEdgeGroup[] = [
   {
     from: "rank_recommendations",
     conditional: true,
-    targets: ["prepare_decision", "publish_summary"],
+    targets: ["prepare_decision", "plan_itinerary", "publish_summary"],
     label: "decision target?",
   },
   {

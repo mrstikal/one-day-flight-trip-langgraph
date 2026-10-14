@@ -16,7 +16,7 @@ export default async function TripLayout({
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="min-w-0">{children}</div>
-      <div className="flex flex-col gap-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-6rem)]">
+      <div className="flex flex-col gap-4 lg:sticky lg:top-6">
         <StepNav tripId={id} />
         <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
           <ConversationRail tripId={id} />

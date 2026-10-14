@@ -165,17 +165,46 @@ export function resolveInvalidation(
       // R for inherited services only; an explicit override keeps its category.
       return progressDecision();
     case "activity_pace":
-      // Reuse the inventory; the program/planning step rebuilds the itinerary.
-      return {
-        ...progressDecision(),
-        itineraryAction: "propose",
-      };
+      // Reuse the candidate inventory; an APPLIED program stays authoritative
+      // (pace only changes durations, not the chosen meals/activities), so the
+      // itinerary is rebuilt directly instead of asking the user to re-confirm
+      // the program (2026-10-13). Before a program exists the step still
+      // re-derives through progress.
+      return refs.programApplied
+        ? {
+            affectedDomains,
+            preservedDomains,
+            itineraryAction: "propose",
+            requiresConfirmation: false,
+            routeChange: false,
+            nextDecisionKind: null,
+            progressDecision: false,
+          }
+        : {
+            ...progressDecision(),
+            itineraryAction: "propose",
+          };
     case "interests":
     case "activity_requirement":
-      return {
-        ...progressDecision(),
-        itineraryAction: "propose",
-      };
+      // With an APPLIED program the activity preferences stay authoritative: the
+      // affected attractions are refreshed and the itinerary is rebuilt directly
+      // (research then plan) instead of asking the user to re-confirm the
+      // program (2026-10-14, product decision). Before a program exists the step
+      // still re-derives through progress.
+      return refs.programApplied
+        ? {
+            affectedDomains,
+            preservedDomains,
+            itineraryAction: "propose",
+            requiresConfirmation: false,
+            routeChange: false,
+            nextDecisionKind: null,
+            progressDecision: false,
+          }
+        : {
+            ...progressDecision(),
+            itineraryAction: "propose",
+          };
     case "budget":
       return {
         ...progressDecision(),

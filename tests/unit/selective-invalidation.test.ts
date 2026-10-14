@@ -196,13 +196,60 @@ describe("command routing (Phase 11)", () => {
     ]);
   });
 
+  it("replans directly for a pace change once a program is applied (no re-confirmation)", () => {
+    const routed = resolveCommandRouting({
+      commands: [{ type: "set_activity_pace", pace: "relaxed" }],
+      refs: refsFor,
+    });
+    expect(routed.nextWork).toBe("plan");
+    expect(routed.resolution.progressDecision).toBe(false);
+    expect(routed.resolution.itineraryAction).toBe("propose");
+    // Before a program exists the step still re-derives through progress.
+    const beforeProgram = resolveCommandRouting({
+      commands: [{ type: "set_activity_pace", pace: "relaxed" }],
+      refs: routingRefs({
+        preferences: { defaultServiceLevel: "standard", serviceOverrides: {} },
+        confirmedServices: ["flights", "hotel"],
+        selectedServices: [],
+        hasConfirmedFlight: true,
+        programApplied: false,
+      }),
+    });
+    expect(beforeProgram.nextWork).toBe("progress");
+    expect(beforeProgram.resolution.progressDecision).toBe(true);
+  });
+
+  it("refreshes attractions and replans directly for interests/requirements once a program is applied", () => {
+    const commands: DomainCommand[] = [
+      {
+        type: "set_interests",
+        interests: { culture: 1, relaxation: 1, entertainment: 1 },
+        preferredTags: [],
+      },
+      { type: "set_activity_requirement", tag: "museum", minimumCount: 2 },
+    ];
+    for (const command of commands) {
+      const routed = resolveCommandRouting({ commands: [command], refs: refsFor });
+      expect(routed.nextWork).toBe("research");
+      expect(routed.resolution.affectedDomains).toEqual(["attractions"]);
+      expect(routed.resolution.itineraryAction).toBe("propose");
+      expect(routed.resolution.progressDecision).toBe(false);
+      // Without an applied program the step still re-derives through progress.
+      const beforeProgram = resolveCommandRouting({
+        commands: [command],
+        refs: routingRefs({
+          preferences: { defaultServiceLevel: "standard", serviceOverrides: {} },
+          confirmedServices: ["flights", "hotel"],
+          selectedServices: [],
+          hasConfirmedFlight: true,
+          programApplied: false,
+        }),
+      });
+      expect(beforeProgram.nextWork).toBe("progress");
+    }
+  });
+
   it("routes preference changes through progress detection and searches to research", () => {
-    expect(
-      resolveCommandRouting({
-        commands: [{ type: "set_activity_pace", pace: "relaxed" }],
-        refs: refsFor,
-      }).nextWork,
-    ).toBe("progress");
     expect(
       resolveCommandRouting({
         commands: [{ type: "set_service_override", service: "dinner", level: "luxury" }],
@@ -261,7 +308,7 @@ describe("graph definition registry (Phase 11)", () => {
       expect(known.has(edge.from)).toBe(true);
       expect(known.has(edge.to)).toBe(true);
     }
-    expect(parsed.graphVersion).toBe("travel-graph-v5");
+    expect(parsed.graphVersion).toBe("travel-graph-v6");
   });
 
   it("declares exactly one edge group per routing node", () => {

@@ -20,11 +20,17 @@ export function ActivityCard({
   activity,
   selected,
   disabled,
+  planned,
+  plannedSlot,
   onToggle,
 }: {
   readonly activity: PublicActivityChoice;
   readonly selected: boolean;
   readonly disabled: boolean;
+  /** The current plan already contains this activity (planner pick or pin). */
+  readonly planned?: boolean;
+  /** Local time slot of the planned visit, e.g. `09:00–10:50`. */
+  readonly plannedSlot?: string;
   readonly onToggle: () => void;
 }): React.JSX.Element {
   return (
@@ -49,8 +55,23 @@ export function ActivityCard({
             </span>
           </span>
         </label>
-        <span className="rounded border border-border px-2 py-0.5 text-xs text-ink-muted">
-          {activity.reference ? "geographic reference" : "demo activity"}
+        <span className="flex flex-col items-end gap-1">
+          <span className="rounded border border-border px-2 py-0.5 text-xs text-ink-muted">
+            {activity.reference ? "geographic reference" : "demo activity"}
+          </span>
+          {planned ? (
+            <span
+              data-testid="activity-planned-badge"
+              className={
+                selected
+                  ? "rounded border border-teal px-2 py-0.5 text-xs text-teal"
+                  : "rounded border border-border px-2 py-0.5 text-xs text-ink-muted"
+              }
+            >
+              {selected ? "Pinned by you" : "Planner pick"}
+              {plannedSlot ? ` · ${plannedSlot}` : ""}
+            </span>
+          ) : null}
         </span>
       </div>
       <ProvenanceLabel labels={activity.demoLabels} />

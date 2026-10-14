@@ -85,6 +85,7 @@ function baseInput(overrides: Partial<ValidateItineraryInput> = {}): ValidateIti
     walkingKm: 2.4,
     pace: "relaxed",
     minimumActivityCounts: { museum: 1 },
+    preferredActivityIds: [],
     budgetMinor: null,
     dinnerExcludedReason: null,
     dinnerSelected: true,
@@ -97,6 +98,7 @@ function baseInput(overrides: Partial<ValidateItineraryInput> = {}): ValidateIti
       destinationCityId: "rome",
       pace: "relaxed",
       minimumActivityCounts: { museum: 1 },
+      preferredActivityIds: [],
       budgetMinor: null,
       mealSelectionIds: { breakfast: "m-b", lunch: "m-l", dinner: "m-d" },
       confirmedMealIds: ["m-l"],
@@ -144,7 +146,7 @@ describe("itinerary validator taxonomy (Phase 10 section 4)", () => {
     }
   });
 
-  it("blocks a plan whose meal/visit content spans less than seven hours", () => {
+  it("warns, never blocks, when meal/visit content spans less than seven hours", () => {
     const events = [
       event({ kind: "meal", refId: "m-b", title: "Breakfast", startMinute: 8 * 60, durationMinutes: 60 }),
       event({ kind: "activity", refId: "a-1", title: "Museum", activityTags: ["museum"], startMinute: 9 * 60, durationMinutes: 60 }),
@@ -152,15 +154,29 @@ describe("itinerary validator taxonomy (Phase 10 section 4)", () => {
       event({ kind: "meal", refId: "m-l", title: "Lunch", startMinute: 11 * 60, durationMinutes: 60 }),
       event({ kind: "meal", refId: "m-d", title: "Dinner", startMinute: 18 * 60, durationMinutes: 60 }),
     ];
-    // 08:00-12:00 content only; dinner at 18:00 pushes the span over seven hours,
-    // so remove dinner to prove the threshold.
+    // 08:00-12:00 content only; dinner at 18:00 pushes the span over seven
+    // hours, so remove dinner to prove the threshold. The span is a GUIDELINE
+    // since visits became opt-in (2026-10-14): warning, never an error.
     const withoutDinner = events.slice(0, 4);
-    expect(codes(baseInput({ events: withoutDinner, dinnerSelected: false, dinnerExcludedReason: null }))).toContain(
-      "insufficient_sightseeing",
+    const short = validateItinerary(
+      baseInput({
+        events: withoutDinner,
+        dinnerSelected: false,
+        dinnerExcludedReason: "Not included - return flight too early.",
+      }),
     );
-    expect(codes(baseInput({ events, dinnerSelected: true }))).not.toContain(
-      "insufficient_sightseeing",
-    );
+    expect(short.status).toBe("valid");
+    expect(short.warnings.map((entry) => entry.code)).toContain("insufficient_sightseeing");
+    expect(short.errors.map((entry) => entry.code)).not.toContain("insufficient_sightseeing");
+    const long = validateItinerary(baseInput({ events, dinnerSelected: true }));
+    expect(long.warnings.map((entry) => entry.code)).not.toContain("insufficient_sightseeing");
+  });
+
+  it("accepts a plan with no visits at all (visits are opt-in)", () => {
+    const mealsOnly = validDay().filter((entry) => entry.kind !== "activity");
+    const result = validateItinerary(baseInput({ events: mealsOnly, minimumActivityCounts: {} }));
+    expect(result.errors.map((entry) => entry.code)).not.toContain("insufficient_sightseeing");
+    expect(result.status).toBe("valid");
   });
 
   it("blocks missing required meals and missing breaks", () => {
@@ -195,11 +211,12 @@ describe("itinerary validator taxonomy (Phase 10 section 4)", () => {
     const selfArranged = validDay().filter(
       (entry) => entry.refId !== "m-b" && entry.kind !== "activity",
     );
-    // Without the explicit state both the missing breakfast and the missing
-    // sightseeing are errors; the state suppresses them.
+    // Without the explicit state the missing breakfast is still an error, while
+    // the missing visits are fine by default (visits are opt-in since
+    // 2026-10-14): only the breakfast blocks.
     const asErrors = codes(baseInput({ events: selfArranged }));
     expect(asErrors).toContain("missing_required_meal");
-    expect(asErrors).toContain("insufficient_sightseeing");
+    expect(asErrors).not.toContain("insufficient_sightseeing");
 
     const result = validateItinerary(
       baseInput({

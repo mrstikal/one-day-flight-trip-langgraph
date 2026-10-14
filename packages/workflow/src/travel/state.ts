@@ -28,7 +28,7 @@ import { researchResultsValue } from "../state/research-reducer.js";
  */
 
 export const TRAVEL_SCHEMA_VERSION = "travel-state-v5";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v5";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v6";
 
 export const travelGateSchema = z.enum([
   "pending",

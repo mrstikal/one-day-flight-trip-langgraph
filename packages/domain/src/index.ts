@@ -21,3 +21,4 @@ export * from "./itinerary/assemble.js";
 export * from "./itinerary/validate.js";
 export * from "./itinerary/decision.js";
 export * from "./itinerary/transfer-allowance.js";
+export * from "./itinerary/visit-budget.js";

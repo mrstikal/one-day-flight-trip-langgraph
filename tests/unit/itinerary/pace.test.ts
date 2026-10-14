@@ -81,16 +81,26 @@ describe("pace profiles (08-frontend-ux.md section 7)", () => {
     });
   });
 
-  it("keeps the fixture planner inside every pace visit cap", () => {
+  it("plans only requested visits: the pinned IDs plus the tag minimums", () => {
     for (const pace of ["relaxed", "moderate", "intensive"] as const) {
-      const output = fixturePlanner(context(pace));
+      // Visits are opt-in (2026-10-14): the default context asks for one museum
+      // and pins nothing, so exactly that minimum is planned — never a filler.
+      const bare = fixturePlanner(context(pace));
+      const bareActivities = bare.stops.filter((stop) => stop.kind === "activity");
+      expect(bareActivities).toHaveLength(1);
+      expect(bareActivities[0]?.refId).toMatch(/^a-0[0-9]$/);
+      expect(bare.stops.some((stop) => stop.kind === "meal")).toBe(true);
+
+      // Pinning two parks adds exactly those two on top of the museum minimum.
+      const pinned = context(pace);
+      pinned.preferredActivityIds = ["a-01", "a-03"];
+      const output = fixturePlanner(pinned);
       const totals = plannerTotals(output.stops);
-      // Targets are guidelines (the validator warns, never blocks); the hard
-      // pace bound is the visit-time cap.
-      expect(totals.activityCount).toBeGreaterThanOrEqual(2);
-      expect(totals.activityCount).toBeLessThanOrEqual(PACE_PROFILES[pace].targetMax);
+      expect(totals.activityCount).toBe(3);
+      expect(output.stops.filter((stop) => stop.kind === "activity").map((stop) => stop.refId)).toEqual(
+        expect.arrayContaining(["a-01", "a-03"]),
+      );
       expect(totals.visitMinutes).toBeLessThanOrEqual(PACE_PROFILES[pace].visitCapMinutes);
-      expect(output.stops.some((stop) => stop.kind === "meal")).toBe(true);
     }
   });
 
@@ -98,8 +108,10 @@ describe("pace profiles (08-frontend-ux.md section 7)", () => {
     const feedback = [
       "transfer_gap: The simulated walking transfer after Colosseum needs about 28 minutes but only 37 are left.",
     ];
-    const base = fixturePlanner(context("moderate"));
-    const adapted = fixturePlanner({ ...context("moderate"), validationFeedback: feedback });
+    const pinned = context("moderate");
+    pinned.preferredActivityIds = ["a-00", "a-02"];
+    const base = fixturePlanner(pinned);
+    const adapted = fixturePlanner({ ...pinned, validationFeedback: feedback });
     const maxActivityGap = (
       stops: { kind: string; startMinute: number; durationMinutes: number }[],
     ): number => {
@@ -132,20 +144,22 @@ describe("pace profiles (08-frontend-ux.md section 7)", () => {
     expect(museums.length).toBeLessThan(6);
   });
 
-  it("preserves the preference-first candidate order instead of re-sorting by id", () => {
+  it("keeps the context's preference-first order for pinned visits instead of sorting by id", () => {
     const preferred = context("relaxed");
     preferred.minimumActivityCounts = {};
-    // The worker puts explicitly preferred activities first; the fixture must
-    // keep that order (it must not sort by id).
     const activities = preferred.candidates.filter((candidate) => candidate.kind === "activity");
+    // The worker puts explicitly preferred activities first; deliver them in
+    // reverse and pin a-06 + a-00: the context order (a-06 before a-00) must win
+    // over an id sort.
     const reordered = activities.slice().reverse();
     preferred.candidates = [
       ...preferred.candidates.filter((candidate) => candidate.kind !== "activity"),
       ...reordered,
     ];
+    preferred.preferredActivityIds = ["a-00", "a-06"];
     const output = fixturePlanner(preferred);
     const firstActivity = output.stops.find((stop) => stop.kind === "activity");
-    expect(firstActivity?.refId).toBe(reordered[0]?.id);
+    expect(firstActivity?.refId).toBe("a-06");
   });
 
   it("does not double-count walking in the fixture review travel total", () => {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { nonEmptyStringSchema } from "@odft/contracts";
 import { plannerContextSchema } from "../context/role-contexts.js";
-import { PLANNER_PROMPT_VERSION, PLANNER_SYSTEM_PROMPT } from "../prompts/planner-v1.js";
+import { PLANNER_PROMPT_VERSION, PLANNER_SYSTEM_PROMPT } from "../prompts/planner-v2.js";
 import type { RoleDefaultLimits } from "./limits.js";
 
 /** Planner role contract (06-ai-agent-design.md section 5). */

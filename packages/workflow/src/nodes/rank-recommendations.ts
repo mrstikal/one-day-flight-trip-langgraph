@@ -89,5 +89,13 @@ export function routeAfterRank(state: TravelState): string {
   ) {
     return "prepare_decision";
   }
+  // A preference batch that refreshed a domain but selected no decision continues
+  // into a fresh plan: with an applied program (e.g. an activity requirement
+  // change) the itinerary is rebuilt without re-opening the program step
+  // (2026-10-14). This is the only way `nextWork` can be `research` with no
+  // decision kind — targeted searches always carry theirs and are handled above.
+  if (state.nextWork === "research") {
+    return "plan_itinerary";
+  }
   return "publish_summary";
 }

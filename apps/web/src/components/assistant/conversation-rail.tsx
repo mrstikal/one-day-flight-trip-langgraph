@@ -195,7 +195,7 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     <aside
       data-testid="assistant-rail"
       aria-label="Assistant"
-      className="flex h-full flex-col gap-4 rounded border border-border bg-paper p-4"
+      className="flex h-full flex-col gap-4 rounded border border-border bg-paper p-4 max-h-fit"
     >
       <header className="flex flex-col gap-1">
         <div className="flex items-baseline justify-between gap-2">

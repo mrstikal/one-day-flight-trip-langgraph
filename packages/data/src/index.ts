@@ -6,6 +6,7 @@ export * from "./reference/search.js";
 export * from "./reference/catchments.js";
 export * from "./reference/zones.js";
 export * from "./reference/landmarks.js";
+export * from "./reference/wikidata-discovery.js";
 
 export * from "./synthetic/seed.js";
 export * from "./synthetic/scenario-key.js";

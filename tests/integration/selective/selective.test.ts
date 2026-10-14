@@ -11,7 +11,7 @@ import {
   loadTripResearchInputs,
 } from "@odft/persistence";
 import { buildTripProjection } from "../../../apps/web/src/lib/projection.js";
-import { driveTripToReady, resolveProgramChoices, sendChat } from "../ai/_setup.js";
+import { approvePendingItinerary, driveTripToReady, sendChat } from "../ai/_setup.js";
 import { claimNextOperation } from "@odft/persistence";
 import {
   claimNextOrFail,
@@ -220,14 +220,15 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     expect(nodeRuns.rows).toHaveLength(1);
     const after = await readTravelState(pools, harness.tripId);
     expect(after.values.operationId).not.toBe(before.values.operationId);
-    expect(after.values.planningAttempt).toBe(0);
+    // The pace change replans in this run: one planning attempt, no new research.
+    expect(after.values.planningAttempt).toBe(1);
     expect(after.values.researchRound).toBe(0);
     expect(after.values.researchAttempts).toEqual({});
     expect(after.values.gate).not.toBe("approved");
-    // The re-derived decision is the progress-derived program step, and the
-    // confirmed reservations were preserved.
+    // The applied program stays authoritative: the replan goes straight to a
+    // fresh itinerary approval instead of re-opening the program step.
     const decision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
-    expect(decision?.kind).toBe("program_choices");
+    expect(decision?.kind).toBe("itinerary_approval");
     // The re-entry preserved every confirmed reservation (T-E2E-14).
     expect(await reservations(harness.tripId)).toEqual(beforeReservations);
   }, 180_000);
@@ -235,14 +236,15 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
   it("refreshes the affected domain when a preference change is a pending-decision modification", async () => {
     const harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
-    // Open the program step, then submit a typed preference change: it is
-    // admitted as a MODIFICATION of that decision.
+    // A pace change with an applied program replans directly into a fresh
+    // approval; the typed dinner change that follows is then admitted as a
+    // MODIFICATION of that pending decision.
     await runCommand(harness.tripId, harness.sessionId, {
       type: "set_activity_pace",
       pace: "relaxed",
     });
     expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
-      "program_choices",
+      "itinerary_approval",
     );
     const beforeEvents = await researchEvents(pool, harness.tripId);
     const beforeIds = new Set(beforeEvents.map((event) => event.operationId));
@@ -510,14 +512,22 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     };
 
     await runCommand(harness.tripId, harness.sessionId, { type: "set_activity_pace", pace: "intensive" });
-    await resolveProgramChoices(pool, pools, harness.tripId, harness.sessionId);
+    // The applied program stays authoritative: the pace change replans directly
+    // into a fresh approval, so the rebuilt draft is approved here.
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "itinerary_approval",
+    );
+    await approvePendingItinerary(pool, pools, harness.tripId, harness.sessionId);
     const intensiveEntries = await latestEntries();
     expect(await activityCount()).toBe(1);
 
     // The user asks for a less exhausting day; the plan is rebuilt at the relaxed
     // pace (P) without touching any booking.
     await sendChat(pool, pools, harness.tripId, harness.sessionId, "Make the day less exhausting");
-    await resolveProgramChoices(pool, pools, harness.tripId, harness.sessionId);
+    expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
+      "itinerary_approval",
+    );
+    await approvePendingItinerary(pool, pools, harness.tripId, harness.sessionId);
     const relaxedEntries = await latestEntries();
     expect(await activityCount()).toBe(1);
     const relaxedRow = await pool.query<{ pace: string; status: string }>(
@@ -543,7 +553,21 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     expect(longBreaks(intensiveEntries)).toBe(0);
     const mealTimes = (entries: { kind: string; startLocal: string | null }[]): string[] =>
       entries.filter((entry) => entry.kind === "meal" && entry.startLocal).map((entry) => entry.startLocal as string);
-    expect(mealTimes(relaxedEntries)).toEqual(mealTimes(intensiveEntries));
+    // The fixed meal WINDOW starts keep their clock time in every rebuild
+    // (breakfast 07:30, lunch 12:00). An UNBOOKED dinner may shift a few minutes
+    // inside its window (19:00..21:30) so a re-packed day still fits its real
+    // transfer estimates — only booked windows are pinned minute-exact, and no
+    // meal here is booked. This assertion used to compare all meal starts
+    // across paces and failed on clean HEAD for exactly that dinner shift.
+    const windowStarts = (entries: { kind: string; startLocal: string | null }[]): string[] =>
+      mealTimes(entries).filter((time) => time <= "12:00");
+    expect(windowStarts(relaxedEntries)).toEqual(["07:30", "12:00"]);
+    expect(windowStarts(intensiveEntries)).toEqual(["07:30", "12:00"]);
+    for (const time of mealTimes(relaxedEntries).concat(mealTimes(intensiveEntries))) {
+      if (time > "12:00") {
+        expect(time >= "19:00" && time <= "21:30").toBe(true);
+      }
+    }
     expect(mealTimes(relaxedEntries).length).toBeGreaterThan(0);
     // Every confirmed booking survived the replan (T-E2E-06).
     expect(await reservations(harness.tripId)).toEqual(before);
@@ -602,9 +626,13 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
   it("applies a typed set_program admitted as a modification of a pending decision", async () => {
     const harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
+    // Open the program step through a MEAL-level change: meal levels still
+    // re-derive the program decision (activity preference changes replan
+    // directly since 2026-10-14).
     await runCommand(harness.tripId, harness.sessionId, {
-      type: "set_activity_pace",
-      pace: "relaxed",
+      type: "set_service_override",
+      service: "dinner",
+      level: "luxury",
     });
     expect((await getPendingDecisionForTrip(pools.operations, harness.tripId))?.kind).toBe(
       "program_choices",
@@ -668,9 +696,13 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     const harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
     // Open a pending decision, then submit a route command that changes NOTHING.
+    // Open the program step through a MEAL-level change: meal levels still
+    // re-derive the program decision (activity preference changes replan
+    // directly since 2026-10-14).
     await runCommand(harness.tripId, harness.sessionId, {
-      type: "set_activity_pace",
-      pace: "relaxed",
+      type: "set_service_override",
+      service: "dinner",
+      level: "luxury",
     });
     const opened = await getPendingDecisionForTrip(pools.operations, harness.tripId);
     expect(opened?.kind).toBe("program_choices");
@@ -775,9 +807,13 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     // Open a pending decision, then submit a typed route change: the worker
     // admits it as a modification of that decision (never a silent conflict) and
     // the staged impact confirmation must be presented.
+    // Open the program step through a MEAL-level change: meal levels still
+    // re-derive the program decision (activity preference changes replan
+    // directly since 2026-10-14).
     await runCommand(harness.tripId, harness.sessionId, {
-      type: "set_activity_pace",
-      pace: "relaxed",
+      type: "set_service_override",
+      service: "dinner",
+      level: "luxury",
     });
     const opened = await getPendingDecisionForTrip(pools.operations, harness.tripId);
     expect(opened?.kind).toBe("program_choices");

@@ -9,6 +9,7 @@ import {
   fingerprint,
   localMinuteOfInstant,
   paceMealDuration,
+  proposedStopWindow,
   simulatedOpeningWindow,
   validateItinerary,
   type ItinerarySourceFingerprintInput,
@@ -64,6 +65,7 @@ import {
 } from "@odft/ai";
 import type { TravelPorts } from "@odft/workflow";
 import { createFencedEventWriter, createFencedRunEffect } from "../driver.js";
+import { ensureCityLandmarks, type LandmarkDiscoveryOptions } from "./landmark-discovery.js";
 import type { AiService } from "../ai/service.js";
 
 /**
@@ -237,6 +239,7 @@ function buildPlannerContext(
     pace: data.trip.preferences.activityPace,
     interests: data.trip.preferences.interests,
     minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
+    preferredActivityIds: data.preferredActivityIds,
     budgetMinor: data.trip.preferences.maxBudgetMinor ?? null,
     fixedWindows: [
       ...meals.map((meal) => ({
@@ -341,6 +344,7 @@ function itinerarySource(data: ItineraryPlanningData): ItinerarySourceFingerprin
     destinationCityId: data.trip.destinationCityId,
     pace: data.trip.preferences.activityPace,
     minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
+    preferredActivityIds: data.preferredActivityIds,
     budgetMinor: data.trip.preferences.maxBudgetMinor ?? null,
     mealSelectionIds: {
       breakfast: data.confirmedMeals.breakfast ?? data.selectedMeals.breakfast,
@@ -368,44 +372,27 @@ function normalizePlannerSchedule(
   const meals = selectedMealOffers(data);
   const activities = activityCandidates(data);
   const normalized = ensureTransferAllowance({
+    // The gap arithmetic must use the SAME resolved geometry the assembly will
+    // place (confirmed meals locked to the offer's window start and fixed
+    // duration, pace durations for unbooked meals, candidate durations for
+    // activities, filler capped at 180): otherwise a pair the normalization
+    // thinks fits can still fail as `transfer_gap` after assembly.
     stops: output.stops.map((stop) => {
-      if (stop.kind === "meal") {
-        const meal = meals.find((candidate) => candidate.id === stop.refId);
-        const confirmed = data.confirmedMealIds.includes(stop.refId);
-        return {
-          kind: stop.kind,
-          refId: stop.refId,
-          anchor: meal?.anchor ?? null,
-          latestStartMinute: confirmed
-            ? stop.startMinute
-            : meal
-              ? Math.max(meal.windowStartMinute, meal.windowEndMinute - stop.durationMinutes)
-              : null,
-          earliestStartMinute: confirmed ? stop.startMinute : (meal?.windowStartMinute ?? null),
-          startMinute: stop.startMinute,
-          durationMinutes: stop.durationMinutes,
-        };
-      }
-      if (stop.kind === "activity") {
-        const activity = activities.find((candidate) => candidate.id === stop.refId);
-        return {
-          kind: stop.kind,
-          refId: stop.refId,
-          anchor: activity?.anchor ?? null,
-          latestStartMinute: null,
-          earliestStartMinute: null,
-          startMinute: stop.startMinute,
-          durationMinutes: stop.durationMinutes,
-        };
-      }
+      const window = proposedStopWindow({
+        stop,
+        meals,
+        activities,
+        confirmedMealIds: data.confirmedMealIds,
+        pace: data.trip.preferences.activityPace,
+      });
       return {
         kind: stop.kind,
-        refId: null,
-        anchor: null,
-        latestStartMinute: null,
-        earliestStartMinute: null,
-        startMinute: stop.startMinute,
-        durationMinutes: stop.durationMinutes,
+        refId: stop.kind === "meal" || stop.kind === "activity" ? stop.refId : null,
+        anchor: window.anchor,
+        latestStartMinute: window.latestStartMinute,
+        earliestStartMinute: window.earliestStartMinute,
+        startMinute: window.startMinute,
+        durationMinutes: window.durationMinutes,
       };
     }),
     pace: data.trip.preferences.activityPace,
@@ -476,6 +463,11 @@ function fenceFor(
 export function createTravelPortsFactory(
   pool: Pool,
   ai: AiService,
+  options: {
+    readonly wikidataDiscovery?: boolean;
+    readonly discoveryFetch?: typeof fetch;
+    readonly onDiscoveryLog?: LandmarkDiscoveryOptions["logger"];
+  } = {},
 ): (ctx: OperationFencingContext, signal?: AbortSignal) => TravelPorts {
   const booking = new BookingService(new PostgresBookingStore(pool));
   const scenarios = new ScenarioService(pool);
@@ -494,6 +486,17 @@ export function createTravelPortsFactory(
     },
 
     async evaluateRoute(tripId) {
+      // On-demand curation runs before the route inputs fix the snapshot's
+      // `isCurated`, so a discovered city immediately gets real landmark
+      // activities; failures are non-fatal (generic categories remain).
+      const trip = await getTrip(pool, tripId);
+      if (trip) {
+        await ensureCityLandmarks(pool, trip.destinationCityId, {
+          enabled: options.wikidataDiscovery ?? false,
+          ...(options.discoveryFetch ? { fetchImpl: options.discoveryFetch } : {}),
+          ...(options.onDiscoveryLog ? { logger: options.onDiscoveryLog } : {}),
+        });
+      }
       const evaluated = await evaluateAndPersistRoute(pool, tripId);
       if (!evaluated) {
         throw new Error(`cannot evaluate route for trip ${tripId}: missing reference inputs`);
@@ -855,6 +858,7 @@ export function createTravelPortsFactory(
         walkingKm: assembly.walkingKm,
         pace: data.trip.preferences.activityPace,
         minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
+        preferredActivityIds: data.preferredActivityIds,
         budgetMinor: data.trip.preferences.maxBudgetMinor ?? null,
         dinnerExcludedReason: data.dinnerExcludedReason,
         dinnerSelected:

@@ -31,6 +31,8 @@ export interface ItinerarySourceFingerprintInput {
   readonly destinationCityId: string;
   readonly pace: ActivityPace;
   readonly minimumActivityCounts: Readonly<Partial<Record<ActivityTag, number>>>;
+  /** Explicitly pinned activity IDs (2026-10-14): part of the plan's inputs. */
+  readonly preferredActivityIds: readonly string[];
   readonly budgetMinor: number | null;
   readonly mealSelectionIds: {
     readonly breakfast: string | null;
@@ -58,6 +60,7 @@ export function computeItinerarySourceFingerprint(input: ItinerarySourceFingerpr
     destinationCityId: input.destinationCityId,
     pace: input.pace,
     minimumActivityCounts: input.minimumActivityCounts,
+    preferredActivityIds: [...input.preferredActivityIds].sort(),
     budgetMinor: input.budgetMinor,
     mealSelectionIds: input.mealSelectionIds,
     confirmedMealIds: [...input.confirmedMealIds].sort(),
@@ -96,6 +99,8 @@ export interface ValidateItineraryInput {
   readonly walkingKm: number;
   readonly pace: ActivityPace;
   readonly minimumActivityCounts: Readonly<Partial<Record<ActivityTag, number>>>;
+  /** Explicitly pinned activity IDs (2026-10-14): part of the plan's inputs. */
+  readonly preferredActivityIds: readonly string[];
   readonly budgetMinor: number | null;
   /** Null when a dinner slot exists; the deterministic reason otherwise. */
   readonly dinnerExcludedReason: string | null;
@@ -174,21 +179,12 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
     });
   }
 
-  // Insufficient sightseeing: at least one visit, and meal/activity content must
-  // span at least seven hours (the Stage B core window is 09:00 through 18:00).
-  // A trip where the traveler arranges the activities themselves has no planned
-  // sightings, so neither target applies.
-  if (input.source.selfArrangedActivities) {
-    // No sightseeing target: the traveler arranges the visits themselves.
-  } else if (metrics.activityCount === 0) {
-    errors.push({
-      severity: "error",
-      code: "insufficient_sightseeing",
-      message: "The plan contains no activities; a sightseeing day cannot be approved without visits.",
-      eventIds: [],
-      simulatedFailure,
-    });
-  } else {
+  // Visits are OPT-IN (2026-10-14): the planner plans only pinned activities and
+  // whatever is needed to satisfy a stored requirement, so a plan with NO visits
+  // is the legitimate default — never an error. A short meal/visit span is only a
+  // guideline warning (free time covers the rest of the day); the traveler who
+  // arranges the activities themselves has no planned sightings at all.
+  if (!input.source.selfArrangedActivities && metrics.activityCount > 0) {
     const contentStart = input.events
       .filter((event) => event.kind === "activity" || event.kind === "meal")
       .reduce<number | null>(
@@ -204,10 +200,10 @@ export function validateItinerary(input: ValidateItineraryInput): ItineraryValid
     if (contentStart !== null && contentEnd !== null) {
       const span = contentEnd - contentStart;
       if (span < MIN_CONTENT_SPAN_MINUTES) {
-        errors.push({
-          severity: "error",
+        warnings.push({
+          severity: "warning",
           code: "insufficient_sightseeing",
-          message: `Meals and visits span only ${Math.floor(span / 60)}h${String(span % 60).padStart(2, "0")}, below the seven-hour sightseeing day target.`,
+          message: `Meals and visits span only ${Math.floor(span / 60)}h${String(span % 60).padStart(2, "0")}, below the seven-hour sightseeing day target; free time covers the rest of the day.`,
           eventIds: [],
           simulatedFailure,
         });

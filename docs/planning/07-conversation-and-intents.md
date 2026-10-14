@@ -165,6 +165,8 @@ A completed graph is not kept permanently suspended. A new authorized request in
 
 If a decision is already pending, admit only supported answers/modifications. The worker resumes that exact interrupt with a typed internal modification reference, explicitly resolves/cancels the old decision, and routes into interpretation/command application. Do not run a second invocation beside it or erase a checkpoint manually.
 
+A change that invalidates an earlier step (a pace or activity change after the hotel is confirmed, a rejected proposal) re-derives that step's decision instead of restarting the wizard, and a reselection keeps its explicit target: `change_hotel` reopens the hotel step even though the confirmed hotel would otherwise derive the program step, and `change_meals` reopens the program step (2026-10-13). Reopened decisions reuse the current offers/choices so the user only re-confirms what changed. The exceptions are the ACTIVITY-preference changes with an applied program — pace, interests, and numeric activity requirements (including a chat like "add one more museum"): the program is authoritative, so the affected attractions are refreshed and the day is replanned directly, and the user confirms it at the itinerary approval — never by re-saving the meals (2026-10-13/14, product decision).
+
 If another operation is active, show a busy conflict and preserve the typed message/form. If the revision is stale, refresh and let the user resubmit deliberately. Do not automatically reinterpret/resubmit a previously rejected modification against changed state.
 
 ## 9. Acceptance

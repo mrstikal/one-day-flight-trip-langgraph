@@ -79,8 +79,17 @@ describe("clarification binding (real PostgreSQL)", () => {
     expect(prefs.activityPace).toBe("relaxed");
     expect(prefs.minimumActivityCounts.museum).toBe(2);
 
-    const state = await readTravelState(pools, tripId);
-    expect(state.values.gate).toBe("program_ready");
+    // The chosen commands (the reduced museum minimum) replan directly: the
+    // applied program stays authoritative and the program step is never
+    // re-opened (2026-10-14).
+    const followUp = await getPendingDecisionForTrip(pools.operations, tripId);
+    // The planned museums fit, but the pinned landmark (plus two museums) exceeds
+    // the relaxed visit-time cap, so the trip asks with concrete options instead
+    // of silently dropping the pin or the minimum.
+    expect(followUp?.kind).toBe("clarification");
+    expect(followUp?.allowedOptionIds).toEqual(
+      expect.arrayContaining(["denser_pace_moderate", "review_program"]),
+    );
   }, 90_000);
 
   it("routes a free-text follow-up through the internal modify branch", async () => {
@@ -108,9 +117,10 @@ describe("clarification binding (real PostgreSQL)", () => {
     const prefs = await preferences(tripId);
     expect(prefs.activityPace).toBe("intensive");
 
-    // The answered clarification is no longer pending and the trip moved on.
+    // The answered clarification is no longer pending and the trip moved on: the
+    // pace change replans directly into a fresh itinerary approval (2026-10-14).
     const pending = await getPendingDecisionForTrip(pools.operations, tripId);
-    expect(pending?.kind).toBe("program_choices");
+    expect(pending?.kind).toBe("itinerary_approval");
     const superseded = await pool.query<{ status: string }>(
       `SELECT status FROM odft_app.pending_decisions WHERE id = $1`,
       [clarification?.id ?? ""],

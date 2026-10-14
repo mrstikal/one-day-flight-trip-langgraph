@@ -17,6 +17,7 @@ Sources and licenses were checked on 2026-10-10. Import phases record actual ret
 | [GeoNames export](https://download.geonames.org/export/dump/) | `cities15000.zip`, `countryInfo.txt`, relevant alternative names | CC BY 4.0; retain attribution, license link, and transformation notice | Cities above 15,000 people plus capitals; smaller places can be absent |
 | [OurAirports data](https://ourairports.com/data/) | `airports.csv`, `countries.csv`, `regions.csv` | Public domain; credit retained voluntarily | No time zones; `continent`, airport type, and `scheduled_service` are not sufficient route evidence |
 | [Wikidata licensing](https://www.wikidata.org/wiki/Wikidata:Licensing) | Reviewed landmark entity labels and P625 coordinates | Structured data CC0 1.0; retain source IDs/URLs | Incorrect entities, multiple coordinates, and poor precision require review |
+| [Wikidata licensing](https://www.wikidata.org/wiki/Wikidata:Licensing) | On-demand landmark discovery (`WIKIDATA_DISCOVERY`, see section 9): notable attractions of a `generic_only` city, selected by instance-of class + sitelink count and envelope-checked | Structured data CC0 1.0; rows keep the `wikidata:Q…` id and source URL | Machine-selected, not human-reviewed: use only attraction classes close to the curated intent (tourist attraction, museum, park, monument, castle, church, cathedral, botanical garden, zoo, amusement park, observation tower) and prefer names present in the requested language |
 | [geo-tz](https://github.com/evansiroky/node-geo-tz) | Version 8.1.9, comprehensive `geo-tz/all`, import-time only | Code MIT; underlying boundary data from the next row has separate obligations | Large data files; ambiguous border results must be reviewed; never bundle into browser |
 | [timezone-boundary-builder](https://github.com/evansiroky/timezone-boundary-builder) | Version paired with the chosen geo-tz data | Boundary data ODbL; attribute OpenStreetMap contributors and boundary source; preserve license/share-alike notices | Data is not proof of local operational timekeeping in disputed/border cases |
 | [IANA time-zone database](https://www.iana.org/time-zones) | Node.js ICU/time-zone rules used by Temporal | Time-zone data public domain; record runtime/tz version | Political rule changes require runtime updates and regression tests |
@@ -50,7 +51,7 @@ For TR and RU, support only explicitly reviewed European-region cities/airports 
 
 GE, AM, AZ, KZ and non-European overseas territories are excluded from the initial scope. To make island boundaries explicit, admit the Azores, Madeira, and Canary Islands as European-country travel exceptions. Greenland, other overseas dependencies, and territories not listed in the manifest are excluded. Geographic admission is not a claim about visas, safety, sanctions, or real flight availability; those are outside this demo.
 
-Country and city search is not limited to curated demos. The UI states cities15000 coverage and distinguishes `curated landmarks available`, `approximate generic program only`, and `insufficient reference data`. A small omitted town is a dataset limitation, not a newly invented city.
+Country and city search is not limited to curated demos. The UI states cities15000 coverage and distinguishes `curated landmarks available`, `approximate generic program only`, and `insufficient reference data` (`insufficient_reference` also records that an on-demand discovery ran and found nothing, so it is never retried). A small omitted town is a dataset limitation, not a newly invented city.
 
 ## 4. Airport Resolution and Catchments
 
@@ -215,7 +216,7 @@ For curated cities use reviewed safe neighborhood/land anchors and bounded named
 
 Reject generated positions outside the reviewed city-area envelope, off the known safe-anchor set, or beyond stated transfer bounds. Do not claim a bounding box alone proves a point is on land. Curated demo positions come from reviewed anchors, not a box sampler.
 
-The initial verified landmark seeds below have source identity and coordinates checked; additional curated coverage is a Phase 02 deliverable.
+The initial verified landmark seeds below have source identity and coordinates checked; additional curated coverage is a Phase 02 deliverable and, beyond the seed set, is curated on demand from Wikidata (section 9, on-demand curation).
 
 | City | Verified seed reference | Wikidata ID | Coordinates |
 | --- | --- | --- | --- |
@@ -234,6 +235,8 @@ Complete each city with at least eight reviewed real references. Required additi
 Use duration templates: major museum 90..120 minutes, smaller museum/gallery 60..90, monument/interior 45..75, exterior landmark 20..30, park 30..60. These are planning assumptions. Opening windows, ticket prices, reservation requirements, and event times are explicitly simulated; current public opening/closure status is not asserted.
 
 For non-curated cities, offer generic, explicitly synthetic categories such as `Approximate city-center walk` or `Demo relaxation break`, and state that verified landmarks are unavailable. Do not invent a factual museum, concert venue, or historical monument. Users must be able to reject the limited program or choose a curated city.
+
+On-demand curation (2026-10-13): when `WIKIDATA_DISCOVERY` is enabled, the worker curates such a city from Wikidata before the snapshot's `isCurated` is fixed — it fetches the notable attractions inside the city envelope (two SPARQL queries: instance-of class + sitelink ordering, then one label lookup; ~5–15 s once per city), stores them as `wikidata:Q…` rows in `odft_app.reference_landmarks` and flips the city to `curated_landmarks`, so every later trip reuses the stored rows with no further lookup. An empty result marks the city `insufficient_reference` (also “don't retry”); a failed lookup keeps `generic_only` so the next trip retries, and it never fails a trip. Already-materialized snapshots keep their activities. Restaurant businesses stay synthetic in every city; only landmark identity/coordinates come from reference data.
 
 ## 10. Routing Provider
 

@@ -28,12 +28,15 @@ export {
   DATASET_LIMITATION,
   getCityAirports,
   getCuratedLandmarks,
+  getReferenceCity,
   listRouteEvidence,
   loadReferenceData,
+  persistDiscoveredLandmarks,
   resolveCatchment,
   searchAirports,
   searchCities,
   searchCountries,
+  setReferenceCityCoverage,
 } from "./reference/repository.js";
 export type {
   AirportSearchInput,
@@ -43,6 +46,7 @@ export type {
   CitySearchResult,
   CuratedLandmarksResult,
   LoadResult,
+  ReferenceCityRow,
   RouteEvidenceQuery,
 } from "./reference/repository.js";
 

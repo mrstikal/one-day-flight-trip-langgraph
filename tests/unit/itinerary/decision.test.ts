@@ -133,3 +133,39 @@ describe("itinerary conflict decision (Phase 10)", () => {
     expect(decision.options).toEqual([]);
   });
 });
+
+describe("packing-conflict options (2026-10-14)", () => {
+  it("offers a denser pace, a bounded tag reduction, and the review path", () => {
+    const decision = buildItineraryConflictDecision({
+      errors: [error("transfer_gap"), error("overlap")],
+      metrics: metrics({ activityTagCounts: { museum: 2 }, activityCount: 2, visitMinutes: 212 }),
+      pace: "moderate",
+      minimumActivityCounts: { museum: 2 },
+      review: null,
+    });
+    expect(decision.kind).toBe("clarification");
+    expect(decision.options.map((option) => option.id)).toEqual([
+      "denser_pace_intensive",
+      "reduce_museum",
+      "review_program",
+    ]);
+    expect(decision.options[1]?.commands[0]).toEqual({
+      type: "set_activity_requirement",
+      tag: "museum",
+      minimumCount: 1,
+    });
+    expect(decision.question).toContain("cannot fit these visits");
+  });
+
+  it("still falls back to recovery when no supported packing change exists", () => {
+    const decision = buildItineraryConflictDecision({
+      errors: [error("transfer_gap")],
+      metrics: metrics(),
+      pace: "intensive",
+      minimumActivityCounts: {},
+      review: null,
+    });
+    expect(decision.kind).toBe("recovery");
+    expect(decision.recoveryOptionIds).toEqual(["change_meals", "change_hotel"]);
+  });
+});

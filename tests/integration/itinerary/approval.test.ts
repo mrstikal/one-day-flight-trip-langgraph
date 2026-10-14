@@ -53,9 +53,11 @@ describe("itinerary approval (real PostgreSQL)", () => {
     expect(firstApproved?.status).toBe("approved");
     expect(firstApproved?.validation.status).toBe("valid");
 
-    // A later change rebuilds the plan as a new draft.
+    // A later pace change rebuilds the plan as a new draft directly: the applied
+    // program stays authoritative, so no program re-confirmation is required
+    // (2026-10-13).
     await runCommand(pool, pools, harness, { type: "set_activity_pace", pace: "relaxed" });
-    expect(await submitProgram(pool, pools, harness)).toBe("itinerary_approval");
+    expect((await pendingDecision(pools, harness.tripId))?.kind).toBe("itinerary_approval");
     const rows = await itineraryRows(pool, harness.tripId);
     const newDraft = rows.at(-1);
     expect(newDraft?.version).toBeGreaterThan(firstApproved?.version ?? 0);
@@ -87,7 +89,7 @@ describe("itinerary approval (real PostgreSQL)", () => {
     const harness: Harness = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, harness.tripId, harness.sessionId);
     await runCommand(pool, pools, harness, { type: "set_activity_pace", pace: "relaxed" });
-    expect(await submitProgram(pool, pools, harness)).toBe("itinerary_approval");
+    expect((await pendingDecision(pools, harness.tripId))?.kind).toBe("itinerary_approval");
     const draft = (await itineraryRows(pool, harness.tripId)).at(-1);
     expect(draft?.status).toBe("draft");
 
@@ -130,4 +132,91 @@ describe("itinerary approval (real PostgreSQL)", () => {
     // The approved version list is untouched: no approval was recorded.
     expect(stillDraft.filter((row) => row.status === "approved")).toHaveLength(1);
   }, 180_000);
+
+  /** Drive flight + hotel + program to a pending itinerary approval. */
+  async function driveToItineraryApproval(harness: Harness): Promise<void> {
+    const driver = createTravelDriver(pools);
+    const resume = async (response: unknown): Promise<void> => {
+      const decision = await pendingDecision(pools, harness.tripId);
+      const admitted = await admitResume(pool, {
+        tripId: harness.tripId,
+        sessionId: harness.sessionId,
+        request: {
+          requestId: randomUUID(),
+          expectedRevision: await tripRevision(pool, harness.tripId),
+          decisionId: decision?.id ?? "",
+          response: response as never,
+        },
+      });
+      if (!("operationId" in admitted)) {
+        throw new Error(`resume refused: ${JSON.stringify(admitted)}`);
+      }
+      await driver.runOperation(await claimNextOrFail(pools));
+    };
+    await driver.runOperation(await claimNextOrFail(pools));
+    let decision = await pendingDecision(pools, harness.tripId);
+    await resume({ action: "choose_offer", offerId: decision?.allowedOfferIds[0] });
+    decision = await pendingDecision(pools, harness.tripId);
+    await resume({
+      action: "confirm_booking",
+      proposalId: decision?.proposalId,
+      acceptedDemoDisclaimer: true,
+    });
+    decision = await pendingDecision(pools, harness.tripId);
+    await resume({ action: "choose_offer", offerId: decision?.allowedOfferIds[0] });
+    decision = await pendingDecision(pools, harness.tripId);
+    await resume({
+      action: "confirm_booking",
+      proposalId: decision?.proposalId,
+      acceptedDemoDisclaimer: true,
+    });
+    expect(await submitProgram(pool, pools, harness)).toBe("itinerary_approval");
+  }
+
+  it("applies activity preferences saved while the approval is pending and replans", async () => {
+    const harness: Harness = await createHarnessTrip(pool);
+    await driveToItineraryApproval(harness);
+    const approval = await pendingDecision(pools, harness.tripId);
+    expect(approval?.kind).toBe("itinerary_approval");
+    const before = (await itineraryRows(pool, harness.tripId)).at(-1);
+    expect(before?.validation.status).toBe("valid");
+    expect(
+      (before?.events as { kind: string }[]).some((event) => event.kind === "activity"),
+    ).toBe(true);
+
+    // The activities step stays editable during the approval: a typed `set_program`
+    // command is applied through the graph's `modify` branch (Phase 11).
+    const meals = await pool.query<{ service_key: string; offer_id: string | null }>(
+      `SELECT service_key, offer_id FROM odft_app.trip_selections
+        WHERE trip_id = $1 AND service_key IN ('breakfast','lunch','dinner')`,
+      [harness.tripId],
+    );
+    const meal = (key: string): string | null =>
+      meals.rows.find((row) => row.service_key === key)?.offer_id ?? null;
+    await runCommand(pool, pools, harness, {
+      type: "set_program",
+      mealOfferIds: { breakfast: meal("breakfast"), lunch: meal("lunch"), dinner: meal("dinner") },
+      selfArrangedMeals: [],
+      preferredActivityIds: [],
+      activitiesSelfArranged: true,
+    });
+
+    // The typed command superseded the pending approval and the day was replanned
+    // without sightseeing (self-arranged activities).
+    const next = await pendingDecision(pools, harness.tripId);
+    expect(next?.kind).toBe("itinerary_approval");
+    expect(next?.id).not.toBe(approval?.id);
+    const rows = await itineraryRows(pool, harness.tripId);
+    const draft = rows.at(-1);
+    expect(draft?.version).toBeGreaterThan(before?.version ?? 0);
+    expect(draft?.validation.status).toBe("valid");
+    expect(
+      (draft?.events as { kind: string }[]).some((event) => event.kind === "activity"),
+    ).toBe(false);
+    const superseded = await pool.query<{ status: string }>(
+      `SELECT status FROM odft_app.pending_decisions WHERE id = $1`,
+      [approval?.id],
+    );
+    expect(superseded.rows[0]?.status).not.toBe("pending");
+  }, 240_000);
 });

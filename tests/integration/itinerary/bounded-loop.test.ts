@@ -54,8 +54,9 @@ describe("itinerary bounded loop (real PostgreSQL)", () => {
       tag: "museum",
       minimumCount: 3,
     });
-    const kind = await submitProgram(pool, pools, harness);
-    expect(kind).toBe("clarification");
+    // The requirement change refreshes the attractions and replans directly (the
+    // applied program stays authoritative); the loop exhausts into the
+    // clarification in this same run (2026-10-14).
 
     const rows = await itineraryRows(pool, harness.tripId);
     const drafts = rows.slice(before);

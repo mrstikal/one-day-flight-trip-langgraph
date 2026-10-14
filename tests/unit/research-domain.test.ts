@@ -390,5 +390,14 @@ describe("dispatch and rank routers", () => {
       "prepare_decision",
     );
     expect(routeAfterRank(travelState({ nextDecisionKind: null }))).toBe("publish_summary");
+    // A preference batch that refreshed a domain continues into a fresh plan
+    // (2026-10-14): an applied-program requirement change never re-opens the
+    // program step.
+    expect(
+      routeAfterRank(travelState({ nextDecisionKind: null, nextWork: "research" })),
+    ).toBe("plan_itinerary");
+    expect(
+      routeAfterRank(travelState({ nextDecisionKind: null, nextWork: "progress" })),
+    ).toBe("publish_summary");
   });
 });

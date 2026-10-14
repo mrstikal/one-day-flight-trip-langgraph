@@ -108,7 +108,12 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
   // AI configuration is validated at startup (fixture needs nothing; openrouter
   // requires complete profiles and fails with an actionable, secret-free error).
   const ai = createAiService({ pool: operationsPool, config });
-  const portsFactory = options.portsFactory ?? createTravelPortsFactory(operationsPool, ai);
+  const portsFactory =
+    options.portsFactory ??
+    createTravelPortsFactory(operationsPool, ai, {
+      wikidataDiscovery: config.wikidataDiscovery,
+      onDiscoveryLog: (record) => logger(record as never),
+    });
   const selectInvocation =
     options.chooseInvocation ??
     ((state, operation, invocationOptions) =>

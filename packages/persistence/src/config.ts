@@ -22,6 +22,13 @@ export interface ServerConfig {
   readonly maxLlmCallsPerTrip: number;
   readonly maxLlmCostUsdPerTrip: number;
   readonly demoControlsEnabled: boolean;
+  /**
+   * On-demand landmark curation: when a trip targets a `generic_only` city, look
+   * its landmarks up from Wikidata once, persist them and mark the city curated.
+   * Off in tests (the default); the reference tables are otherwise never fetched
+   * online.
+   */
+  readonly wikidataDiscovery: boolean;
   readonly mapTileUrl: string | undefined;
   readonly workerConcurrency: number;
   /** Trust `X-Forwarded-For`/`X-Real-IP` for client IP (only behind a known proxy). */
@@ -70,6 +77,7 @@ const rawSchema = z
     MAX_LLM_CALLS_PER_TRIP: intEnv(1, 1000, 40),
     MAX_LLM_COST_USD_PER_TRIP: floatEnv(0, 1000, 1.0),
     DEMO_CONTROLS_ENABLED: booleanString.optional(),
+    WIKIDATA_DISCOVERY: booleanString.optional(),
     MAP_TILE_URL: z.string().min(1).optional(),
     WORKER_CONCURRENCY: intEnv(1, 16, 2),
     TRUST_PROXY: booleanString.optional(),
@@ -153,6 +161,7 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
     maxLlmCallsPerTrip: raw.MAX_LLM_CALLS_PER_TRIP,
     maxLlmCostUsdPerTrip: raw.MAX_LLM_COST_USD_PER_TRIP,
     demoControlsEnabled: raw.DEMO_CONTROLS_ENABLED ?? false,
+    wikidataDiscovery: raw.WIKIDATA_DISCOVERY ?? false,
     mapTileUrl: raw.MAP_TILE_URL,
     workerConcurrency: raw.WORKER_CONCURRENCY,
     trustProxy: raw.TRUST_PROXY ?? false,

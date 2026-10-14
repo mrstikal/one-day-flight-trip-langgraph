@@ -31,6 +31,24 @@ import {
 
 /** API request/response envelopes shared by the BFF and future handlers. */
 
+/**
+ * Live activity visit-time budget for the activities step (08 section 7):
+ * computed server-side against the pace cap so the UI can warn and disable Save
+ * without deriving pace feasibility itself.
+ */
+export const activityFitResponseSchema = z
+  .object({
+    fits: z.boolean(),
+    selectedCount: z.number().int().nonnegative(),
+    selectedMinutes: z.number().int().nonnegative(),
+    capMinutes: z.number().int().positive(),
+    overMinutes: z.number().int().nonnegative(),
+    targetMin: z.number().int().positive(),
+    targetMax: z.number().int().positive(),
+  })
+  .strict();
+export type ActivityFitResponse = z.infer<typeof activityFitResponseSchema>;
+
 export const createTripRequestSchema = creationInputSchema;
 export type CreateTripRequest = z.infer<typeof createTripRequestSchema>;
 

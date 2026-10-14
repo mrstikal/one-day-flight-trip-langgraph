@@ -1,5 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import type {
+  ActivityPace,
   ActivityTag,
   ItineraryCostItem,
   ItineraryCosts,
@@ -188,6 +189,93 @@ interface ResolvedStop {
   readonly endMinute: number;
 }
 
+export interface ProposedStopWindow {
+  readonly anchor: ItineraryLatLon | null;
+  readonly startMinute: number;
+  readonly durationMinutes: number;
+  /** Latest start the stop's fixed window allows; null when the stop is flexible. */
+  readonly latestStartMinute: number | null;
+  /** Earliest start the stop's window allows; null when the stop is flexible. */
+  readonly earliestStartMinute: number | null;
+}
+
+/**
+ * The resolved window geometry for one proposed stop. The assembly and the
+ * transfer-allowance normalization MUST agree on this arithmetic: a confirmed
+ * meal is pinned to the offer's window start and fixed duration, an unbooked meal
+ * uses the authoritative pace duration, an activity uses the candidate's fixed
+ * duration, and a filler block is capped at 180 minutes (2026-10-13: the
+ * normalization used the planner's own durations, so the assembly's locked
+ * geometry could still leave a `transfer_gap` that the bounded loop never
+ * repaired — the live confirmed-breakfast case where the model proposed a
+ * 30-minute slot but the reservation runs 08:10).
+ */
+export function proposedStopWindow(input: {
+  readonly stop: ProposedStop;
+  readonly meals: AssembleItineraryInput["meals"];
+  readonly activities: AssembleItineraryInput["activities"];
+  readonly confirmedMealIds: readonly string[];
+  readonly pace: ActivityPace;
+}): ProposedStopWindow {
+  const proposed = {
+    anchor: null as ItineraryLatLon | null,
+    startMinute: input.stop.startMinute,
+    durationMinutes: input.stop.durationMinutes,
+    latestStartMinute: null as number | null,
+    earliestStartMinute: null as number | null,
+  };
+  if (input.stop.kind === "meal" && input.stop.refId !== null) {
+    const offer = input.meals.find((meal) => meal.id === input.stop.refId);
+    if (!offer) {
+      return proposed;
+    }
+    const locked = input.confirmedMealIds.includes(offer.id);
+    // Confirmed reservations keep their fixed duration; unbooked slots use the
+    // authoritative pace meal duration (08 section 7).
+    const duration = locked
+      ? offer.durationMinutes
+      : paceMealDuration(input.pace, offer.meal, offer.level);
+    const latestStart = locked
+      ? offer.windowStartMinute
+      : Math.max(offer.windowStartMinute, offer.windowEndMinute - duration);
+    const start = locked
+      ? offer.windowStartMinute
+      : Math.min(Math.max(input.stop.startMinute, offer.windowStartMinute), latestStart);
+    return {
+      anchor: offer.anchor,
+      startMinute: start,
+      durationMinutes: duration,
+      latestStartMinute: latestStart,
+      earliestStartMinute: offer.windowStartMinute,
+    };
+  }
+  if (input.stop.kind === "activity" && input.stop.refId !== null) {
+    const activity = input.activities.find((candidate) => candidate.id === input.stop.refId);
+    if (!activity) {
+      return proposed;
+    }
+    // A proposed visit that starts before its simulated opening window is clamped
+    // UP to the opening minute — the same domain arithmetic as meal windows
+    // (2026-10-14): the live planner reliably starts the first visit right after
+    // breakfast even when the museum opens at 09:00, which failed both
+    // `opening_hours_mismatch` and the breakfast transfer room. A visit that still
+    // cannot END inside its window stays an `opening_hours_mismatch`.
+    const opening = simulatedOpeningWindow(activity.tags);
+    const startMinute = Math.max(input.stop.startMinute, opening.startMinute);
+    return {
+      anchor: activity.anchor,
+      startMinute,
+      durationMinutes: activity.durationMinutes,
+      latestStartMinute: null,
+      earliestStartMinute: opening.startMinute,
+    };
+  }
+  return {
+    ...proposed,
+    durationMinutes: Math.min(180, Math.max(5, input.stop.durationMinutes)),
+  };
+}
+
 function resolveMeal(
   stop: ProposedStop,
   input: AssembleItineraryInput,
@@ -204,16 +292,14 @@ function resolveMeal(
     });
     return null;
   }
-  const locked = input.confirmedMealIds.includes(offer.id);
-  // Confirmed reservations keep their fixed duration; unbooked slots use the
-  // authoritative pace meal duration (08 section 7).
-  const duration = locked
-    ? offer.durationMinutes
-    : paceMealDuration(input.pace, offer.meal, offer.level);
-  const latestStart = Math.max(offer.windowStartMinute, offer.windowEndMinute - duration);
-  const start = locked
-    ? offer.windowStartMinute
-    : Math.min(Math.max(stop.startMinute, offer.windowStartMinute), latestStart);
+  const window = proposedStopWindow({
+    stop,
+    meals: input.meals,
+    activities: input.activities,
+    confirmedMealIds: input.confirmedMealIds,
+    pace: input.pace,
+  });
+  const { startMinute: start, durationMinutes: duration } = window;
   if (start + duration > offer.windowEndMinute) {
     issues.push({
       severity: "error",
@@ -242,14 +328,21 @@ function resolveActivity(
     });
     return null;
   }
-  const duration = activity.durationMinutes;
-  const window = simulatedOpeningWindow(activity.tags);
-  const start = stop.startMinute;
-  if (start < window.startMinute || start + duration > window.endMinute) {
+  const window = proposedStopWindow({
+    stop,
+    meals: input.meals,
+    activities: input.activities,
+    confirmedMealIds: input.confirmedMealIds,
+    pace: input.pace,
+  });
+  const duration = window.durationMinutes;
+  const start = window.startMinute;
+  const simulatedWindow = simulatedOpeningWindow(activity.tags);
+  if (start < simulatedWindow.startMinute || start + duration > simulatedWindow.endMinute) {
     issues.push({
       severity: "error",
       code: "opening_hours_mismatch",
-      message: `${activity.name} is placed ${minutesToLocal(start)}-${minutesToLocal(start + duration)} outside its simulated opening window ${minutesToLocal(window.startMinute)}-${minutesToLocal(window.endMinute)}.`,
+      message: `${activity.name} is placed ${minutesToLocal(start)}-${minutesToLocal(start + duration)} outside its simulated opening window ${minutesToLocal(simulatedWindow.startMinute)}-${minutesToLocal(simulatedWindow.endMinute)}.`,
       eventIds: [],
       simulatedFailure: input.simulatedFailure,
     });
@@ -277,8 +370,18 @@ function resolveStops(
       }
       continue;
     }
-    const duration = Math.min(180, Math.max(5, stop.durationMinutes));
-    resolved.push({ stop, startMinute: stop.startMinute, endMinute: stop.startMinute + duration });
+    const window = proposedStopWindow({
+      stop,
+      meals: input.meals,
+      activities: input.activities,
+      confirmedMealIds: input.confirmedMealIds,
+      pace: input.pace,
+    });
+    resolved.push({
+      stop,
+      startMinute: window.startMinute,
+      endMinute: window.startMinute + window.durationMinutes,
+    });
   }
   resolved.sort((a, b) => a.startMinute - b.startMinute);
   return resolved;

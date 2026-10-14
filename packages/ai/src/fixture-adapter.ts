@@ -384,9 +384,6 @@ function windowStartFor(candidate: FixtureCandidate, fallbackMinute: number): nu
   return candidate.openingStartMinute ?? fallbackMinute;
 }
 
-function feedbackWantsFewerActivities(context: PlannerContext): boolean {
-  return context.validationFeedback.some((feedback) => /^review:.*(pace_mismatch|too dense)/i.test(feedback));
-}
 
 /**
  * Deterministic full-day fixture planner (Phase 10 step 1): breakfast, morning
@@ -407,23 +404,36 @@ export function fixturePlanner(context: PlannerContext) {
   // must NOT re-sort it, otherwise explicitly preferred activities are lost.
   const activities = context.candidates.filter((candidate) => candidate.kind === "activity");
 
-  // 1. Required tags first: never silently drop a requested minimum.
+  // 1. Explicitly pinned visits first (visits are OPT-IN, 2026-10-14): the
+  // planner plans exactly the preferred activity IDs plus whatever satisfies the
+  // requested tag minimums — it never adds any other visit. The worker supplies
+  // a deterministic, preference-first order; the fixture must NOT re-sort it,
+  // otherwise explicitly preferred activities are lost.
   const chosen: FixtureCandidate[] = [];
   const chosenCounts: Record<string, number> = {};
+  const pinned = new Set(context.preferredActivityIds);
+  for (const candidate of activities) {
+    if (!pinned.has(candidate.id)) {
+      continue;
+    }
+    chosen.push(candidate);
+    for (const candidateTag of candidate.tags) {
+      chosenCounts[candidateTag] = (chosenCounts[candidateTag] ?? 0) + 1;
+    }
+  }
+
+  // 2. Required tags next: never silently drop a requested minimum.
   for (const tag of Object.keys(context.minimumActivityCounts).sort()) {
     const minimum = context.minimumActivityCounts[tag as keyof typeof context.minimumActivityCounts];
     if (minimum === undefined || minimum === null || minimum <= 0) {
       continue;
     }
-    let found = 0;
+    let found = chosenCounts[tag] ?? 0;
     for (const candidate of activities) {
       if (found >= minimum) {
         break;
       }
       if (chosen.includes(candidate)) {
-        if (candidate.tags.includes(tag as never)) {
-          found += 1;
-        }
         continue;
       }
       if (candidate.tags.includes(tag as never)) {
@@ -441,30 +451,36 @@ export function fixturePlanner(context: PlannerContext) {
     }
   }
 
-  // 2. Fill up to the pace target while the visit-time cap allows.
   const requiredMinutes = chosen.reduce((sum, candidate) => sum + candidate.durationMinutes, 0);
   if (requiredMinutes > profile.visitCap) {
     compromises.push(
       `The requested visits need ${requiredMinutes} minutes, above the ${profile.visitCap}-minute ${context.pace}-pace cap; the plan keeps the request for clarification instead of reducing it.`,
     );
   }
-  const fillTarget = Math.max(
-    profile.targetMin,
-    feedbackWantsFewerActivities(context) ? profile.targetMin : profile.targetMax,
+
+  // Requirement-critical candidates are placed before the remaining pinned ones:
+  // an unmet tag minimum is a hard validator error, while a dropped pin only
+  // warns (`preferred_activity_missing`). Without this order the layout could
+  // drop the visit that satisfied a minimum and trigger an avoidable
+  // clarification (2026-10-14).
+  const criticalMinimumTags = Object.entries(context.minimumActivityCounts).filter(
+    (entry): entry is [string, number] => (entry[1] ?? 0) > 0,
   );
-  let visitMinutes = requiredMinutes;
-  for (const candidate of activities) {
-    if (chosen.length >= fillTarget) {
-      break;
+  if (criticalMinimumTags.length > 0) {
+    const critical = new Set<FixtureCandidate>();
+    for (const [tag, minimum] of criticalMinimumTags) {
+      let kept = 0;
+      for (const candidate of chosen) {
+        if (kept >= minimum) {
+          break;
+        }
+        if (candidate.tags.includes(tag as never)) {
+          critical.add(candidate);
+          kept += 1;
+        }
+      }
     }
-    if (chosen.includes(candidate)) {
-      continue;
-    }
-    if (visitMinutes + candidate.durationMinutes > profile.visitCap) {
-      break;
-    }
-    chosen.push(candidate);
-    visitMinutes += candidate.durationMinutes;
+    chosen.sort((left, right) => Number(critical.has(right)) - Number(critical.has(left)));
   }
 
   const returnWindow = context.fixedWindows.find(

@@ -498,6 +498,113 @@ export interface CuratedLandmarksResult {
   readonly coverage: CoverageFlag;
 }
 
+export interface ReferenceCityRow {
+  readonly id: string;
+  readonly name: string;
+  readonly countryKey: string;
+  readonly lat: number;
+  readonly lon: number;
+  readonly coverageFlag: CoverageFlag;
+}
+
+/** The reference city row a discovery needs (name, center, coverage). */
+export async function getReferenceCity(
+  pool: Pick<PoolClient, "query">,
+  cityId: string,
+): Promise<ReferenceCityRow | undefined> {
+  const result = await pool.query<{
+    id: string;
+    name: string;
+    country_key: string;
+    lat: number;
+    lon: number;
+    coverage_flag: CoverageFlag;
+  }>(
+    `SELECT id, name, country_key, lat, lon, coverage_flag
+       FROM odft_app.reference_cities WHERE id = $1`,
+    [cityId],
+  );
+  const row = result.rows[0];
+  return row
+    ? {
+        id: row.id,
+        name: row.name,
+        countryKey: row.country_key,
+        lat: row.lat,
+        lon: row.lon,
+        coverageFlag: row.coverage_flag,
+      }
+    : undefined;
+}
+
+/**
+ * On-demand curation write (2026-10-13): persist Wikidata-discovered landmarks
+ * for a city and mark it curated, in one transaction. Idempotent per landmark id
+ * (`wikidata:Q<id>`), so a retried discovery inserts nothing new. Coordinates are
+ * envelope-checked by the discovery client before they reach this write.
+ */
+export async function persistDiscoveredLandmarks(
+  pool: Pool,
+  input: {
+    readonly cityId: string;
+    readonly landmarks: readonly {
+      readonly qid: string;
+      readonly name: string;
+      readonly lat: number;
+      readonly lon: number;
+    }[];
+  },
+): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let inserted = 0;
+    for (const landmark of input.landmarks) {
+      const result = await client.query(
+        `INSERT INTO odft_app.reference_landmarks
+           (id, city_id, name, lat, lon, source, source_id, source_url, verified)
+         VALUES ($1, $2, $3, $4, $5, 'wikidata', $6, $7, true)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          `wikidata:${landmark.qid}`,
+          input.cityId,
+          landmark.name,
+          landmark.lat,
+          landmark.lon,
+          landmark.qid,
+          `https://www.wikidata.org/wiki/${landmark.qid}`,
+        ],
+      );
+      inserted += result.rowCount ?? 0;
+    }
+    await client.query(
+      `UPDATE odft_app.reference_cities
+          SET coverage_flag = 'curated_landmarks', updated_at = now()
+        WHERE id = $1`,
+      [input.cityId],
+    );
+    await client.query("COMMIT");
+    return inserted;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Mark a city's reference coverage (e.g. `insufficient_reference` after an empty discovery). */
+export async function setReferenceCityCoverage(
+  pool: Pool,
+  cityId: string,
+  coverage: CoverageFlag,
+): Promise<void> {
+  await pool.query(
+    `UPDATE odft_app.reference_cities SET coverage_flag = $2, updated_at = now() WHERE id = $1`,
+    [cityId, coverage],
+  );
+}
+
 /** Curated landmarks for a city, plus its coverage flag. */
 export async function getCuratedLandmarks(
   pool: Pick<PoolClient, "query">,
