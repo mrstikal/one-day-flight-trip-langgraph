@@ -22,6 +22,10 @@ export async function declineBookingNode(
     throw new InvalidUpdateError("decline_booking requires the staged proposal and its decision");
   }
   const ports = travelPorts(runtime);
+  // Capture the kept selection BEFORE the decline: the declined offer may be a
+  // replacement of a different kept offer (a late "change hotel/flight" flow),
+  // which changes the plan inputs and must replan the day.
+  const before = await ports.loadProgress(state.tripId);
   // The domain service is keyed by `(operation, proposal)` and returns the stored
   // result on a replay, so a declined booking is recorded exactly once.
   const result = await ports.declineBooking({
@@ -35,9 +39,12 @@ export async function declineBookingNode(
   }
   const progress = await ports.loadProgress(state.tripId);
   const hotelSettled = progress.hotelConfirmed || progress.selectedServices.includes("hotel");
+  const previousSelection = before.selectionOfferIds[service];
+  const selectionChanged = previousSelection !== undefined && previousSelection !== result.offerId;
   // A declined booking during the initial flow continues to the next step; once
   // the program is applied the trip is already planned, so declining a late
-  // booking simply keeps the selection and ends the run.
+  // booking of the SAME selection ends the run, while a declined change (a
+  // different offer) replans the day through the logistics check.
   const nextDecisionKind = progress.programApplied
     ? null
     : service === "flights"
@@ -49,6 +56,7 @@ export async function declineBookingNode(
     gate: "pending",
     bookingService: service,
     pendingReplacement: false,
+    declinedSelectionChanged: progress.programApplied && selectionChanged,
     hasConfirmedFlight: progress.flightConfirmed,
     hasConfirmedHotel: progress.hotelConfirmed,
     confirmedServices: [...progress.confirmedServices],

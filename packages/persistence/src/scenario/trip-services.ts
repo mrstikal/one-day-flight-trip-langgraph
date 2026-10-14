@@ -50,6 +50,11 @@ export interface TripProgress {
   readonly confirmedServices: readonly BookableKey[];
   /** Phase 11: every service with an active (unbooked) selection. */
   readonly selectedServices: readonly BookableKey[];
+  /**
+   * Phase 12: the offer each unbooked selection keeps, so a declined late
+   * booking can tell a change (a different offer) from re-declining the same one.
+   */
+  readonly selectionOfferIds: Readonly<Partial<Record<BookableKey, string>>>;
   /** Phase 11: true when the meal/activity program has been applied. */
   readonly programApplied: boolean;
 }
@@ -215,8 +220,8 @@ export async function loadTripProgress(pool: Pool, tripId: string): Promise<Trip
         WHERE trip_id = $1 AND status = 'confirmed'`,
       [tripId],
     ),
-    pool.query<{ service_key: string }>(
-      `SELECT service_key FROM odft_app.trip_selections WHERE trip_id = $1`,
+    pool.query<{ service_key: string; offer_id: string }>(
+      `SELECT service_key, offer_id FROM odft_app.trip_selections WHERE trip_id = $1`,
       [tripId],
     ),
     pool.query<{ applied: boolean }>(
@@ -241,11 +246,16 @@ export async function loadTripProgress(pool: Pool, tripId: string): Promise<Trip
     ...selections.rows.map((row) => row.service_key as BookableKey),
     ...selfArranged.rows.map((row) => row.service_key as BookableKey),
   ]);
+  const selectionOfferIds: Partial<Record<BookableKey, string>> = {};
+  for (const row of selections.rows) {
+    selectionOfferIds[row.service_key as BookableKey] = row.offer_id;
+  }
   return {
     flightConfirmed: services.has("flights"),
     hotelConfirmed: services.has("hotel"),
     confirmedServices,
     selectedServices: [...selectedServices],
+    selectionOfferIds,
     programApplied: program.rows[0]?.applied ?? false,
   };
 }

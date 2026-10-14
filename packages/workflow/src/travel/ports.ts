@@ -113,6 +113,8 @@ export interface TravelProgress {
   readonly confirmedServices: readonly BookableKey[];
   /** Phase 11: services with an active (unbooked) selection. */
   readonly selectedServices: readonly BookableKey[];
+  /** Phase 12: the offer each unbooked selection keeps (see `TripProgress`). */
+  readonly selectionOfferIds: Readonly<Partial<Record<BookableKey, string>>>;
   /** Phase 11: true when the meal/activity program has been applied. */
   readonly programApplied: boolean;
 }

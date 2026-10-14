@@ -140,6 +140,12 @@ export const travelStateFields = {
   /** True while a staged proposal is a replacement for a confirmed service. */
   pendingReplacement: z.boolean().default(false),
   /**
+   * Phase 12: a declined late booking replaced a DIFFERENT offer than the one
+   * already kept, so the plan inputs changed and the day must be replanned
+   * (written by `decline_booking`, read once by its router).
+   */
+  declinedSelectionChanged: z.boolean().default(false),
+  /**
    * Kind and gate of the decision a `modify` resume interrupted, captured before
    * the operation-local state reset. ONLY an unsupported modification replays it
    * (a supported modification presents its own new decision).

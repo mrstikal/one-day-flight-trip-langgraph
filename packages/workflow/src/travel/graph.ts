@@ -162,11 +162,13 @@ export function routeAfterCommit(state: TravelState): string {
 /**
  * After a declined booking ("I don't want to book"): the same service-based
  * continuation as a booking, except that a decline during an already-planned
- * trip just keeps the selection and ends the run.
+ * trip usually just keeps the selection and ends the run. A late declined
+ * CHANGE (the declined offer differs from the kept selection) replans the day
+ * through the logistics check instead, mirroring a late meal selection change.
  */
 export function routeAfterDecline(state: TravelState): string {
   if (state.nextDecisionKind === null) {
-    return "publish_summary";
+    return state.declinedSelectionChanged ? "validate_selected_logistics" : "publish_summary";
   }
   return state.bookingService === "flights" ? "ensure_domains" : "validate_selected_logistics";
 }

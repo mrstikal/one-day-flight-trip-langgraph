@@ -10,6 +10,7 @@ import { formatEuroMinor } from "@/lib/format/money";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { BookingConfirmationDialog } from "@/components/booking/BookingConfirmationDialog";
+import { ChangeServiceButton } from "@/components/booking/ChangeServiceButton";
 import { ConfirmationResult } from "@/components/booking/ConfirmationResult";
 import { ProposalReview } from "@/components/booking/ProposalReview";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
@@ -203,6 +204,17 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
       reservation.serviceKey !== "flights" &&
       reservation.serviceKey !== "hotel",
   );
+
+  // A per-meal "Change" submits a `find_alternatives` command, which the graph
+  // applies through its `modify` branch even while a decision is pending
+  // (Phase 11), so the saved program stays editable during the itinerary
+  // approval and an open clarification — the same principle as the activities
+  // step. A decision that must be answered elsewhere (a live hotel/flight
+  // choice, a staged booking confirmation, recovery) keeps the step read-only.
+  const changesEditable =
+    pendingDecision === null ||
+    pendingDecision.kind === "itinerary_approval" ||
+    pendingDecision.kind === "clarification";
 
   const banner = error ? (
     <p role="status" className="rounded border border-clay bg-cream p-3 text-sm text-clay">
@@ -512,6 +524,18 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
             at a time. Tick &quot;I&apos;ll arrange it myself&quot; to leave a meal out of the plan.
           </p>
         </header>
+        {changesEditable ? (
+          pendingDecision ? (
+            <p role="note" data-testid="meals-change-note" className="text-sm text-ink-muted">
+              Changing a meal replaces the pending decision and replans the day; the updated
+              itinerary asks for approval again.
+            </p>
+          ) : null
+        ) : pendingDecision ? (
+          <p role="note" data-testid="meals-readonly-note" className="text-sm text-ink-muted">
+            A pending choice must be answered before the meals can change.
+          </p>
+        ) : null}
         <ul className="flex flex-col gap-2" aria-label="Saved meal choices">
           {MEALS.map((meal) => {
             const blocked = meal === "dinner" && Boolean(program?.dinnerNotIncludedReason);
@@ -533,25 +557,35 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
                         : mealOfferLabel(meals, offerId)}
                   </span>
                 </div>
-                {program && !blocked && !confirmedHere ? (
-                  <label
-                    className="flex items-center gap-2"
-                    title={
-                      !isSelfArranged && offerId === null
-                        ? `No ${meal} offer is available, so this meal cannot rejoin the plan.`
-                        : undefined
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      data-testid={`saved-self-arranged-${meal}`}
-                      checked={isSelfArranged}
-                      disabled={busy || activeWork || (!isSelfArranged && offerId === null)}
-                      onChange={(event) => void toggleSelfArranged(meal, event.target.checked)}
+                <div className="flex flex-wrap items-center gap-3">
+                  {changesEditable && !blocked && !isSelfArranged ? (
+                    <ChangeServiceButton
+                      tripId={tripId}
+                      service={meal}
+                      label={meal}
+                      onChanged={refresh}
                     />
-                    I&apos;ll arrange it myself
-                  </label>
-                ) : null}
+                  ) : null}
+                  {program && !blocked && !confirmedHere ? (
+                    <label
+                      className="flex items-center gap-2"
+                      title={
+                        !isSelfArranged && offerId === null
+                          ? `No ${meal} offer is available, so this meal cannot rejoin the plan.`
+                          : undefined
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid={`saved-self-arranged-${meal}`}
+                        checked={isSelfArranged}
+                        disabled={busy || activeWork || (!isSelfArranged && offerId === null)}
+                        onChange={(event) => void toggleSelfArranged(meal, event.target.checked)}
+                      />
+                      I&apos;ll arrange it myself
+                    </label>
+                  ) : null}
+                </div>
               </li>
             );
           })}
@@ -566,7 +600,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
             <p>{program.dinnerNotIncludedReason}</p>
           </div>
         ) : null}
-        {pendingDecision === null ? (
+        {changesEditable ? (
           <div className="grid gap-3 sm:grid-cols-3">
             {MEALS.filter(
               (meal) =>

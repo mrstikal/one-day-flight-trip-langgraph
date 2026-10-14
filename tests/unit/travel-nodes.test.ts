@@ -9,6 +9,7 @@ import {
   routeAfterApplyCommands,
   routeAfterApplyDecision,
   routeAfterCommit,
+  routeAfterDecline,
   routeAfterDetectProgress,
   routeAfterIntentResult,
   routeAfterLogistics,
@@ -360,6 +361,31 @@ describe("routers", () => {
     expect(routeAfterLogistics(state({ logisticsStatus: "valid", nextDecisionKind: null }))).toBe(
       "plan_itinerary",
     );
+  });
+
+  it("routes declined bookings: a late declined change replans, an unchanged one ends", () => {
+    // Initial flow: the same service-based continuation as a booking.
+    expect(
+      routeAfterDecline(state({ bookingService: "flights", nextDecisionKind: "hotel_choice" })),
+    ).toBe("ensure_domains");
+    expect(
+      routeAfterDecline(state({ bookingService: "hotel", nextDecisionKind: "program_choices" })),
+    ).toBe("validate_selected_logistics");
+    // Late booking of the already-kept offer on a planned trip: nothing changed.
+    expect(
+      routeAfterDecline(state({ bookingService: "hotel", nextDecisionKind: null })),
+    ).toBe("publish_summary");
+    // Late declined CHANGE (a different offer than the kept selection): replan.
+    expect(
+      routeAfterDecline(
+        state({ bookingService: "hotel", nextDecisionKind: null, declinedSelectionChanged: true }),
+      ),
+    ).toBe("validate_selected_logistics");
+    expect(
+      routeAfterDecline(
+        state({ bookingService: "flights", nextDecisionKind: null, declinedSelectionChanged: true }),
+      ),
+    ).toBe("validate_selected_logistics");
   });
 
   it("routes the Phase 10 itinerary loop by validation, budget, and review", () => {

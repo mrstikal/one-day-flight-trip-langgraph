@@ -15,19 +15,24 @@ const STEP_FOR_SERVICE: Partial<Record<ServiceKey, string>> = {
 };
 
 /**
- * Replacement entry point on a summary's confirmed row. It stages the same
- * `find_alternatives` command the assistant sends for a change and opens the step
- * where the refreshed choice is presented; the confirmed reservation is never
- * touched until the user confirms the replacement.
+ * Replacement entry point on a summary's confirmed row and on the service's own
+ * step (hotel/meals). It stages the same `find_alternatives` command the
+ * assistant sends for a change and opens the step where the refreshed choice is
+ * presented; an existing selection or reservation is never touched until the
+ * user confirms the replacement. On the already-open step the caller passes
+ * `onChanged` so the projection refreshes in place instead of re-navigating.
  */
 export function ChangeServiceButton({
   tripId,
   service,
   label,
+  onChanged,
 }: {
   readonly tripId: string;
   readonly service: ServiceKey;
   readonly label: string;
+  /** Present when the button sits on the target step itself. */
+  readonly onChanged?: () => void;
 }): React.JSX.Element | null {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -49,6 +54,10 @@ export function ChangeServiceButton({
         expectedRevision: trip.revision,
         command: { type: "find_alternatives", target: service, objective: "match_preferences" },
       });
+      if (onChanged) {
+        onChanged();
+        return;
+      }
       router.push(`/trips/${tripId}/${step}`);
       // The App Router does not reliably reset the scroll for a programmatic push
       // away from a long server-rendered page; the summary row sits at the bottom,

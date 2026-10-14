@@ -11,6 +11,7 @@ import { formatEuroMinor } from "@/lib/format/money";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { BookingConfirmationDialog } from "@/components/booking/BookingConfirmationDialog";
+import { ChangeServiceButton } from "@/components/booking/ChangeServiceButton";
 import { ConfirmationResult } from "@/components/booking/ConfirmationResult";
 import { ProposalReview } from "@/components/booking/ProposalReview";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
@@ -178,6 +179,41 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
   );
   const hotelResearch =
     projection.research?.domains.find((entry) => entry.domain === "hotel") ?? null;
+
+  // "Change hotel" submits a `find_alternatives` command, which the graph applies
+  // through its `modify` branch even while a decision is pending (Phase 11), so
+  // the settled step stays editable during the itinerary approval and an open
+  // clarification — the same principle as the activities step. A decision that
+  // must be answered elsewhere (a live hotel/flight choice, a staged booking
+  // confirmation, the meal program step, recovery) keeps the step read-only.
+  const changesEditable =
+    pendingDecision === null ||
+    pendingDecision.kind === "itinerary_approval" ||
+    pendingDecision.kind === "clarification";
+  const changeControls = (
+    <>
+      {changesEditable ? (
+        <>
+          {pendingDecision ? (
+            <p role="note" data-testid="hotel-change-note" className="text-sm text-ink-muted">
+              Choosing a different hotel replaces the pending decision and replans the day; the
+              updated itinerary asks for approval again.
+            </p>
+          ) : null}
+          <ChangeServiceButton
+            tripId={tripId}
+            service="hotel"
+            label="hotel"
+            onChanged={refresh}
+          />
+        </>
+      ) : pendingDecision ? (
+        <p role="note" data-testid="hotel-readonly-note" className="text-sm text-ink-muted">
+          A pending choice must be answered before the hotel can change.
+        </p>
+      ) : null}
+    </>
+  );
 
   const banner = error ? (
     <p role="status" className="rounded border border-clay bg-cream p-3 text-sm text-clay">
@@ -386,7 +422,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           nextHref={`/trips/${tripId}/meals`}
           nextLabel="Continue to meals"
         />
-        {pendingDecision === null ? (
+        {changesEditable ? (
           <ServiceLevelSelect
             tripId={tripId}
             revision={projection.trip.revision}
@@ -397,6 +433,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
             onChanged={refresh}
           />
         ) : null}
+        {changeControls}
         <p role="note" className="text-sm text-ink-muted">
           {DEMO_DISCLAIMER}
         </p>
@@ -448,6 +485,18 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
             onAction={() => void bookSelectedHotel(keptHotel.id)}
           />
         </OfferGrid>
+        {changesEditable ? (
+          <ServiceLevelSelect
+            tripId={tripId}
+            revision={projection.trip.revision}
+            service="hotel"
+            label="Hotel"
+            levelState={serviceLevels.hotel}
+            customObjective={projection.searchObjectives.hotel}
+            onChanged={refresh}
+          />
+        ) : null}
+        {changeControls}
         <p className="text-sm">
           <Link href={`/trips/${tripId}/meals`} className="underline">
             Continue to meals

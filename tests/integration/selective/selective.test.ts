@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DomainCommand } from "@odft/contracts";
-import { tripPreferencesSchema } from "@odft/contracts";
+import { snapshotContentSchema, tripPreferencesSchema } from "@odft/contracts";
 import {
   admitOperation,
   admitResume,
@@ -993,4 +993,166 @@ describe("selective replanning and route-change impact (real PostgreSQL)", () =>
     // No reservation was changed by the modification.
     expect(await reservations(harness.tripId)).toEqual(before);
   }, 180_000);
+
+  it("a declined late hotel change keeps the new selection and replans the day", async () => {
+    const harness = await createHarnessTrip(pool);
+    const driver = createTravelDriver(pools);
+    // Drive a planned trip whose flight AND hotel are kept selections: the
+    // "Not booked" state in which the change actions are offered.
+    await driver.runOperation(await claimNextOrFail(pools));
+    const flightDecision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    await resolveDecision(pool, pools, harness.tripId, harness.sessionId, {
+      action: "choose_offer",
+      offerId: flightDecision?.allowedOfferIds[0] as string,
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const flightConfirmation = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    await resolveDecision(pool, pools, harness.tripId, harness.sessionId, {
+      action: "decline_booking",
+      proposalId: flightConfirmation?.proposalId as string,
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const hotelDecision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    await resolveDecision(pool, pools, harness.tripId, harness.sessionId, {
+      action: "choose_offer",
+      offerId: hotelDecision?.allowedOfferIds[0] as string,
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const hotelConfirmation = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    await resolveDecision(pool, pools, harness.tripId, harness.sessionId, {
+      action: "decline_booking",
+      proposalId: hotelConfirmation?.proposalId as string,
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const program = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(program?.kind).toBe("program_choices");
+    const snapshot = await pool.query<{ inventory: unknown }>(
+      `SELECT s.inventory FROM odft_app.scenario_snapshots s
+         JOIN odft_app.trips t ON t.active_scenario_snapshot_id = s.id
+        WHERE t.id = $1`,
+      [harness.tripId],
+    );
+    const content = snapshotContentSchema.parse(snapshot.rows[0]?.inventory);
+    const offered = new Set(program?.allowedOfferIds);
+    const offeredByMeal = (meal: string): string =>
+      content.restaurants.find((offer) => offer.meal === meal && offered.has(offer.id))?.id ?? "";
+    await resolveDecision(pool, pools, harness.tripId, harness.sessionId, {
+      action: "submit_program",
+      mealOfferIds: {
+        breakfast: offeredByMeal("breakfast"),
+        lunch: offeredByMeal("lunch"),
+        dinner: offeredByMeal("dinner"),
+      },
+      preferredActivityIds: (program?.allowedOptionIds ?? []).slice(0, 2),
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    await approvePendingItinerary(pool, pools, harness.tripId, harness.sessionId);
+    const ready = await readTravelState(pools, harness.tripId);
+    expect(ready.values.gate).toBe("approved");
+    const itineraryBefore = await pool.query<{ current_itinerary_id: string | null }>(
+      `SELECT current_itinerary_id FROM odft_app.trips WHERE id = $1`,
+      [harness.tripId],
+    );
+    const selectionBefore = await pool.query<{ offer_id: string }>(
+      `SELECT offer_id FROM odft_app.trip_selections
+        WHERE trip_id = $1 AND service_key = 'hotel'`,
+      [harness.tripId],
+    );
+
+    // The late change: refreshed alternatives, a different kept offer, declined.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "find_alternatives",
+      target: "hotel",
+      objective: "match_preferences",
+    });
+    const choice = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(choice?.kind).toBe("hotel_choice");
+    const projection = await buildTripProjection(pool, harness.tripId, DISPLAY);
+    const alternative = projection?.hotel.find(
+      (offer) => offer.id !== selectionBefore.rows[0]?.offer_id,
+    );
+    expect(alternative).toBeDefined();
+    await admitResume(pool, {
+      tripId: harness.tripId,
+      sessionId: harness.sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: await tripRevision(pool, harness.tripId),
+        decisionId: choice?.id as string,
+        response: { action: "choose_offer", offerId: alternative?.id as string },
+      },
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const confirmation = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(confirmation?.kind).toBe("booking_confirmation");
+    await admitResume(pool, {
+      tripId: harness.tripId,
+      sessionId: harness.sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: await tripRevision(pool, harness.tripId),
+        decisionId: confirmation?.id as string,
+        response: { action: "decline_booking", proposalId: confirmation?.proposalId as string },
+      },
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+
+    // The declined change keeps the NEW offer as the selection (no reservation)
+    // and rebuilds the plan as a fresh draft that asks for approval again.
+    const selectionAfter = await pool.query<{ offer_id: string }>(
+      `SELECT offer_id FROM odft_app.trip_selections
+        WHERE trip_id = $1 AND service_key = 'hotel'`,
+      [harness.tripId],
+    );
+    expect(selectionAfter.rows[0]?.offer_id).toBe(alternative?.id);
+    expect(await reservations(harness.tripId)).toEqual([]);
+    const decision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(decision?.kind).toBe("itinerary_approval");
+    const itineraryAfter = await pool.query<{ current_itinerary_id: string | null }>(
+      `SELECT current_itinerary_id FROM odft_app.trips WHERE id = $1`,
+      [harness.tripId],
+    );
+    expect(itineraryAfter.rows[0]?.current_itinerary_id).not.toBe(
+      itineraryBefore.rows[0]?.current_itinerary_id,
+    );
+
+    // Booking the newly kept hotel late (from the "Not booked" review) follows
+    // the ordinary review and replans the day the same way — never back into the
+    // program step or a stale plan.
+    await runCommand(harness.tripId, harness.sessionId, {
+      type: "propose_selection",
+      service: "hotel",
+      offerId: alternative?.id as string,
+    });
+    const lateConfirmation = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(lateConfirmation?.kind).toBe("booking_confirmation");
+    await admitResume(pool, {
+      tripId: harness.tripId,
+      sessionId: harness.sessionId,
+      request: {
+        requestId: randomUUID(),
+        expectedRevision: await tripRevision(pool, harness.tripId),
+        decisionId: lateConfirmation?.id as string,
+        response: {
+          action: "confirm_booking",
+          proposalId: lateConfirmation?.proposalId as string,
+          acceptedDemoDisclaimer: true,
+        },
+      },
+    });
+    await driver.runOperation(await claimNextOrFail(pools));
+    const booked = await reservations(harness.tripId);
+    expect(
+      booked.find((row) => row.serviceKey === "hotel" && row.status === "confirmed")?.offerId,
+    ).toBe(alternative?.id);
+    const afterBookingDecision = await getPendingDecisionForTrip(pools.operations, harness.tripId);
+    expect(afterBookingDecision?.kind).toBe("itinerary_approval");
+    const itineraryBooked = await pool.query<{ current_itinerary_id: string | null }>(
+      `SELECT current_itinerary_id FROM odft_app.trips WHERE id = $1`,
+      [harness.tripId],
+    );
+    expect(itineraryBooked.rows[0]?.current_itinerary_id).not.toBe(
+      itineraryAfter.rows[0]?.current_itinerary_id,
+    );
+  }, 240_000);
 });

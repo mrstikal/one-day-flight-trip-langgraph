@@ -347,6 +347,87 @@ test("declining the flight and hotel booking keeps them in the plan as Not booke
   await expect(page.getByTestId("flight-not-booked")).toHaveCount(0);
 });
 
+test("changes a settled hotel and meal from their steps", async ({ page }) => {
+  // The spec already creates five trips; the per-IP trip-creation bucket (5/h)
+  // would refuse this one without a fresh window.
+  await resetRateLimits();
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+
+  // Decline both bookings: the hotel is a kept selection and the meals are a
+  // saved program — the state in which the change actions are needed.
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await expect(page.getByTestId("decline-flight-booking")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("decline-flight-booking").click();
+  await expect(page.getByTestId("flight-not-booked")).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 90_000 });
+  await page
+    .getByTestId("hotel-offer")
+    .first()
+    .getByRole("button", { name: "Choose this hotel" })
+    .click();
+  await expect(page.getByTestId("decline-hotel-booking")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("decline-hotel-booking").click();
+  await expect(page.getByTestId("hotel-not-booked")).toBeVisible({ timeout: 90_000 });
+
+  // Saving the program starts the planning; the approval is pending exactly
+  // when the user re-visits the steps.
+  await page.getByRole("link", { name: "Continue to meals" }).click();
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("step-nav-itinerary")).toContainText("next", {
+    timeout: 120_000,
+  });
+
+  // "Change hotel" stays editable while the itinerary approval is pending: it
+  // re-opens the hotel choice, and choosing another offer goes through the
+  // ordinary review. Declining it keeps the NEW hotel and replans the day.
+  await page.goto(`/trips/${tripId}/hotel`);
+  await expect(page.getByTestId("hotel-change-note")).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId("change-hotel").click();
+  const otherHotel = page.getByTestId("hotel-offer").nth(1);
+  await expect(otherHotel).toBeVisible({ timeout: 90_000 });
+  const otherHotelName = (await otherHotel.getByRole("heading", { level: 3 }).textContent()) ?? "";
+  await otherHotel.getByRole("button", { name: "Choose this hotel" }).click();
+  await expect(page.getByTestId("decline-hotel-booking")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("decline-hotel-booking").click();
+  await expect(page.getByTestId("hotel-not-booked")).toBeVisible({ timeout: 90_000 });
+  await expect(
+    page.getByTestId("selected-hotel-offer").getByRole("heading", { level: 3 }),
+  ).toHaveText(otherHotelName);
+  // The declined change replans the day: the itinerary gets a fresh draft that
+  // asks for approval again.
+  await page.goto(`/trips/${tripId}/itinerary`);
+  await expect(page.getByTestId("itinerary-version")).toContainText("Version 2", {
+    timeout: 180_000,
+  });
+  await expect(page.getByTestId("itinerary-status")).toHaveText("Draft");
+
+  // A per-meal "Change" stays available while the approval is pending too: it
+  // replaces the decision with the program choices, and the new selection
+  // replans the day.
+  await page.goto(`/trips/${tripId}/meals`);
+  await expect(page.getByTestId("meals-change-note")).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId("change-lunch").click();
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 90_000,
+  });
+  const otherLunch = page
+    .getByTestId("meal-offer-lunch")
+    .filter({ has: page.getByRole("button", { name: "Choose this lunch" }) })
+    .first();
+  await expect(otherLunch).toBeVisible();
+  const otherLunchName = (await otherLunch.getByRole("heading", { level: 3 }).textContent()) ?? "";
+  await otherLunch.getByRole("button", { name: "Choose this lunch" }).click();
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("list", { name: "Saved meal choices" })).toContainText(otherLunchName);
+});
+
 test("an early return offers no dinner selection, only a clear warning", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Your name").fill("Grace Hopper");
