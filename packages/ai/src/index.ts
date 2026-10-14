@@ -128,3 +128,4 @@ export { INTENT_PROMPT_VERSION, INTENT_SYSTEM_PROMPT } from "./prompts/intent-v1
 export { RECOMMENDATION_PROMPT_VERSION, RECOMMENDATION_SYSTEM_PROMPT } from "./prompts/recommendation-v1.js";
 export { PLANNER_PROMPT_VERSION, PLANNER_SYSTEM_PROMPT } from "./prompts/planner-v2.js";
 export { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_PROMPT } from "./prompts/reviewer-v1.js";
+export { enforceOptInVisits } from "./opt-in-visits.js";

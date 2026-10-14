@@ -57,6 +57,7 @@ import {
   type Meal,
 } from "@odft/contracts";
 import {
+  enforceOptInVisits,
   plannerContextSchema,
   reviewerContextSchema,
   type PlannerContext,
@@ -782,6 +783,18 @@ export function createTravelPortsFactory(
       let simulatedFailure = false;
       let simulatedFailureNote: string | null = null;
       let injectedThisAttempt = false;
+      const meals = selectedMealOffers(data);
+      const activities = activityCandidates(data);
+      // Visits are OPT-IN (2026-10-14): strip any activity the user did not pin
+      // and that no stored tag minimum needs — the live model reliably adds
+      // opportunistic extras despite the planner-v2 instruction.
+      if (output) {
+        output = enforceOptInVisits(output, {
+          preferredActivityIds: data.preferredActivityIds,
+          minimumActivityCounts: data.trip.preferences.minimumActivityCounts,
+          candidates: activities,
+        });
+      }
       // Phase 10: the transfer room between consecutive located stops is domain
       // arithmetic, not model arithmetic; widen the planner's packed pairs before
       // the (deliberate) fault injection and validation so the bounded loop fails
@@ -806,8 +819,6 @@ export function createTravelPortsFactory(
           "Simulated failure: the first planning attempt included an injected overlap; it was repaired within the bounded loop.";
       }
 
-      const meals = selectedMealOffers(data);
-      const activities = activityCandidates(data);
       const hotel = data.hotelOfferId
         ? data.content.hotels.find((offer) => offer.id === data.hotelOfferId)
         : undefined;
