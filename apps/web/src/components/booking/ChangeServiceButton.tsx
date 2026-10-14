@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { ServiceKey } from "@odft/contracts";
 import { ApiError, apiGet } from "@/lib/api-client";
 import { submitCommand } from "@/lib/decision-client";
+import { runWithOperationPreloader } from "@/lib/operation-preloader";
 
 /** The step that presents a service's refreshed choice. */
 const STEP_FOR_SERVICE: Partial<Record<ServiceKey, string>> = {
@@ -46,13 +47,15 @@ export function ChangeServiceButton({
     setBusy(true);
     setError(undefined);
     try {
-      // The summary is server-rendered, so its revision can be stale after any
-      // trip activity; read the current one right before writing.
-      const { trip } = await apiGet<{ trip: { revision: number } }>(`/api/trips/${tripId}`);
-      await submitCommand(tripId, {
-        requestId: crypto.randomUUID(),
-        expectedRevision: trip.revision,
-        command: { type: "find_alternatives", target: service, objective: "match_preferences" },
+      await runWithOperationPreloader("Finding alternatives...", async () => {
+        // The summary is server-rendered, so its revision can be stale after any
+        // trip activity; read the current one right before writing.
+        const { trip } = await apiGet<{ trip: { revision: number } }>(`/api/trips/${tripId}`);
+        await submitCommand(tripId, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: trip.revision,
+          command: { type: "find_alternatives", target: service, objective: "match_preferences" },
+        });
       });
       if (onChanged) {
         onChanged();

@@ -1,4 +1,5 @@
 import { apiGet } from "./api-client";
+import { runWithOperationPreloader } from "./operation-preloader";
 import { ensureSession } from "./session-client";
 
 /**
@@ -33,25 +34,34 @@ interface ListResponse<T> {
 }
 
 export async function searchCountries(query: string): Promise<readonly CountryOption[]> {
-  await ensureSession();
-  const params = new URLSearchParams({ q: query, limit: "20" });
-  const body = await apiGet<ListResponse<CountryOption>>(`/api/reference/countries?${params}`);
-  return body.items;
+  return runWithOperationPreloader("Searching countries...", async () => {
+    await ensureSession();
+    const params = new URLSearchParams({ q: query, limit: "20" });
+    const body = await apiGet<ListResponse<CountryOption>>(`/api/reference/countries?${params}`);
+    return body.items;
+  });
 }
 
 export async function searchAirports(query: string): Promise<readonly AirportOption[]> {
-  await ensureSession();
-  const params = new URLSearchParams({ q: query, limit: "20" });
-  const body = await apiGet<ListResponse<AirportOption>>(`/api/reference/airports?${params}`);
-  return body.items;
+  return runWithOperationPreloader("Searching airports...", async () => {
+    await ensureSession();
+    const params = new URLSearchParams({ q: query, limit: "20" });
+    const body = await apiGet<ListResponse<AirportOption>>(`/api/reference/airports?${params}`);
+    return body.items;
+  });
 }
 
 export async function searchCities(
   countryKey: string,
   query: string,
 ): Promise<{ readonly items: readonly CityOption[]; readonly datasetLimitation?: string }> {
-  await ensureSession();
-  const params = new URLSearchParams({ country: countryKey, q: query, limit: "20" });
-  const body = await apiGet<ListResponse<CityOption>>(`/api/reference/cities?${params}`);
-  return { items: body.items, ...(body.datasetLimitation ? { datasetLimitation: body.datasetLimitation } : {}) };
+  return runWithOperationPreloader("Loading city data...", async () => {
+    await ensureSession();
+    const params = new URLSearchParams({ country: countryKey, q: query, limit: "20" });
+    const body = await apiGet<ListResponse<CityOption>>(`/api/reference/cities?${params}`);
+    return {
+      items: body.items,
+      ...(body.datasetLimitation ? { datasetLimitation: body.datasetLimitation } : {}),
+    };
+  });
 }

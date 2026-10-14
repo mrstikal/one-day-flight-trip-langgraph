@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { BookableKey } from "@odft/contracts";
 import { ApiError, apiGet } from "@/lib/api-client";
 import { submitCommand } from "@/lib/decision-client";
+import { runWithOperationPreloader } from "@/lib/operation-preloader";
 
 /** The step that presents a declined booking's review dialog. */
 const STEP_FOR_SERVICE: Partial<Record<BookableKey, string>> = {
@@ -40,13 +41,15 @@ export function BookServiceButton({
     setBusy(true);
     setError(undefined);
     try {
-      // The summary is server-rendered, so its revision can be stale after any
-      // trip activity; read the current one right before writing.
-      const { trip } = await apiGet<{ trip: { revision: number } }>(`/api/trips/${tripId}`);
-      await submitCommand(tripId, {
-        requestId: crypto.randomUUID(),
-        expectedRevision: trip.revision,
-        command: { type: "propose_selection", service, offerId },
+      await runWithOperationPreloader("Saving your selection...", async () => {
+        // The summary is server-rendered, so its revision can be stale after any
+        // trip activity; read the current one right before writing.
+        const { trip } = await apiGet<{ trip: { revision: number } }>(`/api/trips/${tripId}`);
+        await submitCommand(tripId, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: trip.revision,
+          command: { type: "propose_selection", service, offerId },
+        });
       });
       router.push(`/trips/${tripId}/${step}`);
       // Match the change flow: put the target step at its top explicitly.
