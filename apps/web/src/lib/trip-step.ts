@@ -22,6 +22,13 @@ export interface TripStepInput {
   readonly reservations: readonly { readonly serviceKey: string; readonly status: string }[];
   readonly hasProgram: boolean;
   readonly hasItinerary: boolean;
+  /**
+   * Phase 12: the flight/hotel was kept as a selection when its booking was
+   * declined ("I don't want to book"), so the step counts as settled without a
+   * reservation.
+   */
+  readonly flightSelected?: boolean;
+  readonly hotelSelected?: boolean;
   /** Kind of the pending decision, when one is waiting for the user. */
   readonly pendingDecisionKind?: string | null;
   /** Service of the staged proposal, for booking/replacement confirmations. */
@@ -66,12 +73,25 @@ function step(
 /**
  * A saved program: the projection always contains a program block as soon as the
  * snapshot materializes meals and activities, so only the persisted meal
- * selections (trip_selections) prove the user applied the program step.
+ * selections (trip_selections) prove the user applied the program step. A
+ * breakfast the traveler arranges themselves ("I'll arrange it myself") is also
+ * part of a saved program — its selection is intentionally absent.
  */
 export function hasSavedProgram(
-  program: { readonly selectedMeals: { readonly breakfast: string | null } } | null,
+  program: {
+    readonly selectedMeals: { readonly breakfast: string | null };
+    readonly selfArrangedMeals?: {
+      readonly breakfast: boolean;
+      readonly lunch: boolean;
+      readonly dinner: boolean;
+    };
+  } | null,
 ): boolean {
-  return program !== null && program.selectedMeals.breakfast !== null;
+  return (
+    program !== null &&
+    (program.selectedMeals.breakfast !== null ||
+      program.selfArrangedMeals?.breakfast === true)
+  );
 }
 
 export type TripStepKey =
@@ -111,6 +131,8 @@ export function tripStepStates(input: TripStepInput): readonly TripStepEntry[] {
   );
   const flights = confirmed.has("flights");
   const hotel = confirmed.has("hotel");
+  const flightsSettled = flights || input.flightSelected === true;
+  const hotelSettled = hotel || input.hotelSelected === true;
   const nextHref = nextTripStep(input)?.href ?? null;
   const steps: Omit<TripStepEntry, "next">[] = [
     { key: "details", label: "Trip details", href: "/", enabled: true, requires: null },
@@ -132,15 +154,15 @@ export function tripStepStates(input: TripStepInput): readonly TripStepEntry[] {
       key: "hotel",
       label: "Hotel",
       href: `/trips/${input.tripId}/hotel`,
-      enabled: flights,
-      requires: flights ? null : "Confirm a flight first",
+      enabled: flightsSettled,
+      requires: flightsSettled ? null : "Confirm a flight (or arrange it yourself) first",
     },
     {
       key: "meals",
       label: "Meals",
       href: `/trips/${input.tripId}/meals`,
-      enabled: hotel,
-      requires: hotel ? null : "Confirm a hotel first",
+      enabled: hotelSettled,
+      requires: hotelSettled ? null : "Confirm a hotel (or arrange it yourself) first",
     },
     {
       key: "activities",
@@ -219,10 +241,10 @@ export function nextTripStep(input: TripStepInput): TripStep | null {
       break;
   }
 
-  if (!confirmed.has("flights")) {
+  if (!confirmed.has("flights") && input.flightSelected !== true) {
     return step("flights", input, confirmed);
   }
-  if (!confirmed.has("hotel")) {
+  if (!confirmed.has("hotel") && input.hotelSelected !== true) {
     return step("hotel", input, confirmed);
   }
   if (!input.hasProgram) {

@@ -33,6 +33,7 @@ function state(partial: Partial<TravelState>): TravelState {
     itineraryReviewVerdict: null,
     itineraryErrorCodes: [],
     itineraryStatus: null,
+    selectedServices: [],
     ...partial,
   } as TravelState;
 }
@@ -312,6 +313,13 @@ describe("routers", () => {
   it("resumes a preference change at the confirmed progress (Phase 07)", () => {
     expect(routeAfterDetectProgress(state({ hasConfirmedFlight: true }))).toBe("ensure_domains");
     expect(routeAfterDetectProgress(state({ hasConfirmedFlight: false }))).toBe("validate_route");
+    // Phase 12: a declined booking keeps the flight as a selection, which also
+    // settles the step without re-running feasibility.
+    expect(
+      routeAfterDetectProgress(
+        state({ hasConfirmedFlight: false, selectedServices: ["flights"] }),
+      ),
+    ).toBe("ensure_domains");
   });
 
   it("an unsupported modification re-presents the decision instead of ending", () => {

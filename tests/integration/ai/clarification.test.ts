@@ -10,7 +10,6 @@ import {
   createWorkerPools,
   driveTripToReady,
   endWorkerPools,
-  readTravelState,
   resetGraphDatabase,
   sendChat,
   tripRevision,

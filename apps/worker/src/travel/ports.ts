@@ -165,8 +165,8 @@ function activityCandidates(data: ItineraryPlanningData): AssemblyActivityCandid
 }
 
 function returnDepartureInstant(data: ItineraryPlanningData): string | null {
-  const flight = data.confirmedFlightOfferId
-    ? data.content.flights.find((combination) => combination.id === data.confirmedFlightOfferId)
+  const flight = data.flightOfferId
+    ? data.content.flights.find((combination) => combination.id === data.flightOfferId)
     : undefined;
   return flight?.inbound.segments[0]?.departureInstant ?? null;
 }
@@ -197,8 +197,8 @@ function airportLeadMinutes(data: ItineraryPlanningData): number {
   if (!airport) {
     return AIRPORT_BUFFER_MINUTES;
   }
-  const hotel = data.confirmedHotelOfferId
-    ? data.content.hotels.find((offer) => offer.id === data.confirmedHotelOfferId)
+  const hotel = data.hotelOfferId
+    ? data.content.hotels.find((offer) => offer.id === data.hotelOfferId)
     : undefined;
   const origins = [
     ...(hotel ? [hotel.anchor] : []),
@@ -352,8 +352,10 @@ function itinerarySource(data: ItineraryPlanningData): ItinerarySourceFingerprin
       dinner: data.confirmedMeals.dinner ?? data.selectedMeals.dinner,
     },
     confirmedMealIds: data.confirmedMealIds,
-    confirmedFlightOfferId: data.confirmedFlightOfferId,
-    confirmedHotelOfferId: data.confirmedHotelOfferId,
+    flightOfferId: data.flightOfferId,
+    flightBooked: data.flightBooked,
+    hotelOfferId: data.hotelOfferId,
+    hotelBooked: data.hotelBooked,
     selfArrangedMeals: data.selfArrangedMeals,
     selfArrangedActivities: data.selfArrangedActivities,
   };
@@ -578,6 +580,21 @@ export function createTravelPortsFactory(
       });
     },
 
+    async declineBooking(input) {
+      const trip = await getTrip(pool, input.tripId);
+      if (!trip) {
+        throw new Error(`trip ${input.tripId} not found while declining a booking`);
+      }
+      return booking.declineBooking({
+        tripId: input.tripId,
+        sessionId: trip.sessionId,
+        proposalId: input.proposalId,
+        decisionId: input.decisionId,
+        operationId: input.operationId,
+        fencingToken: ctx.fencingToken,
+      });
+    },
+
     async ensureDomains(tripId) {
       const manifest = await scenarios.ensureDomains(tripId, [...RESEARCH_MATERIALIZED_DOMAINS]);
       return { materializedDomains: manifest.materializedDomains, snapshotId: manifest.snapshotId };
@@ -727,10 +744,13 @@ export function createTravelPortsFactory(
     async planItinerary(input) {
       const data = await loadItineraryPlanningData(pool, input.tripId);
       const departureInstant = returnDepartureInstant(data);
-      if (!data.confirmedFlightOfferId || !departureInstant) {
+      // The plan is built around the confirmed flight or, for a declined booking
+      // ("I don't want to book"), the persisted selection: either way the return
+      // window, the airport buffer, and the flight/hotel costs are all included.
+      if (!data.flightOfferId || !departureInstant) {
         throw new ItineraryPersistenceError(
           "CONFLICT",
-          "the itinerary needs a confirmed flight before planning can start",
+          "the itinerary needs a confirmed or selected flight before planning can start",
         );
       }
       const departureMinuteRaw = localMinuteOfInstant(
@@ -788,11 +808,11 @@ export function createTravelPortsFactory(
 
       const meals = selectedMealOffers(data);
       const activities = activityCandidates(data);
-      const hotel = data.confirmedHotelOfferId
-        ? data.content.hotels.find((offer) => offer.id === data.confirmedHotelOfferId)
+      const hotel = data.hotelOfferId
+        ? data.content.hotels.find((offer) => offer.id === data.hotelOfferId)
         : undefined;
-      const flight = data.confirmedFlightOfferId
-        ? data.content.flights.find((combination) => combination.id === data.confirmedFlightOfferId)
+      const flight = data.flightOfferId
+        ? data.content.flights.find((combination) => combination.id === data.flightOfferId)
         : undefined;
       const source = itinerarySource(data);
       const assembly = assembleItinerary({

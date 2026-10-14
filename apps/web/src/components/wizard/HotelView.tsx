@@ -115,6 +115,56 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
     }
   }, [handleError, projection, refresh, tripId]);
 
+  // "I don't want to book" is a trusted decision response: it declines the
+  // simulated reservation for the staged hotel but keeps the offer as the trip's
+  // selection, so the plan is built as if the hotel existed.
+  const declineHotelBooking = useCallback(
+    async (decisionId: string, revision: number, proposalId: string): Promise<void> => {
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitDecision({
+          tripId,
+          decisionId,
+          expectedRevision: revision,
+          response: { action: "decline_booking", proposalId },
+        });
+        setDialogOpen(false);
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, refresh, tripId],
+  );
+
+  // A late booking for the kept selection: staging the same offer as a proposal
+  // opens the ordinary review dialog, which can still be declined.
+  const bookSelectedHotel = useCallback(
+    async (offerId: string): Promise<void> => {
+      if (!projection) {
+        return;
+      }
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitCommand(tripId, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: projection.trip.revision,
+          command: { type: "propose_selection", service: "hotel", offerId },
+        });
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, projection, refresh, tripId],
+  );
+
   if (!projection) {
     if (error) {
       return <ErrorPanel message={error.message} onRetry={refresh} />;
@@ -267,7 +317,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
         {banner}
         <ProposalReview
           title="Review and confirm your hotel"
-          description="Your selected hotel is staged as a review proposal. Confirm to create the simulated reservation, or choose a different hotel."
+          description="Your selected hotel is staged as a review proposal. Confirm to create the simulated reservation, choose a different hotel, or decline the booking."
           proposal={proposal}
           reviewLabel="Review booking"
           busy={busy}
@@ -279,6 +329,19 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
             })
           }
         />
+        {pendingDecision.kind === "booking_confirmation" ? (
+          <button
+            type="button"
+            disabled={busy || activeWork}
+            data-testid="decline-hotel-booking"
+            onClick={() =>
+              void declineHotelBooking(pendingDecision.id, projection.trip.revision, proposal.id)
+            }
+            className="w-fit rounded border border-border px-4 py-2 text-sm disabled:opacity-50"
+          >
+            I don&apos;t want to book
+          </button>
+        ) : null}
         <BookingConfirmationDialog
           open={dialogOpen}
           heading="Confirm this simulated hotel booking"
@@ -336,6 +399,59 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
         ) : null}
         <p role="note" className="text-sm text-ink-muted">
           {DEMO_DISCLAIMER}
+        </p>
+      </div>
+    );
+  }
+
+  // A declined booking ("I don't want to book") keeps the chosen hotel as the
+  // trip's selection: the step is settled, the plan treats the hotel as if it
+  // existed, and the later booking stays one click away.
+  const keptHotel =
+    projection.selections.hotel.offerId !== null
+      ? (hotel.find((offer) => offer.id === projection.selections.hotel.offerId) ?? null)
+      : null;
+  if (keptHotel) {
+    return (
+      <div className="flex flex-col gap-6">
+        {banner}
+        {actionError ? (
+          <p role="alert" className="text-sm text-clay">
+            {actionError}
+          </p>
+        ) : null}
+        <header className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl">Your hotel</h1>
+          <span
+            data-testid="hotel-not-booked"
+            className="rounded border border-clay bg-cream px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-clay"
+          >
+            Not booked
+          </span>
+        </header>
+        <p role="note" className="rounded bg-info p-3 text-sm text-clay">
+          No simulated reservation exists for this hotel; you arrange the booking yourself. The day
+          plan is still built around it, including its cost and the transfer from the airport.
+        </p>
+        <OfferGrid label="Selected hotel">
+          <OfferCard
+            title={keptHotel.name}
+            subtitle={`${keptHotel.level} · ${keptHotel.nights} night(s)`}
+            priceMinor={keptHotel.partyTotalMinor}
+            priceNote={`total for ${keptHotel.adults} adults`}
+            details={hotelDetails(keptHotel)}
+            demoLabels={keptHotel.demoLabels}
+            actionLabel="Book this hotel"
+            selected
+            disabled={busy || activeWork}
+            testId="selected-hotel-offer"
+            onAction={() => void bookSelectedHotel(keptHotel.id)}
+          />
+        </OfferGrid>
+        <p className="text-sm">
+          <Link href={`/trips/${tripId}/meals`} className="underline">
+            Continue to meals
+          </Link>
         </p>
       </div>
     );

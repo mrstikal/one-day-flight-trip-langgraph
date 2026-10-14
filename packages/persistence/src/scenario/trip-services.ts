@@ -134,8 +134,15 @@ export async function dinnerSlotAvailable(
     };
   }
   const reservation = await queryable.query<{ offer_id: string }>(
-    `SELECT offer_id FROM odft_app.reservations
-      WHERE trip_id = $1 AND service_key = 'flights' AND status = 'confirmed'`,
+    `SELECT offer_id FROM (
+       SELECT offer_id, 0 AS rank FROM odft_app.reservations
+        WHERE trip_id = $1 AND service_key = 'flights' AND status = 'confirmed'
+       UNION ALL
+       SELECT offer_id, 1 AS rank FROM odft_app.trip_selections
+        WHERE trip_id = $1 AND service_key = 'flights'
+     ) effective
+     ORDER BY rank
+     LIMIT 1`,
     [tripId],
   );
   const offerId = reservation.rows[0]?.offer_id;
@@ -469,9 +476,11 @@ export async function removeProgramSelections(
 }
 
 /**
- * Deterministic selected-logistics check: the confirmed hotel's airport transfer
- * must be within the policy bound and confirmed meal windows must not run past
- * the return departure. It never edits a reservation.
+ * Deterministic selected-logistics check: the planned hotel's airport transfer
+ * must be within the policy bound and planned meal windows must not run past the
+ * return departure. "Planned" means the confirmed reservation or, for a declined
+ * booking ("I don't want to book"), the persisted selection — the plan is built
+ * as if the service existed either way. It never edits a reservation.
  */
 export async function validateTripLogistics(
   pool: Pool,
@@ -492,24 +501,27 @@ export async function validateTripLogistics(
       return { status: "valid", reason: null };
     }
 
-    const flightReservation = await client.query<{ offer_id: string }>(
-      `SELECT offer_id FROM odft_app.reservations
-        WHERE trip_id = $1 AND service_key = 'flights' AND status = 'confirmed'`,
+    const effective = await client.query<{ service_key: string; offer_id: string }>(
+      `SELECT service_key, (array_agg(offer_id ORDER BY rank))[1] AS offer_id FROM (
+         SELECT service_key, offer_id, 0 AS rank FROM odft_app.reservations
+          WHERE trip_id = $1 AND status = 'confirmed'
+         UNION ALL
+         SELECT service_key, offer_id, 1 AS rank FROM odft_app.trip_selections
+          WHERE trip_id = $1
+       ) mixed
+       GROUP BY service_key`,
       [tripId],
     );
-    const flightOfferId = flightReservation.rows[0]?.offer_id;
+    const plannedByService = new Map(effective.rows.map((row) => [row.service_key, row.offer_id]));
+
+    const flightOfferId = plannedByService.get("flights");
     const flight = flightOfferId
       ? content.flights.find((candidate) => candidate.id === flightOfferId)
       : undefined;
     const outboundLast = flight?.outbound.segments[flight.outbound.segments.length - 1];
     const destinationAirportId = outboundLast?.toAirportId ?? null;
 
-    const hotel = await client.query<{ offer_id: string }>(
-      `SELECT offer_id FROM odft_app.reservations
-        WHERE trip_id = $1 AND service_key = 'hotel' AND status = 'confirmed'`,
-      [tripId],
-    );
-    const hotelOfferId = hotel.rows[0]?.offer_id;
+    const hotelOfferId = plannedByService.get("hotel");
     const offer = hotelOfferId
       ? content.hotels.find((candidate) => candidate.id === hotelOfferId)
       : undefined;
@@ -536,7 +548,7 @@ export async function validateTripLogistics(
       }
     }
 
-    // Confirmed meal windows must not run past the return departure on the day.
+    // Planned meal windows must not run past the return departure on the day.
     const returnFirst = flight?.inbound.segments[0];
     const returnDeparture = returnFirst
       ? localMinutes(
@@ -544,15 +556,12 @@ export async function validateTripLogistics(
           returnFirst.departureZone || content.context.cityZone,
         )
       : null;
-    const meals = await client.query<{ service_key: string; offer_id: string }>(
-      `SELECT service_key, offer_id FROM odft_app.reservations
-        WHERE trip_id = $1 AND status = 'confirmed'
-          AND service_key IN ('breakfast','lunch','dinner')`,
-      [tripId],
-    );
     if (returnDeparture && returnDeparture.date === content.context.sightseeingDate) {
-      for (const meal of meals.rows) {
-        const mealOffer = content.restaurants.find((candidate) => candidate.id === meal.offer_id);
+      for (const service of MEAL_SERVICES) {
+        const offerId = plannedByService.get(service);
+        const mealOffer = offerId
+          ? content.restaurants.find((candidate) => candidate.id === offerId)
+          : undefined;
         if (!mealOffer) {
           continue;
         }
@@ -560,7 +569,7 @@ export async function validateTripLogistics(
         if (windowEnd !== null && windowEnd > returnDeparture.minutes) {
           return {
             status: "conflict",
-            reason: `The confirmed ${meal.service_key} window ends at ${mealOffer.windowEnd}, after your return flight leaves.`,
+            reason: `The ${service} window ends at ${mealOffer.windowEnd}, after your return flight leaves.`,
           };
         }
       }

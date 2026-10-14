@@ -33,9 +33,13 @@ flowchart TD
     Decision -->|choose an offer| Stage[stage_selection]
     Stage --> Prepare
     Decision -->|explicit booking confirmation| Booking[commit_booking]
+    Decision -->|decline booking, keep selection| Declined[decline_booking]
     Booking -->|flights confirmed| Dispatch
     Booking -->|hotel confirmed, initial trip| Prepare
     Booking -->|replacement or meal booking| Logistics[validate_selected_logistics]
+    Declined -->|flights kept| Dispatch
+    Declined -->|hotel kept| Logistics
+    Declined -->|trip already planned| Summary
     Logistics -->|valid| Plan
     Logistics -->|conflict| Prepare
     Decision -->|program submitted| Plan
@@ -105,6 +109,7 @@ The domain store remains authoritative. Hydration checks source fingerprints bef
 | `apply_decision` | Authorized response and descriptor | Next-work enum, proposal action, or validated command ref | Idempotent resolution; freshness and membership rechecked |
 | `stage_selection` | Valid current offer ID | Proposed selection, before/after prices, replacement impact | No confirmation; old reservation stays active |
 | `commit_booking` | Explicit confirmed proposal | Deterministic reservation service result | Atomic idempotent SQL; no LLM calls |
+| `decline_booking` | Explicit decline decision for a staged flight/hotel proposal | Persisted offer selection (no reservation), proposal withdrawn, run continues to the next step | Atomic idempotent SQL; a confirmed service cannot be declined (2026-10-14) |
 | `commit_route_change` | Explicit impact confirmation | New route inputs; affected reservations explicitly cancelled/superseded as previewed | Atomic SQL; invalidate both feasibility stages |
 | `dispatch_research` | Required/failed domains and current hashes | Ensure missing inventories once after confirmed valid flights, then new `Send` tasks, or direct continuation for zero domains | Idempotent single snapshot extension before fan-out; resets only current work scope |
 | `research_domain` | One domain, snapshot, source fingerprint, attempt | Tagged success/unavailable/retryable-error ref | Read-only provider plus idempotent artifact write; bounded failure injection |
@@ -160,6 +165,9 @@ Known provider failure is a tagged domain result, allowing successful siblings t
 | Necessary hotel domain unavailable | Bounded retry or recovery decision | Flights and successful research results |
 | Restaurant/events unavailable | Explain missing option; block missing mandatory meal or use explicitly allowed fallback | Other valid research |
 | Hotel choice/replacement | Proposal then explicit booking/replacement confirmation | Old confirmed hotel until commit |
+| Declined flight/hotel booking (`decline_booking`) | Keep the chosen offer as the step's selection (no reservation row) and continue to the next step; a late booking stages the same offer as a proposal and replans | Selection persisted; plan inputs (flight times, airport buffer, hotel anchor, costs) computed as if the service existed; overviews show `Not booked` |
+| Confirmed flight/hotel | Dispatch independent research; program step | Existing approved reservation |
+| `Not booked` selection settles the step | Hotel/program step unlocks exactly like a confirmed service; booking later replans on confirmation | Selection row plus existing plan artifacts |
 | Preference-only service change | Refresh affected recommendations, present alternatives | All selections/reservations and current schedule |
 | Pace/interests change | Replan program, validate, review | Flights/hotel/confirmed meals |
 | Deterministic invalid schedule, attempt < 3 | Replan with machine-readable feedback | All fixed reservations |

@@ -281,6 +281,72 @@ test("self-arranged meals and activities hide their offers and appear in the iti
   }).toPass({ timeout: 180_000, intervals: [2_000, 3_000, 5_000] });
 });
 
+test("declining the flight and hotel booking keeps them in the plan as Not booked", async ({
+  page,
+}) => {
+  const tripId = await createTrip(page);
+  expect(tripId).not.toBe("");
+
+  // Choose a flight, then decline the simulated booking ("I don't want to
+  // book"): the offer is kept as the selection and hotel selection unlocks.
+  await page.getByRole("button", { name: "Choose this flight" }).first().click();
+  await expect(page.getByRole("button", { name: "Review booking" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByTestId("decline-flight-booking").click();
+  await expect(page.getByTestId("flight-not-booked")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId("step-nav-hotel")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/hotel`,
+  );
+  await page.getByRole("link", { name: "Continue to hotel selection" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/hotel$/, { timeout: 60_000 });
+
+  // The same two options exist for the hotel: choosing stages the review, and
+  // declining keeps it as the selection and continues to meals.
+  await expect(page.getByTestId("hotel-offer").first()).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId("hotel-offer").first().getByRole("button", { name: "Choose this hotel" }).click();
+  await expect(page.getByRole("button", { name: "Review booking" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByTestId("decline-hotel-booking").click();
+  await expect(page.getByTestId("hotel-not-booked")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId("step-nav-meals")).toHaveAttribute(
+    "href",
+    `/trips/${tripId}/meals`,
+  );
+  await page.getByRole("link", { name: "Continue to meals" }).click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/meals$/, { timeout: 60_000 });
+  await expect(page.getByRole("heading", { name: "Plan your day" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await page.getByRole("button", { name: "Save program" }).click();
+  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
+
+  // The plan is built as if the flight and hotel existed, and both cost rows
+  // are marked "Not booked".
+  await page.goto(`/trips/${tripId}/itinerary`);
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("itinerary-status")).toHaveText("Draft", { timeout: 10_000 });
+  }).toPass({ timeout: 180_000, intervals: [2_000, 3_000, 5_000] });
+  await expect(page.getByTestId("not-booked-flights")).toBeVisible();
+  await expect(page.getByTestId("not-booked-hotel")).toBeVisible();
+
+  // The summary surfaces both as Not booked and offers a late booking; the
+  // booking still goes through the ordinary review and confirmation dialog.
+  await page.goto(`/trips/${tripId}/summary`);
+  await expect(page.getByTestId("not-booked-section")).toBeVisible();
+  await page.getByTestId("book-flights").click();
+  await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+  await expect(page.getByRole("button", { name: "Review booking" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await page.getByRole("button", { name: "Review booking" }).click();
+  await confirmDialog(page, "DEMO-FLT-");
+  await expect(page.getByTestId("flight-not-booked")).toHaveCount(0);
+});
+
 test("an early return offers no dinner selection, only a clear warning", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Your name").fill("Grace Hopper");

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { errorEnvelopeSchema } from "./errors.js";
 import { pendingDecisionSchema, resumeRequestSchema } from "./decisions.js";
 import { operationStatusSchema } from "./enums.js";
-import { uuidSchema } from "./primitives.js";
+import { uuidSchema, nonEmptyStringSchema } from "./primitives.js";
 import { tripSummarySchema } from "./operations.js";
 import {
   flightGatingSchema,
@@ -129,6 +129,22 @@ export const tripProjectionSchema = z
     operations: z.array(operationStatusResponseSchema),
     pendingDecision: publicPendingDecisionSchema.nullable(),
     flights: flightGatingSchema,
+    /**
+     * Selected-but-not-booked flight/hotel (Phase 12): "I don't want to book"
+     * keeps the chosen offer as the trip's selection, so the plan is built as if
+     * it existed while the overviews mark it "Not booked" and offer a late
+     * booking. `booked` reflects the confirmed reservation.
+     */
+    selections: z
+      .object({
+        flights: z
+          .object({ offerId: nonEmptyStringSchema.nullable(), booked: z.boolean() })
+          .strict(),
+        hotel: z
+          .object({ offerId: nonEmptyStringSchema.nullable(), booked: z.boolean() })
+          .strict(),
+      })
+      .strict(),
     hotel: z.array(publicHotelOfferSchema),
     meals: z.array(publicMealOfferSchema),
     program: publicProgramChoicesSchema.nullable(),

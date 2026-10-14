@@ -47,11 +47,14 @@ export function FlightCard({
   selected,
   onChoose,
   disabled,
+  actionLabel,
 }: {
   readonly flight: PublicFlightCombination;
   readonly selected: boolean;
   readonly onChoose: () => void;
   readonly disabled: boolean;
+  /** Overrides the action label ("Book this flight" for a kept selection). */
+  readonly actionLabel?: string;
 }): React.JSX.Element {
   return (
     <li
@@ -96,7 +99,7 @@ export function FlightCard({
           aria-pressed={selected}
           className="rounded bg-teal px-3 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
         >
-          {selected ? "Selected" : "Choose this flight"}
+          {actionLabel ?? (selected ? "Selected" : "Choose this flight")}
         </button>
       </div>
     </li>

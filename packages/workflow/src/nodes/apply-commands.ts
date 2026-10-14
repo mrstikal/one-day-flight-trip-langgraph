@@ -91,9 +91,12 @@ export async function applyCommandsNode(
   const appliedRouteChange = routing.resolution.routeChange && !routeNoop;
   // A search/decision that targets a downstream domain cannot run before the
   // flight step: no snapshot exists yet, so its offers would be empty. The
-  // prerequisite flight choice is presented instead (Phase 11 review fix).
+  // prerequisite flight choice is presented instead (Phase 11 review fix). A
+  // flight declined through "I don't want to book" is kept as a selection, so it
+  // counts as progressed.
   const targetedBeforeFlight =
     !progress.flightConfirmed &&
+    !progress.selectedServices.includes("flights") &&
     (routing.resolution.nextDecisionKind === "hotel_choice" ||
       routing.resolution.nextDecisionKind === "program_choices");
   return {

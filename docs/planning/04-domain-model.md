@@ -269,6 +269,7 @@ type PublicDecisionResponse =
   | { action: "choose_offer"; offerId: string }
   | { action: "confirm_booking"; proposalId: string; acceptedDemoDisclaimer: true }
   | { action: "reject_proposal"; proposalId: string }
+  | { action: "decline_booking"; proposalId: string }
   | { action: "confirm_route_change"; proposalId: string; affectedReservationIds: string[] }
   | { action: "submit_program"; mealOfferIds: MealSelections; preferredActivityIds: string[] }
   | { action: "approve_itinerary"; itineraryId: string }

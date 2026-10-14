@@ -40,8 +40,15 @@ export interface ItinerarySourceFingerprintInput {
     readonly dinner: string | null;
   };
   readonly confirmedMealIds: readonly string[];
-  readonly confirmedFlightOfferId: string | null;
-  readonly confirmedHotelOfferId: string | null;
+  /**
+   * The planned flight/hotel offer: the confirmed reservation or, for a declined
+   * booking ("I don't want to book"), the persisted selection. `*Booked` is part
+   * of the fingerprint: confirming a late booking invalidates the approval.
+   */
+  readonly flightOfferId: string | null;
+  readonly flightBooked: boolean;
+  readonly hotelOfferId: string | null;
+  readonly hotelBooked: boolean;
   /** Meals the traveler arranges themselves: never required in the plan. */
   readonly selfArrangedMeals: readonly Meal[];
   /** Activities the traveler arranges themselves: no sightings required. */
@@ -52,7 +59,8 @@ export interface ItinerarySourceFingerprintInput {
 export function computeItinerarySourceFingerprint(input: ItinerarySourceFingerprintInput): string {
   return fingerprint({
     kind: "itinerary-source",
-    schemaVersion: 1,
+    // v2: the planned flight/hotel offers and their booked state are inputs.
+    schemaVersion: 2,
     snapshotId: input.snapshotId,
     sightseeingDate: input.sightseeingDate,
     travelVariant: input.travelVariant,
@@ -64,8 +72,10 @@ export function computeItinerarySourceFingerprint(input: ItinerarySourceFingerpr
     budgetMinor: input.budgetMinor,
     mealSelectionIds: input.mealSelectionIds,
     confirmedMealIds: [...input.confirmedMealIds].sort(),
-    confirmedFlightOfferId: input.confirmedFlightOfferId,
-    confirmedHotelOfferId: input.confirmedHotelOfferId,
+    flightOfferId: input.flightOfferId,
+    flightBooked: input.flightBooked,
+    hotelOfferId: input.hotelOfferId,
+    hotelBooked: input.hotelBooked,
     selfArrangedMeals: [...input.selfArrangedMeals].sort(),
     selfArrangedActivities: input.selfArrangedActivities,
   });

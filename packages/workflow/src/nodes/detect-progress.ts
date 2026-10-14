@@ -8,6 +8,10 @@ import { travelPorts } from "../travel/runtime.js";
  * it re-derives program choices. With no confirmed flight it runs the normal
  * feasibility flow.
  *
+ * Phase 12: a service the traveler declined to book ("I don't want to book") is
+ * kept as a persisted selection, which settles its step exactly like a confirmed
+ * one — the trip continues with the plan built as if it existed.
+ *
  * Phase 11: a targeted routing decision (`nextWork: "research"`) keeps the
  * decision kind the invalidation matrix chose instead of overriding it with the
  * generic progress-derived kind.
@@ -25,10 +29,13 @@ export async function detectProgressNode(
   const targeted =
     state.nextDecisionKind !== null &&
     (state.nextWork === "research" || state.pendingStage === "reselection");
+  const flightSettled =
+    progress.flightConfirmed || progress.selectedServices.includes("flights");
+  const hotelSettled = progress.hotelConfirmed || progress.selectedServices.includes("hotel");
   const nextDecisionKind = targeted
     ? state.nextDecisionKind
-    : progress.flightConfirmed
-      ? progress.hotelConfirmed
+    : flightSettled
+      ? hotelSettled
         ? "program_choices"
         : "hotel_choice"
       : "flight_choice";

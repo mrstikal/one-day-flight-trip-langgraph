@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getServerDeps } from "@/lib/server";
 import { resolveSession } from "@/lib/session";
 import { buildTripProjection } from "@/lib/projection";
+import { BookServiceButton } from "@/components/booking/BookServiceButton";
 import { ChangeServiceButton } from "@/components/booking/ChangeServiceButton";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { formatLocalDate } from "@/lib/format/datetime";
@@ -34,14 +35,24 @@ export default async function SummaryPage({
     notFound();
   }
 
-  const { trip, reservations, program, itinerary } = projection;
+  const { trip, reservations, program, itinerary, selections } = projection;
   const activeReservations = reservations.filter((row) => row.status === "confirmed");
+  // Phase 12: flight/hotel selections whose booking was declined ("I don't want
+  // to book") are still unbooked and can be booked from here.
+  const notBooked = (
+    [
+      { serviceKey: "flights" as const, label: "flight", selection: selections.flights },
+      { serviceKey: "hotel" as const, label: "hotel", selection: selections.hotel },
+    ]
+  ).filter((entry) => entry.selection.offerId !== null && !entry.selection.booked);
   // The summary is also a waypoint: offer the trip's current step, if any.
   const nextStep = nextTripStep({
     tripId: id,
     reservations,
     hasProgram: hasSavedProgram(program),
     hasItinerary: itinerary !== null,
+    flightSelected: projection.selections.flights.offerId !== null,
+    hotelSelected: projection.selections.hotel.offerId !== null,
     pendingDecisionKind: projection.pendingDecision?.kind ?? null,
     proposalServiceKey: projection.proposal?.serviceKey ?? null,
   });
@@ -100,25 +111,54 @@ export default async function SummaryPage({
           <p role="note" className="text-sm text-clay">
             {CONFIRMATION_DISCLAIMER}
           </p>
-          {nextStep ? (
-            <div>
-              <Link
-                href={nextStep.href}
-                className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
-              >
-                {nextStep.cta}
-              </Link>
-            </div>
-          ) : null}
         </section>
-      ) : (
+      ) : null}
+
+      {notBooked.length > 0 ? (
+        <section className="flex flex-col gap-3" data-testid="not-booked-section">
+          <h2 className="text-xl text-clay">Not booked</h2>
+          <p className="text-sm text-ink-muted">
+            These keep your selection and are part of the plan, but no simulated reservation
+            exists. You can book them at any time.
+          </p>
+          <ul className="flex flex-col gap-3">
+            {notBooked.map((entry) => (
+              <li
+                key={entry.serviceKey}
+                className="flex flex-col gap-2 rounded border border-clay bg-paper p-4"
+              >
+                <h3 className="text-base capitalize">{entry.serviceKey}</h3>
+                <BookServiceButton
+                  tripId={id}
+                  service={entry.serviceKey}
+                  offerId={entry.selection.offerId as string}
+                  label={entry.label}
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {activeReservations.length === 0 && notBooked.length === 0 ? (
         <section className="flex flex-col gap-3 rounded border border-border bg-paper p-6">
           <h2 className="text-lg">No confirmed reservation yet</h2>
           <Link href={`/trips/${id}/flights`} className="text-sm underline">
             Go to flight selection
           </Link>
         </section>
-      )}
+      ) : null}
+
+      {nextStep ? (
+        <div>
+          <Link
+            href={nextStep.href}
+            className="w-fit rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong"
+          >
+            {nextStep.cta}
+          </Link>
+        </div>
+      ) : null}
 
       <p role="note" className="text-sm text-ink-muted">
         {DEMO_DISCLAIMER}

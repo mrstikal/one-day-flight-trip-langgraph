@@ -153,9 +153,12 @@ async function applyBatchAndRoute(
     : null;
   const appliedRouteChange = matrix.resolution.routeChange && !routeNoop;
   // A search/decision that targets a downstream domain cannot run before the
-  // flight step (no snapshot): present the prerequisite flight choice instead.
+  // flight step (no snapshot): present the prerequisite flight choice instead. A
+  // flight declined through "I don't want to book" is kept as a selection, so it
+  // counts as progressed.
   const targetedBeforeFlight =
     !progress.flightConfirmed &&
+    !progress.selectedServices.includes("flights") &&
     (matrix.resolution.nextDecisionKind === "hotel_choice" ||
       matrix.resolution.nextDecisionKind === "program_choices");
   return {

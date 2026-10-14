@@ -7,6 +7,8 @@ export function applyDecisionNode(state: TravelState): TravelUpdate {
       return { pendingStage: "stage" };
     case "confirm_booking":
       return { pendingStage: "commit" };
+    case "decline_booking":
+      return { pendingStage: "decline" };
     case "submit_program":
       return { pendingStage: "program" };
     case "approve_itinerary":

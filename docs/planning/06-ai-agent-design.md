@@ -165,7 +165,7 @@ Return the supplied strict recommendation schema with concise supported explanat
 ```text
 Propose one destination-local sightseeing day using only the supplied candidate IDs.
 Plan visits ONLY for the explicitly preferred activity IDs and for the requested tag minimums: never add any other visit and never invent stops; the rest of the day stays free time for the traveler (2026-10-14: visits are opt-in).
-Keep flight/airport windows, confirmed hotel dates, and confirmed meal times fixed.
+Keep flight/airport windows (confirmed or kept-selection flight), hotel dates (confirmed or kept selection), and confirmed meal times fixed.
 Respect requested activity tags/counts, pace, meal duration, breaks, opening windows, and travel estimates.
 Activity pace is intensity, not a restriction on culture, relaxation, or entertainment categories.
 Leave the supplied transfer and airport buffers; do not overlap activities to fit more stops.

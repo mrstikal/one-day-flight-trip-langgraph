@@ -120,6 +120,56 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
     }
   }, [handleError, projection, refresh, tripId]);
 
+  // "I don't want to book" is a trusted decision response: it declines the
+  // simulated reservation for the staged flight but keeps the offer as the
+  // trip's selection, so the plan is built as if the flight existed.
+  const declineFlightBooking = useCallback(
+    async (decisionId: string, revision: number, proposalId: string): Promise<void> => {
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitDecision({
+          tripId,
+          decisionId,
+          expectedRevision: revision,
+          response: { action: "decline_booking", proposalId },
+        });
+        setDialogOpen(false);
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, refresh, tripId],
+  );
+
+  // A late booking for the kept selection: staging the same offer as a proposal
+  // opens the ordinary review dialog, which can still be declined.
+  const bookSelectedFlight = useCallback(
+    async (offerId: string): Promise<void> => {
+      if (!projection) {
+        return;
+      }
+      setBusy(true);
+      setActionError(undefined);
+      try {
+        await submitCommand(tripId, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: projection.trip.revision,
+          command: { type: "propose_selection", service: "flights", offerId },
+        });
+        refresh();
+      } catch (caught) {
+        handleError(caught);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleError, projection, refresh, tripId],
+  );
+
   if (!projection) {
     if (error) {
       return <ErrorPanel message={error.message} onRetry={refresh} />;
@@ -211,7 +261,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
           <h2 className="text-lg">Review and confirm</h2>
           <p className="text-sm">
             Your selected flight is staged as a review proposal. Confirm to create the simulated
-            reservation, or choose a different flight.
+            reservation, choose a different flight, or decline the booking.
           </p>
           <p role="note" className="rounded bg-info p-3 text-sm text-clay">
             {DEMO_DISCLAIMER}
@@ -237,6 +287,23 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
             >
               Choose a different flight
             </button>
+            {pendingDecision.kind === "booking_confirmation" ? (
+              <button
+                type="button"
+                disabled={busy}
+                data-testid="decline-flight-booking"
+                onClick={() =>
+                  void declineFlightBooking(
+                    pendingDecision.id,
+                    projection.trip.revision,
+                    proposal.id,
+                  )
+                }
+                className="w-fit rounded border border-border px-4 py-2 text-sm disabled:opacity-50"
+              >
+                I don&apos;t want to book
+              </button>
+            ) : null}
           </div>
         </section>
         <BookingDialog
@@ -316,6 +383,53 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
         </p>
         <p role="note" className="rounded bg-info p-3 text-sm text-clay">
           {DEMO_DISCLAIMER}
+        </p>
+      </div>
+    );
+  }
+
+  // A declined booking ("I don't want to book") keeps the chosen combination as
+  // the trip's selection: the step is settled, the plan treats the flight as if
+  // it existed, and the later booking stays one click away.
+  const keptFlight =
+    projection.selections.flights.offerId !== null
+      ? (flights.offers.find((offer) => offer.id === projection.selections.flights.offerId) ?? null)
+      : null;
+  if (keptFlight) {
+    return (
+      <div className="flex flex-col gap-6">
+        {stalenessBanner}
+        {actionError ? (
+          <p role="alert" className="text-sm text-clay">
+            {actionError}
+          </p>
+        ) : null}
+        <header className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl">Your flight</h1>
+          <span
+            data-testid="flight-not-booked"
+            className="rounded border border-clay bg-cream px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-clay"
+          >
+            Not booked
+          </span>
+        </header>
+        <p role="note" className="rounded bg-info p-3 text-sm text-clay">
+          No simulated reservation exists for this flight; you arrange the booking yourself. The
+          day plan is still built around its times, including the airport buffer and its cost.
+        </p>
+        <ul className="flex flex-col gap-4" aria-label="Selected flight">
+          <FlightCard
+            flight={keptFlight}
+            selected
+            disabled={busy || activeWork}
+            actionLabel="Book this flight"
+            onChoose={() => void bookSelectedFlight(keptFlight.id)}
+          />
+        </ul>
+        <p className="text-sm">
+          <Link href={`/trips/${tripId}/hotel`} className="underline">
+            Continue to hotel selection
+          </Link>
         </p>
       </div>
     );

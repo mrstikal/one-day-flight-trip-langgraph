@@ -24,6 +24,7 @@ import { applyDecisionNode } from "../nodes/apply-decision.js";
 import { stageSelectionNode } from "../nodes/stage-selection.js";
 import { stageCommandProposalNode } from "../nodes/stage-command-proposal.js";
 import { commitBookingNode } from "../nodes/commit-booking.js";
+import { declineBookingNode } from "../nodes/decline-booking.js";
 import { commitRouteChangeNode } from "../nodes/commit-route-change.js";
 import { applyProgramNode } from "../nodes/apply-program.js";
 import {
@@ -112,7 +113,12 @@ export function routeAfterIntentResult(state: TravelState): string {
 
 /** With a confirmed flight, re-derive the non-flight steps; otherwise run feasibility. */
 export function routeAfterDetectProgress(state: TravelState): string {
-  return state.hasConfirmedFlight ? "ensure_domains" : "validate_route";
+  // A flight kept as a selection ("I don't want to book") also settles the
+  // flight step: the trip continues to the extended snapshot instead of
+  // re-running feasibility.
+  return state.hasConfirmedFlight || state.selectedServices.includes("flights")
+    ? "ensure_domains"
+    : "validate_route";
 }
 
 export function routeAfterApplyDecision(state: TravelState): string {
@@ -121,6 +127,8 @@ export function routeAfterApplyDecision(state: TravelState): string {
       return "stage_selection";
     case "commit":
       return "commit_booking";
+    case "decline":
+      return "decline_booking";
     case "commit_route":
       return "commit_route_change";
     case "program":
@@ -142,6 +150,24 @@ export function routeAfterApplyDecision(state: TravelState): string {
 
 /** After a confirmed booking: flights continue to hotel research, others to logistics. */
 export function routeAfterCommit(state: TravelState): string {
+  if (state.bookingService !== "flights") {
+    return "validate_selected_logistics";
+  }
+  // A null next decision means the trip is already planned: a late booking (from
+  // the "Not booked" review) only replans through the logistics check, exactly
+  // like a late meal reservation. The initial booking continues into research.
+  return state.nextDecisionKind === null ? "validate_selected_logistics" : "ensure_domains";
+}
+
+/**
+ * After a declined booking ("I don't want to book"): the same service-based
+ * continuation as a booking, except that a decline during an already-planned
+ * trip just keeps the selection and ends the run.
+ */
+export function routeAfterDecline(state: TravelState): string {
+  if (state.nextDecisionKind === null) {
+    return "publish_summary";
+  }
   return state.bookingService === "flights" ? "ensure_domains" : "validate_selected_logistics";
 }
 
@@ -230,6 +256,7 @@ const NODE_HANDLERS: Readonly<Record<string, NodeHandler>> = {
   stage_command_proposal: stageCommandProposalNode,
   stage_selection: stageSelectionNode,
   commit_booking: commitBookingNode,
+  decline_booking: declineBookingNode,
   commit_route_change: commitRouteChangeNode,
   apply_program: applyProgramNode,
   publish_summary: publishSummaryNode,
@@ -246,6 +273,7 @@ const ROUTERS: Readonly<Record<string, Router>> = {
   validate_schedules: routeAfterSchedules,
   apply_decision: routeAfterApplyDecision,
   commit_booking: routeAfterCommit,
+  decline_booking: routeAfterDecline,
   dispatch_research: routeAfterDispatch,
   join_research: routeAfterJoin,
   rank_recommendations: routeAfterRank,

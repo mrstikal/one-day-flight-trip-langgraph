@@ -149,7 +149,18 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
     if (response.action === "reject_proposal") {
       return { ...base, lastAction: "reject_proposal", lastProposalId: response.proposalId };
     }
-    throw new InvalidUpdateError("booking confirmation accepts confirm_booking or reject_proposal");
+    if (response.action === "decline_booking") {
+      // "I don't want to book": only the flight and the hotel keep a selection
+      // for a declined booking; a meal reservation is simply not made instead.
+      const service = state.bookingService;
+      if (service !== "flights" && service !== "hotel") {
+        throw new InvalidUpdateError("only a flight or hotel booking can be declined");
+      }
+      return { ...base, lastAction: "decline_booking", lastProposalId: response.proposalId };
+    }
+    throw new InvalidUpdateError(
+      "booking confirmation accepts confirm_booking, reject_proposal, or decline_booking",
+    );
   }
   if (kind === "route_change_confirmation") {
     if (response.action !== "confirm_route_change") {

@@ -40,14 +40,39 @@ export async function commitBookingNode(
         acceptedRevision: state.acceptedRevision,
         confirmationKey,
       });
+  // The booked service determines the next decision: an initial flight booking
+  // continues into hotel research and, with the hotel already settled (booked or
+  // kept as a declined-booking selection), straight to the program. Once the
+  // program is applied the trip is already planned, so a late booking (from the
+  // "Not booked" review) only republishes the plan through the logistics check —
+  // mirroring a late meal reservation. An optional meal reservation ends the run.
+  const progress = service === "flights" ? await ports.loadProgress(state.tripId) : null;
+  const hotelSettled =
+    progress !== null &&
+    (progress.hotelConfirmed || progress.selectedServices.includes("hotel"));
+  const late = progress !== null && progress.programApplied;
   const nextDecisionKind =
-    service === "flights" ? "hotel_choice" : service === "hotel" ? "program_choices" : null;
+    service === "flights"
+      ? late
+        ? null
+        : hotelSettled
+          ? "program_choices"
+          : "hotel_choice"
+      : service === "hotel"
+        ? "program_choices"
+        : null;
   return {
     reservationId: result.reservationId,
     demoReference: result.demoReference,
     gate: "booked",
     bookingService: service,
     pendingReplacement: false,
-    ...(nextDecisionKind ? { nextDecisionKind } : { nextDecisionKind: null }),
+    ...(progress
+      ? {
+          hasConfirmedFlight: progress.flightConfirmed,
+          hasConfirmedHotel: progress.hotelConfirmed,
+        }
+      : {}),
+    nextDecisionKind,
   };
 }

@@ -37,6 +37,8 @@ export function StepNav({ tripId }: { readonly tripId: string }): React.JSX.Elem
     reservations: projection.reservations,
     hasProgram: hasSavedProgram(projection.program),
     hasItinerary: projection.itinerary !== null,
+    flightSelected: projection.selections.flights.offerId !== null,
+    hotelSelected: projection.selections.hotel.offerId !== null,
     pendingDecisionKind: projection.pendingDecision?.kind ?? null,
     proposalServiceKey: projection.proposal?.serviceKey ?? null,
   });

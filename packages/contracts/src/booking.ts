@@ -71,8 +71,9 @@ export interface SelectionUpsertInput {
   readonly snapshotId: string;
   readonly selectedBy: "user" | "default";
   readonly sourceFingerprint: string;
-  readonly activeProposalId: string;
-  readonly activeReservationId: string;
+  /** Null for a declined booking ("I don't want to book"): selection only. */
+  readonly activeProposalId: string | null;
+  readonly activeReservationId: string | null;
 }
 
 export interface BookingEventInput {
@@ -230,6 +231,27 @@ export interface ReservationResult {
   readonly offerId: string;
   readonly partyTotalMinor: number;
   readonly idempotent: boolean;
+}
+
+/**
+ * Phase 12 "I don't want to book": the staged flight/hotel booking was declined
+ * and the offer kept as the trip's selection. No reservation exists; the plan is
+ * built as if it did and it can be booked later.
+ */
+export interface DeclinedBookingResult {
+  readonly status: "declined";
+  readonly serviceKey: BookableKey;
+  readonly offerId: string;
+  readonly idempotent: boolean;
+}
+
+export interface DeclineBookingInput {
+  readonly tripId: string;
+  readonly sessionId: string;
+  readonly operationId: string;
+  readonly proposalId: string;
+  readonly decisionId: string;
+  readonly fencingToken?: string;
 }
 
 export interface ProposeSelectionInput {

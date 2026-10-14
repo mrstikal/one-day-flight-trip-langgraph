@@ -27,8 +27,8 @@ import { researchResultsValue } from "../state/research-reducer.js";
  * PostgreSQL and is read through the invocation ports.
  */
 
-export const TRAVEL_SCHEMA_VERSION = "travel-state-v5";
-export const TRAVEL_GRAPH_VERSION = "travel-graph-v6";
+export const TRAVEL_SCHEMA_VERSION = "travel-state-v6";
+export const TRAVEL_GRAPH_VERSION = "travel-graph-v7";
 
 export const travelGateSchema = z.enum([
   "pending",
@@ -54,6 +54,7 @@ export const travelStageSchema = z.enum([
   "flight_decision",
   "stage",
   "commit",
+  "decline",
   "program",
   "reselection",
   "clarification_apply",

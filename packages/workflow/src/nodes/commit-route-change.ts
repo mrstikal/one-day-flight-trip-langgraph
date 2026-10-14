@@ -53,7 +53,6 @@ export async function commitRouteChangeNode(
     scheduleValidationId: null,
     scheduleStatus: "PENDING",
     validCombinationIds: [],
-    domainsEnsured: false,
     // The route change is a new operation: the research status AND the
     // per-operation provider-attempt budget/run scope restart (Phase 11 review
     // fix) so successive route changes cannot exceed the task attempt ceiling.

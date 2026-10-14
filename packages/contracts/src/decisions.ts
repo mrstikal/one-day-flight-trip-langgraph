@@ -18,6 +18,15 @@ const confirmBooking = z
 const rejectProposal = z
   .object({ action: z.literal("reject_proposal"), proposalId: uuidSchema })
   .strict();
+/**
+ * "I don't want to book": decline the simulated reservation for a staged flight
+ * or hotel offer while keeping it as the trip's selection. The plan is built as
+ * if the service existed (costs, airport buffer, hotel anchor); only the
+ * reservation is skipped, and it can still be booked later.
+ */
+const declineBooking = z
+  .object({ action: z.literal("decline_booking"), proposalId: uuidSchema })
+  .strict();
 const confirmRouteChange = z
   .object({
     action: z.literal("confirm_route_change"),
@@ -49,6 +58,7 @@ const publicMembers = [
   chooseOffer,
   confirmBooking,
   rejectProposal,
+  declineBooking,
   confirmRouteChange,
   submitProgram,
   approveItinerary,
@@ -112,7 +122,7 @@ export const DECISION_ALLOWED_ACTIONS: Readonly<Record<DecisionKind, readonly st
   flight_choice: ["choose_offer"],
   hotel_choice: ["choose_offer"],
   program_choices: ["submit_program"],
-  booking_confirmation: ["confirm_booking", "reject_proposal"],
+  booking_confirmation: ["confirm_booking", "reject_proposal", "decline_booking"],
   replacement_confirmation: ["confirm_booking", "reject_proposal"],
   route_change_confirmation: ["confirm_route_change"],
   itinerary_approval: ["approve_itinerary"],

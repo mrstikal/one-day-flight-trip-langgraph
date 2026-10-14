@@ -10,6 +10,7 @@ import type {
   RouteValidation,
   ScheduleValidation,
   ReservationResult,
+  DeclinedBookingResult,
   ProposalResult,
   ProposalStatus,
   TripRecord,
@@ -223,6 +224,16 @@ export interface TravelPorts {
     acceptedRevision: number;
     confirmationKey: string;
   }): Promise<ReservationResult>;
+  /**
+   * Phase 12 "I don't want to book": decline the staged flight/hotel booking but
+   * keep the offer as the persisted selection (no reservation is created).
+   */
+  declineBooking(input: {
+    tripId: string;
+    operationId: string;
+    proposalId: string;
+    decisionId: string;
+  }): Promise<DeclinedBookingResult>;
 
   /** Phase 07/09: idempotently materialize hotels/meals/activities/events. */
   ensureDomains(tripId: string): Promise<{ materializedDomains: string[]; snapshotId: string }>;

@@ -55,6 +55,7 @@ export const TRAVEL_GRAPH_NODES: readonly TravelGraphNodeSpec[] = [
   { id: "stage_command_proposal", label: "Stage command proposal", kind: "serial" },
   { id: "stage_selection", label: "Stage selection", kind: "serial" },
   { id: "commit_booking", label: "Commit booking", kind: "decision" },
+  { id: "decline_booking", label: "Decline booking (keep selection)", kind: "decision" },
   { id: "commit_route_change", label: "Commit route change", kind: "serial" },
   { id: "apply_program", label: "Apply program", kind: "decision" },
   { id: "publish_summary", label: "Publish summary", kind: "terminal" },
@@ -161,6 +162,7 @@ export const TRAVEL_GRAPH_EDGE_GROUPS: readonly TravelGraphEdgeGroup[] = [
     targets: [
       "stage_selection",
       "commit_booking",
+      "decline_booking",
       "commit_route_change",
       "apply_program",
       "approve_itinerary",
@@ -179,6 +181,12 @@ export const TRAVEL_GRAPH_EDGE_GROUPS: readonly TravelGraphEdgeGroup[] = [
     conditional: true,
     targets: ["ensure_domains", "validate_selected_logistics"],
     label: "service",
+  },
+  {
+    from: "decline_booking",
+    conditional: true,
+    targets: ["ensure_domains", "validate_selected_logistics", "publish_summary"],
+    label: "service / late",
   },
   { from: "commit_route_change", conditional: false, targets: ["validate_route"], label: null },
   { from: "ensure_domains", conditional: false, targets: ["validate_schedules"], label: null },

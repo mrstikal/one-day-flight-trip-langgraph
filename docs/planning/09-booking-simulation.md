@@ -19,11 +19,13 @@ This document is the authoritative home for the internal demo reservation lifecy
 
 | Service key | Offer source | Notes |
 | --- | --- | --- |
-| `flights` | One flight combination (outbound + return legs) | Requires current Stage A + Stage B validation; party-total EUR |
-| `hotel` | One hotel offer | Nights derived from travel variant; luggage storage required for `one_night` |
+| `flights` | One flight combination (outbound + return legs) | Requires current Stage A + Stage B validation; party-total EUR; optional booking - the chosen combination stays a selection when the user declines (`decline_booking`, 2026-10-14) |
+| `hotel` | One hotel offer | Nights derived from travel variant; luggage storage required for `one_night`; optional booking - the chosen offer stays a selection when declined |
 | `breakfast` | One restaurant offer | Optional reservation; selection may exist without booking |
 | `lunch` | One restaurant offer | Optional reservation |
 | `dinner` | One restaurant offer | Optional reservation |
+
+A declined flight/hotel booking (`decline_booking`) persists the chosen offer in `trip_selections` exactly like an unbooked meal: no reservation exists, but the plan, its costs, the airport buffer, and the hotel anchor are computed as if the service existed, and the overviews mark it `Not booked` with a later booking action.
 
 Booking implications by travel variant (destination-local dates, `D` = sightseeing date):
 
@@ -50,7 +52,7 @@ The confirmation record also stores an immutable terms snapshot: scenario/snapsh
 ```mermaid
 stateDiagram-v2
     [*] --> Proposed: stage_selection or set_program (no reservation row)
-    Proposed --> Withdrawn: reject_proposal, proposal expiry, or superseded review
+    Proposed --> Withdrawn: reject_proposal, decline_booking, proposal expiry, or superseded review
     Proposed --> Confirmed: confirm_booking with explicit disclaimer acknowledgment and all authorization checks
     Confirmed --> Superseded: replacement confirmed atomically in one transaction
     Confirmed --> Cancelled: approved route-change impact
@@ -65,7 +67,7 @@ stateDiagram-v2
 
 State meanings:
 
-- `Proposed`: a `selection_proposals` record; no reservation exists yet and any previous booking stays active. `Withdrawn` is presentation for rejected/expired/superseded proposals, not a reservation-table state.
+- `Proposed`: a `selection_proposals` record; no reservation exists yet and any previous booking stays active. `Withdrawn` is presentation for rejected/expired/superseded proposals, not a reservation-table state. `decline_booking` withdraws the proposal as rejected AND persists the offer as a `trip_selections` row (flight/hotel only): the selection survives the declined booking and can be booked later.
 - `Confirmed`: an active reservation row created transactionally; one per trip/service.
 - `Superseded` / `Cancelled`: terminal history rows with reason, decision ID, and timestamp.
 
@@ -108,7 +110,7 @@ If the transaction commits and the checkpoint write then fails, recovery replays
 
 All failures use the standard safe error envelope ([10 Security](10-security-reliability.md) section 9) and never render a success state or demo reference.
 
-Decision-kind mapping: `flight_choice`/`hotel_choice` accept `choose_offer`, which stages a proposal (no booking); `booking_confirmation` and `replacement_confirmation` accept `confirm_booking`; `route_change_confirmation` accepts `confirm_route_change`; meals selected through `program_choices`/`submit_program` are confirmed later through per-meal `booking_confirmation`. `approve_itinerary` never creates a reservation. A response whose action does not match the pending kind is rejected as stale.
+Decision-kind mapping: `flight_choice`/`hotel_choice` accept `choose_offer`, which stages a proposal (no booking); `booking_confirmation` accepts `confirm_booking`, `reject_proposal`, and - for flights/hotel - `decline_booking` ("I don't want to book": keep the offer as the step's selection, no reservation, the plan is unchanged and the service can be booked later); `replacement_confirmation` accepts `confirm_booking`/`reject_proposal`; `route_change_confirmation` accepts `confirm_route_change`; meals selected through `program_choices`/`submit_program` are confirmed later through per-meal `booking_confirmation`. `approve_itinerary` never creates a reservation. A response whose action does not match the pending kind is rejected as stale.
 
 No-payment enforcement is structural: no payment module, dependency, endpoint, credential, or schema field exists anywhere in the repository; the booking service cannot construct a payment intent; an invariant test asserts this absence.
 
@@ -152,6 +154,8 @@ Faults are recorded on the same operation and labeled `Simulated failure` in the
 ## 10. Booking UI (Phases 06-07)
 
 - Selection screens show offers as cards with explicit party totals in EUR and provenance labels. Selecting a card starts a review, not a booking.
+- The flight/hotel review offers both choices explicitly: `Confirm simulated booking` and `I don't want to book` (`decline_booking`, 2026-10-14). Declining keeps the chosen offer as the step's selection (no reservation row), the plan keeps the flight times/airport buffer and the flight/hotel costs, and every overview (flight step, hotel step, summary, itinerary cost rows) marks the unbooked item `Not booked` with a `Book this flight`/`Book this hotel` action.
+- A later booking stages the same offer as a proposal (`propose_selection`), goes through the ordinary review/confirmation dialog, and replans the itinerary once the reservation exists (source fingerprint binds `flightOfferId`/`flightBooked`/`hotelOfferId`/`hotelBooked`, exactly like a late meal reservation).
 - Confirmation dialog content: service summary (route/dates or hotel/meal details), party total EUR, price delta versus current, impact list for replacements, the permanent demo disclaimer, and the confirmation sentence. The user must tick `I understand this is a simulated booking.` and press `Confirm simulated booking`; `Cancel` leaves the old reservation untouched.
 - Success: the confirmation panel shows status `Confirmed`, the demo reference in a copyable monospace field, the sentence `Simulated booking - not valid for travel, accommodation, or restaurant admission.`, and a link back to the itinerary.
 - Failure/conflict: typed message with `retryable` flag, current revision, and a refresh action; the UI never shows a demo reference or success state for a failed transaction.
@@ -163,18 +167,20 @@ Booking entry points:
 
 | Entry point | Action | Confirmation surface |
 | --- | --- | --- |
-| Flight results (Step 3) | `choose_offer` decision, then booking confirmation | Confirmation dialog with route, dates, party total |
-| Hotel results (Step 4) | `choose_offer`, then confirmation; replacement uses the same dialog | Before/after impact table |
+| Flight results (Step 3) | `choose_offer` decision, then booking confirmation (`Confirm simulated booking` / `I don't want to book`) | Confirmation dialog with route, dates, party total |
+| Hotel results (Step 4) | `choose_offer`, then confirmation (`Confirm simulated booking` / `I don't want to book`); replacement uses the same dialog | Before/after impact table |
 | Meal results (Step 5) | Optional per-meal reservation after program selection | Per-meal confirmation dialog |
+| Flight/hotel `Not booked` panel (Step 3/4, summary) | `propose_selection` for the kept selection | Ordinary review/confirmation dialog |
 | Assistant proposal | Called out as a proposal card with `Review` action | Same dialogs; no auto-confirm |
 | Route-change preview | `route_change_confirmation` list | Affected-reservation cancellation list |
-| Summary | View active/history records; initiate supported replacement or route-change review | Existing explicit impact/confirmation dialogs |
+| Summary | View active/history records plus `Not booked` selections with a booking action; initiate supported replacement or route-change review | Existing explicit impact/confirmation dialogs |
 
 - Booking surfaces reuse the accessibility rules in [08 Frontend UX](08-frontend-ux.md) section 11 (focus management, announcements, target size) and render on desktop and mobile without a separate flow.
 
 ## 11. Acceptance Evidence
 
 - Unit/integration: demo-reference format and collision retry; duplicate confirmation returns one reservation; replacement is atomic; same-offer confirmation is idempotent; one active reservation per service; unrelated hashes unchanged after H/I/J-style changes.
+- Declined booking (2026-10-14): after `decline_booking` no reservation row exists but the `trip_selections` row does; the planned draft contains the airport buffer and the flight/hotel cost items; the later `propose_selection` + confirmation creates the reservation and replans; a confirmed service cannot be declined.
 - Crash/restart: commit-before-checkpoint replay yields one reservation (Scenario M); restart at a pending decision reloads the exact decision (Scenario K/L); concurrent confirmations produce one winner (N).
 - UI: both disclaimer sentences are asserted verbatim in the confirmation dialog and after success; submission is blocked without the acknowledgement checkbox.
 - Invariant: no code path creates a payment record or calls a real provider; attempts to confirm via model text fail authorization; the stored terms snapshot plus disclaimer acknowledgement are immutable and are what reads render.

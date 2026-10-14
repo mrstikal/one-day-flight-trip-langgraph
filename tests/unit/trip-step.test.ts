@@ -19,6 +19,21 @@ describe("hasSavedProgram (no server calls)", () => {
   it("recognizes persisted meal selections as an applied program", () => {
     expect(hasSavedProgram({ selectedMeals: { breakfast: "b1" } })).toBe(true);
   });
+
+  it("counts a self-arranged breakfast as an applied program (no selection by design)", () => {
+    expect(
+      hasSavedProgram({
+        selectedMeals: { breakfast: null },
+        selfArrangedMeals: { breakfast: true, lunch: false, dinner: false },
+      }),
+    ).toBe(true);
+    expect(
+      hasSavedProgram({
+        selectedMeals: { breakfast: null },
+        selfArrangedMeals: { breakfast: false, lunch: false, dinner: false },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("tripStepStates (no server calls)", () => {
@@ -34,7 +49,7 @@ describe("tripStepStates (no server calls)", () => {
     expect(fresh.flights?.enabled).toBe(true);
     expect(fresh.summary?.enabled).toBe(true);
     expect(fresh.hotel?.enabled).toBe(false);
-    expect(fresh.hotel?.requires).toBe("Confirm a flight first");
+    expect(fresh.hotel?.requires).toBe("Confirm a flight (or arrange it yourself) first");
     expect(fresh.meals?.enabled).toBe(false);
     expect(fresh.activities?.enabled).toBe(false);
     expect(fresh.itinerary?.enabled).toBe(false);
@@ -83,6 +98,34 @@ describe("tripStepStates (no server calls)", () => {
       pendingDecisionKind: "program_choices",
     });
     expect(states.filter((step) => step.next).map((step) => step.key)).toEqual(["meals"]);
+  });
+
+  it("treats a flight/hotel kept as a selection as a settled step (I don't want to book)", () => {
+    const flightKept = byKey(
+      tripStepStates({
+        tripId,
+        reservations: [],
+        hasProgram: false,
+        hasItinerary: false,
+        flightSelected: true,
+      }),
+    );
+    expect(flightKept.hotel?.enabled).toBe(true);
+    expect(flightKept.hotel?.requires).toBeNull();
+    expect(flightKept.meals?.enabled).toBe(false);
+
+    const bothKept = byKey(
+      tripStepStates({
+        tripId,
+        reservations: [],
+        hasProgram: false,
+        hasItinerary: false,
+        flightSelected: true,
+        hotelSelected: true,
+      }),
+    );
+    expect(bothKept.meals?.enabled).toBe(true);
+    expect(bothKept.meals?.requires).toBeNull();
   });
 });
 
@@ -161,6 +204,36 @@ describe("nextTripStep (no server calls)", () => {
         hasItinerary: true,
       }),
     ).toBeNull();
+  });
+
+  it("advances past a flight/hotel kept as a selection without a booking", () => {
+    expect(
+      nextTripStep({
+        tripId,
+        reservations: [],
+        hasProgram: false,
+        hasItinerary: false,
+        flightSelected: true,
+      }),
+    ).toEqual({
+      href: `/trips/${tripId}/hotel`,
+      cta: "Continue to hotel selection",
+      open: "Open hotel selection",
+    });
+    expect(
+      nextTripStep({
+        tripId,
+        reservations: [],
+        hasProgram: false,
+        hasItinerary: false,
+        flightSelected: true,
+        hotelSelected: true,
+      }),
+    ).toEqual({
+      href: `/trips/${tripId}/meals`,
+      cta: "Continue to meals",
+      open: "Open meals",
+    });
   });
 
   it("lets a pending decision win over progress (confirmed-hotel replacement)", () => {

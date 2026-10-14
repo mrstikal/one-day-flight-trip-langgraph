@@ -106,6 +106,7 @@ Prefixes: `T-UT-` unit, `T-IT-` integration, `T-E2E-` Playwright, `T-INV-` invar
 | T-IT-BOOK-04 | Wrong offer (not in allowed IDs/snapshot), wrong trip (foreign ownership), wrong source (stale fingerprint), wrong decision (kind/resolved/foreign thread), wrong revision: typed conflict, no reservation row, no side effect. | FR-BOOK-4, FR-SEC-2/4 |
 | T-IT-BOOK-05 | Pre-commit rollback: an injected failure inside the confirmation transaction leaves no reservation and no effect result; retry yields exactly one reservation. | FR-BOOK-1 |
 | T-IT-BOOK-06 | Replacement only through a confirmed decision: direct commands or model output cannot confirm; route-change cancellation/supersede requires the explicit impact confirmation transaction. | FR-PREF-4, FR-BOOK-5/6 |
+| T-IT-BOOK-07 | Declined flight/hotel booking (`decline_booking`): no reservation row exists but the `trip_selections` row does; the planned draft contains the airport buffer and the flight/hotel cost items; the later `propose_selection` confirmation creates the reservation and replans; declining a confirmed service is refused. | FR-BOOK-9 |
 
 ### 6.4 Worker faults, restarts, driver recovery
 
@@ -159,6 +160,7 @@ Additional mandatory itinerary cases: nullable dinner only with a deterministic 
 | T-E2E-12 | Tiles unavailable (blocked/offline): schematic fallback renders markers and approximate labels; planning continues unaffected. | FR-UI-3, FR-DATA-8 |
 | T-E2E-13 | Addendum rejection UX: PRG -> Ceske Budejovice explains `GROUND_TRAVEL_PREFERRED`, states the destination is not claimed unreachable by ground, offers origin/destination alternatives; no flight offers or booking can be produced. | FR-FEAS-3/6/10 |
 | T-E2E-14 | Re-entrant modification after approval: new chat request after `END` enters a new run from `START`, preserves compatible selections, updates the summary; no `Command({update})` semantics observed. | FR-ITIN-5, FR-GRAPH-3/9, FR-UI-1/6 |
+| T-E2E-15 | Optional flight/hotel booking: choose a flight and a hotel, decline both with `I don't want to book`, assert the `Not booked` markers on both steps, the summary section with the booking actions, and the `Not booked` cost rows on the itinerary; booking the kept flight later opens the ordinary review dialog and succeeds. | FR-BOOK-9, FR-UI-6 |
 
 ## 8. Invariant and Property Checks
 
@@ -245,6 +247,7 @@ Both tests open two actual independent database connections (not two calls throu
 | P10 Planning/review | T-UT-ITIN-01/02; T-IT-LIM-01; T-E2E-09 (E/F/G) |
 | P11 Selective replanning + inspector | T-E2E-04/05/06/07/10/14; T-INV-04/07/11; inspector/SSE-202 checks |
 | P12 Hardening + E2E | Full regression T-REG-FEAS-01..12 incl. 10d; T-IT-CONC-02; T-E2E-08/11/12; T-INV-01..12; `npm run build`; configured live smoke or explicit criterion-28 unverified report |
+| Post-P12 product updates (2026-10-14) | T-IT-BOOK-07, T-E2E-15 (optional flight/hotel booking, `decline_booking`, `Not booked`); affected unit/integration suites rerun green |
 
 ## 15. Cross-References
 

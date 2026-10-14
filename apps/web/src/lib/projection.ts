@@ -649,6 +649,20 @@ export async function buildTripProjection(
     selectionResult.rows.map((row) => [row.service_key, row.offer_id]),
   );
 
+  // Phase 12: a declined booking ("I don't want to book") keeps the chosen
+  // flight/hotel as a persisted selection without a reservation.
+  const serviceSelectionResult = await pool.query<{ service_key: string; offer_id: string }>(
+    `SELECT service_key, offer_id FROM odft_app.trip_selections
+      WHERE trip_id = $1 AND service_key IN ('flights','hotel')`,
+    [tripId],
+  );
+  const selectedByService = new Map<string, string>(
+    serviceSelectionResult.rows.map((row) => [row.service_key, row.offer_id]),
+  );
+  const confirmedServices = new Set(
+    reservations.filter((row) => row.status === "confirmed").map((row) => row.serviceKey),
+  );
+
   // The deterministic dinner reason is read from the artifact matching the
   // current dinner fingerprint (inside the research block below), together with
   // the persisted program activity preferences.
@@ -942,6 +956,16 @@ export async function buildTripProjection(
       scheduleExplanation,
       offers,
       oneNightAvailable: scheduleStatus === "VALID" && trip.travelVariant === "one_night",
+    },
+    selections: {
+      flights: {
+        offerId: selectedByService.get("flights") ?? null,
+        booked: confirmedServices.has("flights"),
+      },
+      hotel: {
+        offerId: selectedByService.get("hotel") ?? null,
+        booked: confirmedServices.has("hotel"),
+      },
     },
     hotel,
     meals,

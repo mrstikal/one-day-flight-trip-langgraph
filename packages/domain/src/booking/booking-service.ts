@@ -5,6 +5,8 @@ import type {
   BookingTx,
   ConfirmBookingInput,
   DecisionKind,
+  DeclineBookingInput,
+  DeclinedBookingResult,
   EffectKey,
   ProposalResult,
   ProposeSelectionInput,
@@ -117,6 +119,107 @@ export class BookingService {
 
   replaceConfirmed(input: ReplaceConfirmedInput): Promise<ReservationResult> {
     return this.runConfirmation(input, true);
+  }
+
+  /**
+   * Phase 12 "I don't want to book": decline the staged flight/hotel booking
+   * while keeping the offer as the trip's selection. No reservation is created
+   * and the proposal is closed as rejected; the plan treats the service exactly
+   * as if it existed, and the selection can still be booked later.
+   */
+  async declineBooking(input: DeclineBookingInput): Promise<DeclinedBookingResult> {
+    return this.store.transaction(async (tx) => {
+      const effectKey: EffectKey = {
+        operationId: input.operationId,
+        nodeName: "decline_booking",
+        effectScope: input.proposalId,
+      };
+      // Lock the trip first so concurrent duplicate declines serialize; the loser
+      // then observes the stored effect instead of racing.
+      await this.requireTrip(tx, input.tripId, input.sessionId);
+      const operation = await tx.loadOperation(input.operationId);
+      if (!operation || operation.tripId !== input.tripId) {
+        throw new DomainError("CONFLICT", "operation is not admitted for this trip");
+      }
+      if (operation.status === "failed" || operation.status === "cancelled") {
+        throw new DomainError("CONFLICT", "operation is no longer active");
+      }
+      if (input.fencingToken) {
+        await tx.assertOperationOwnership(input.operationId, input.tripId, input.fencingToken);
+      }
+      const stored = await tx.readEffect(effectKey);
+      if (stored !== undefined) {
+        if (!isDeclinedBookingResult(stored)) {
+          throw new DomainError("INTERNAL_ERROR", "stored decline effect is malformed");
+        }
+        await tx.resolveDecision(input.decisionId);
+        return { ...stored, idempotent: true };
+      }
+
+      const decision = await tx.loadDecision(input.decisionId);
+      if (!decision || decision.tripId !== input.tripId || decision.status !== "pending") {
+        throw new DomainError(
+          "STALE_DECISION",
+          "decision is missing, resolved, or owned by another trip",
+        );
+      }
+      if (decision.kind !== "booking_confirmation") {
+        throw new DomainError("STALE_DECISION", "decision kind must be booking_confirmation");
+      }
+      if (decision.proposalId !== input.proposalId) {
+        throw new DomainError("STALE_DECISION", "decision is not bound to the requested proposal");
+      }
+      const proposal = await tx.loadProposal(input.tripId, input.proposalId);
+      if (!proposal) {
+        throw new DomainError("STALE_DECISION", "proposal not found");
+      }
+      if (decision.sourceFingerprint !== proposal.sourceFingerprint) {
+        throw new DomainError("STALE_DECISION", "decision fingerprint does not match the proposal");
+      }
+      if (proposal.serviceKey !== "flights" && proposal.serviceKey !== "hotel") {
+        throw new DomainError(
+          "CONFLICT",
+          "only a flight or hotel booking can be declined and kept as a selection",
+        );
+      }
+      if (!isProposalActionable(proposal.status)) {
+        throw new DomainError("STALE_DECISION", `proposal is ${proposal.status}`);
+      }
+      if (Date.parse(proposal.expiresAt) <= this.now().getTime()) {
+        throw new DomainError("PROPOSAL_EXPIRED", "proposal has expired");
+      }
+
+      const result: DeclinedBookingResult = {
+        status: "declined",
+        serviceKey: proposal.serviceKey,
+        offerId: proposal.offerId,
+        idempotent: false,
+      };
+      // The declined offer becomes the trip's selection: the plan is built as if
+      // the service existed, and the overviews mark it "Not booked".
+      await tx.upsertSelection({
+        tripId: input.tripId,
+        serviceKey: proposal.serviceKey,
+        offerId: proposal.offerId,
+        snapshotId: proposal.snapshotId,
+        selectedBy: "user",
+        sourceFingerprint: proposal.sourceFingerprint,
+        activeProposalId: null,
+        activeReservationId: null,
+      });
+      await tx.markProposalResolved(proposal.id, "rejected");
+      await tx.resolveDecision(input.decisionId);
+      await tx.recordEvent({
+        tripId: input.tripId,
+        type: "booking.declined",
+        payload: {
+          serviceKey: proposal.serviceKey,
+          offerId: proposal.offerId,
+        },
+      });
+      await tx.writeEffect(effectKey, result);
+      return result;
+    });
   }
 
   private async runConfirmation(
@@ -476,5 +579,17 @@ function isReservationResult(value: unknown): value is ReservationResult {
     typeof candidate.reservationId === "string" &&
     typeof candidate.demoReference === "string" &&
     typeof candidate.serviceKey === "string"
+  );
+}
+
+function isDeclinedBookingResult(value: unknown): value is DeclinedBookingResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.status === "declined" &&
+    typeof candidate.serviceKey === "string" &&
+    typeof candidate.offerId === "string"
   );
 }

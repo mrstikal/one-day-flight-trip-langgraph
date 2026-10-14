@@ -155,6 +155,8 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
       reservations: projection.reservations,
       hasProgram: hasSavedProgram(projection.program),
       hasItinerary: false,
+      flightSelected: projection.selections.flights.offerId !== null,
+      hotelSelected: projection.selections.hotel.offerId !== null,
       pendingDecisionKind: projection.pendingDecision?.kind ?? null,
       proposalServiceKey: projection.proposal?.serviceKey ?? null,
     });
@@ -299,7 +301,17 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
         issues={[...itinerary.validation.errors, ...itinerary.validation.warnings]}
       />
 
-      <CostBreakdown itinerary={itinerary} />
+      <CostBreakdown
+        itinerary={itinerary}
+        notBooked={(
+          [
+            { category: "flights" as const, selection: projection.selections.flights },
+            { category: "hotel" as const, selection: projection.selections.hotel },
+          ]
+        )
+          .filter((entry) => entry.selection.offerId !== null && !entry.selection.booked)
+          .map((entry) => entry.category)}
+      />
 
       <MapPanel markers={itinerary.markers} tileUrl={projection.display.mapTileUrl} />
 

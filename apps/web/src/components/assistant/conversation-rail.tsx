@@ -183,6 +183,8 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
       reservations: projection.reservations,
       hasProgram: hasSavedProgram(projection.program),
       hasItinerary: projection.itinerary !== null,
+      flightSelected: projection.selections.flights.offerId !== null,
+      hotelSelected: projection.selections.hotel.offerId !== null,
       pendingDecisionKind: pending.kind,
       proposalServiceKey: projection.proposal?.serviceKey ?? null,
     });

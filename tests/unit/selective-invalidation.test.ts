@@ -308,7 +308,7 @@ describe("graph definition registry (Phase 11)", () => {
       expect(known.has(edge.from)).toBe(true);
       expect(known.has(edge.to)).toBe(true);
     }
-    expect(parsed.graphVersion).toBe("travel-graph-v6");
+    expect(parsed.graphVersion).toBe("travel-graph-v7");
   });
 
   it("declares exactly one edge group per routing node", () => {

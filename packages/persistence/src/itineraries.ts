@@ -64,8 +64,15 @@ export interface ItineraryPlanningData {
   readonly selfArrangedMeals: readonly Meal[];
   /** Activities the traveler arranges themselves: no activity candidates. */
   readonly selfArrangedActivities: boolean;
-  readonly confirmedFlightOfferId: string | null;
-  readonly confirmedHotelOfferId: string | null;
+  /**
+   * The planned flight/hotel offer: the confirmed reservation or, for a declined
+   * booking ("I don't want to book"), the persisted selection. The plan is built
+   * as if the service existed; `*Booked` tells whether a reservation confirms it.
+   */
+  readonly flightOfferId: string | null;
+  readonly flightBooked: boolean;
+  readonly hotelOfferId: string | null;
+  readonly hotelBooked: boolean;
   readonly dinnerExcludedReason: string | null;
   readonly destinationAirportId: string | null;
   readonly destinationAirportAnchor: { lat: number; lon: number } | null;
@@ -118,7 +125,13 @@ export async function loadItineraryPlanningData(
         WHERE trip_id = $1 AND status = 'confirmed'`,
       [tripId],
     );
+    const selections = await client.query<{ service_key: string; offer_id: string }>(
+      `SELECT service_key, offer_id FROM odft_app.trip_selections
+        WHERE trip_id = $1 AND service_key IN ('flights','hotel')`,
+      [tripId],
+    );
     const confirmedByService = new Map(reservations.rows.map((row) => [row.service_key, row.offer_id]));
+    const selectedByService = new Map(selections.rows.map((row) => [row.service_key, row.offer_id]));
     const confirmedMeals: ItineraryMealSelections = {
       breakfast: confirmedByService.get("breakfast") ?? null,
       lunch: confirmedByService.get("lunch") ?? null,
@@ -127,11 +140,16 @@ export async function loadItineraryPlanningData(
     const confirmedMealIds = ["breakfast", "lunch", "dinner"]
       .map((service) => confirmedByService.get(service))
       .filter((value): value is string => typeof value === "string");
-    const confirmedFlightOfferId = confirmedByService.get("flights") ?? null;
-    const confirmedHotelOfferId = confirmedByService.get("hotel") ?? null;
+    // The plan is built around the confirmed reservation, or the selection when
+    // the booking was declined ("I don't want to book").
+    const flightOfferId =
+      confirmedByService.get("flights") ?? selectedByService.get("flights") ?? null;
+    const flightBooked = confirmedByService.has("flights");
+    const hotelOfferId = confirmedByService.get("hotel") ?? selectedByService.get("hotel") ?? null;
+    const hotelBooked = confirmedByService.has("hotel");
 
-    const flight = confirmedFlightOfferId
-      ? content.flights.find((combination) => combination.id === confirmedFlightOfferId)
+    const flight = flightOfferId
+      ? content.flights.find((combination) => combination.id === flightOfferId)
       : undefined;
     const outboundLast = flight?.outbound.segments[flight.outbound.segments.length - 1];
     const destinationAirportId = outboundLast?.toAirportId ?? null;
@@ -155,8 +173,10 @@ export async function loadItineraryPlanningData(
       confirmedMealIds,
       selfArrangedMeals: selfArranged.meals,
       selfArrangedActivities: selfArranged.activities,
-      confirmedFlightOfferId,
-      confirmedHotelOfferId,
+      flightOfferId,
+      flightBooked,
+      hotelOfferId,
+      hotelBooked,
       dinnerExcludedReason,
       destinationAirportId,
       destinationAirportAnchor,

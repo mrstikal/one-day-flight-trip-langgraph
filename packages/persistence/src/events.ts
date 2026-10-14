@@ -29,6 +29,7 @@ const EVENT_FIELD_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   "operation.retry_requested": ["recoveryRound"],
   "decision.awaiting": ["kind"],
   "booking.confirmed": ["reservationId", "serviceKey", "demoReference"],
+  "booking.declined": ["serviceKey", "offerId"],
   "booking.cancelled": ["serviceKey", "reason"],
   "trip.simulation_armed": ["mode", "domain"],
   "research.domain_started": [

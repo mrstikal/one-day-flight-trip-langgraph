@@ -30,7 +30,11 @@ export function routeForCommandType(state: TravelState): string | null {
 export function routeByNextWork(state: TravelState): string | null {
   switch (state.nextWork) {
     case "research":
-      return state.hasConfirmedFlight ? "ensure_domains" : "validate_route";
+      // A confirmed OR selected (declined booking) flight settles the flight
+      // step, so the hotel/program research can run on the extended snapshot.
+      return state.hasConfirmedFlight || state.selectedServices.includes("flights")
+        ? "ensure_domains"
+        : "validate_route";
     case "progress":
       return "detect_progress";
     case "plan":

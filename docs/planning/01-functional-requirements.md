@@ -96,6 +96,7 @@ Scope: one English-language hybrid (wizard + chat) planner for one full sightsee
 | FR-BOOK-6 | Confirmation is a decision response (`confirm_booking`, `acceptedDemoDisclaimer: true`); a model text saying "confirmed" has no authority; confirmation and itinerary approval are not LLM-executable commands. | T-UT-AI-01, T-IT-AI-01 | P03, P08 |
 | FR-BOOK-7 | No real reservations or payments: zero fees, internal demo records only, no payment library or travel API anywhere. `POC-LIMIT`: integration with real providers is explicitly excluded. | T-INV-09 | P03, P12 |
 | FR-BOOK-8 | Optional restaurant reservations use the same proposal/confirmation flow; no booking is hidden inside itinerary generation or recommendation refresh. | T-E2E-01, T-IT-REPL-01 | P07 |
+| FR-BOOK-9 | Flight/hotel bookings are optional (`decline_booking`, "I don't want to book"): declining keeps the chosen offer as the step's selection without creating a reservation; the plan, its costs, the airport buffer, and the hotel anchor are computed as if the service existed, every overview marks it `Not booked`, and a later booking uses the same proposal/confirmation flow. A confirmed service cannot be declined. | T-E2E-15, T-IT-BOOK-07 | P07, P12 |
 
 ### 3.7 FR-ITIN - Itinerary planning, validation, review (brief section 6 steps 7-8, section 9.3, section 9.4, section 11.5)
 
@@ -218,7 +219,7 @@ Scope: one English-language hybrid (wizard + chat) planner for one full sightsee
 | section 5 Preferences | FR-PREF-1..7 |
 | section 6 UX steps 0-10 | FR-UI-1/6, FR-ITIN-1/2, FR-PREF-*, FR-FEAS |
 | section 7 Synthetic data architecture | FR-DATA-1..8, FR-REF-5/6 |
-| section 8 Simulated bookings | FR-BOOK-1..8, FR-PRD-2/3 |
+| section 8 Simulated bookings | FR-BOOK-1..9, FR-PRD-2/3 |
 | section 9 AI agents | FR-AI-1, FR-ITIN-1/4 |
 | section 10 AI interaction rules | FR-AI-2/3/6/7, FR-PREF-6 |
 | section 11 LangGraph architecture | FR-GRAPH-1..10, FR-ITIN-3 |
