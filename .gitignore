@@ -28,3 +28,4 @@ test-results/
 # Import cache (upstream downloads; never committed)
 .cache/
 /apps/web/next-env.d.ts
+/VOICE_CONTROLL.md
