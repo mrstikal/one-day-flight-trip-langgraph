@@ -1,7 +1,7 @@
 import type { PublicDecisionResponse, ResumeRequest } from "@odft/contracts";
 import { apiPost } from "./api-client";
 import { runWithOperationPreloader } from "./operation-preloader";
-import { ensureSession, resetSession } from "./session-client";
+import { withCsrfSession } from "./session-client";
 
 /** Decision and command submission (PRG: POST then refresh, never replay). */
 
@@ -10,31 +10,6 @@ export interface SubmitDecisionInput {
   readonly decisionId: string;
   readonly expectedRevision: number;
   readonly response: PublicDecisionResponse;
-}
-
-async function withCsrf<T>(
-  send: (csrfToken: string) => Promise<T>,
-): Promise<T> {
-  const csrfToken = await ensureSession();
-  try {
-    return await send(csrfToken);
-  } catch (error) {
-    // A lost/expired session is retried once with a fresh token.
-    if (isUnauthorized(error)) {
-      resetSession();
-      return send(await ensureSession());
-    }
-    throw error;
-  }
-}
-
-function isUnauthorized(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "UNAUTHORIZED"
-  );
 }
 
 function commandMessage(command: unknown): string {
@@ -67,7 +42,7 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<{ oper
     response: input.response,
   };
   return runWithOperationPreloader("Saving your decision...", () =>
-    withCsrf((csrfToken) =>
+    withCsrfSession((csrfToken) =>
       apiPost<{ operationId: string }>(`/api/trips/${input.tripId}/resume`, request, {
         "x-csrf-token": csrfToken,
       }),
@@ -86,7 +61,7 @@ export async function submitCommand(
       ? "Waiting for the AI assistant's response..."
       : commandMessage(request.command);
   return runWithOperationPreloader(message, () =>
-    withCsrf((csrfToken) =>
+    withCsrfSession((csrfToken) =>
       apiPost<{ operationId: string }>(`/api/trips/${tripId}/commands`, request, {
         "x-csrf-token": csrfToken,
       }),
@@ -101,7 +76,7 @@ export async function retryOperation(
   expectedRevision: number,
 ): Promise<{ status: string }> {
   return runWithOperationPreloader("Retrying your plan...", () =>
-    withCsrf((csrfToken) =>
+    withCsrfSession((csrfToken) =>
       apiPost<{ status: string }>(
         `/api/trips/${tripId}/operations/${operationId}/retry`,
         { expectedRevision },

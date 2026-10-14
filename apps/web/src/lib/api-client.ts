@@ -26,7 +26,7 @@ export class ApiError extends Error {
   }
 }
 
-async function parseError(response: Response): Promise<ApiError> {
+export async function parseApiError(response: Response): Promise<ApiError> {
   let body: unknown;
   try {
     body = await response.json();
@@ -66,7 +66,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     },
   });
   if (!response.ok) {
-    throw await parseError(response);
+    throw await parseApiError(response);
   }
   if (response.status === 204) {
     return undefined as T;

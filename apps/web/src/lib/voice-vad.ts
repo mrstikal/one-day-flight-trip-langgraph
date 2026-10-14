@@ -48,3 +48,168 @@ export const VOICE_VAD_OPTIONS: VoiceVadOptions = {
   baseAssetPath: VOICE_VAD_ASSET_PATH,
   onnxWASMBasePath: VOICE_VAD_ASSET_PATH,
 };
+
+/* ------------------------------------------------------------------ */
+/* Frame math (documented granularity, not wall-clock precision)       */
+/* ------------------------------------------------------------------ */
+
+/** Whole V5 frames the library needs for the configured silence threshold. */
+export function dictationFramesForSilence(ms: number = END_OF_DICTATION_SILENCE_MS): number {
+  return Math.ceil(ms / VOICE_VAD_FRAME_MS);
+}
+
+/**
+ * Wall-clock duration at which the threshold can first complete: 63 frames of
+ * 32 ms = 2,016 ms. 62 frames (1,984 ms) are NOT enough — boundary tests use
+ * these exact frame counts instead of claiming sample-accurate timing.
+ */
+export function silenceCompletionMs(ms: number = END_OF_DICTATION_SILENCE_MS): number {
+  return dictationFramesForSilence(ms) * VOICE_VAD_FRAME_MS;
+}
+
+/* ------------------------------------------------------------------ */
+/* Capture session state machine                                       */
+/* ------------------------------------------------------------------ */
+
+export type CapturePhase = "idle" | "preparing" | "recording" | "stopping" | "finalizing";
+
+export interface CaptureState {
+  /** Monotonic token; every callback and async completion checks it. */
+  readonly generation: number;
+  readonly phase: CapturePhase;
+  /** Set only by onSpeechRealStart: initial silence must not arm the ending. */
+  readonly hasConfirmedSpeech: boolean;
+  /** Finalize-once gate: set synchronously before awaiting cleanup/chunks. */
+  readonly stopGate: boolean;
+}
+
+export const INITIAL_CAPTURE_STATE: CaptureState = {
+  generation: 0,
+  phase: "idle",
+  hasConfirmedSpeech: false,
+  stopGate: false,
+};
+
+/** Start a new capture session: fresh generation, gates reset. */
+export function beginCapture(state: CaptureState): CaptureState {
+  return {
+    generation: state.generation + 1,
+    phase: "preparing",
+    hasConfirmedSpeech: false,
+    stopGate: false,
+  };
+}
+
+export function captureReady(state: CaptureState, generation: number): CaptureState {
+  if (state.generation !== generation || state.phase !== "preparing") {
+    return state;
+  }
+  return { ...state, phase: "recording" };
+}
+
+/** A stale callback belongs to an older generation and is always a no-op. */
+export function isActiveGeneration(state: CaptureState, generation: number): boolean {
+  return state.generation === generation;
+}
+
+/** Valid speech (onSpeechRealStart): arms the silence completion. */
+export function speechStart(state: CaptureState, generation: number): CaptureState {
+  if (state.generation !== generation || state.phase !== "recording") {
+    return state;
+  }
+  return { ...state, hasConfirmedSpeech: true };
+}
+
+/**
+ * onVADMisfire is an insufficient short segment: keep listening, never submit
+ * a fragment, never end an otherwise active recording.
+ */
+export function vadMisfire(state: CaptureState, _generation: number): CaptureState {
+  return state;
+}
+
+/**
+ * onSpeechEnd: finalize ONCE only for the active generation with confirmed
+ * speech and an open gate. Repeated callbacks (and simultaneous manual stop or
+ * the duration timer) become no-ops through the same gate.
+ */
+export function speechEnd(
+  state: CaptureState,
+  generation: number,
+): { readonly state: CaptureState; readonly finalize: boolean } {
+  if (state.generation !== generation || state.phase !== "recording") {
+    return { state, finalize: false };
+  }
+  if (!state.hasConfirmedSpeech) {
+    // Initial silence: no countdown was armed; keep recording.
+    return { state, finalize: false };
+  }
+  if (state.stopGate) {
+    return { state, finalize: false };
+  }
+  return {
+    state: { ...state, phase: "stopping", stopGate: true },
+    finalize: true,
+  };
+}
+
+/** Manual Stop recording: always finalizes an active recording (same gate). */
+export function manualStop(
+  state: CaptureState,
+  generation: number,
+): { readonly state: CaptureState; readonly finalize: boolean } {
+  if (state.generation !== generation || state.phase !== "recording" || state.stopGate) {
+    return { state, finalize: false };
+  }
+  return {
+    state: { ...state, phase: "stopping", stopGate: true },
+    finalize: true,
+  };
+}
+
+/**
+ * Hard 60-second limit with the same gate. A healthy detector that saw no
+ * valid speech discards the recording with the no-speech copy and ZERO STT
+ * transport; confirmed speech still finalizes.
+ */
+export function durationLimit(
+  state: CaptureState,
+  generation: number,
+): { readonly state: CaptureState; readonly finalize: boolean; readonly discard: boolean } {
+  if (state.generation !== generation || state.phase !== "recording" || state.stopGate) {
+    return { state, finalize: false, discard: false };
+  }
+  const next: CaptureState = { ...state, phase: "stopping", stopGate: true };
+  if (!state.hasConfirmedSpeech) {
+    return { state: next, finalize: false, discard: true };
+  }
+  return { state: next, finalize: true, discard: false };
+}
+
+/** Cancel dictation: invalidate the generation and discard everything. */
+export function cancelCapture(state: CaptureState): CaptureState {
+  return {
+    generation: state.generation + 1,
+    phase: "idle",
+    hasConfirmedSpeech: false,
+    stopGate: false,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* ONNX runtime baseline (CPU/WASM, one thread, no proxy)               */
+/* ------------------------------------------------------------------ */
+
+/** Minimal structural ONNX runtime shape; keeps this module DOM-free. */
+export interface VadOrtLike {
+  env: { wasm: { numThreads?: number; proxy?: boolean } };
+}
+
+/**
+ * Explicit compatibility baseline (section 10): one WASM thread and no proxy
+ * worker, so no cross-origin isolation headers are required.
+ */
+export function applyVadOrtBaseline(ort: VadOrtLike): void {
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+}

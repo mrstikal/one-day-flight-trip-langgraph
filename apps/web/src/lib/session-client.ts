@@ -27,3 +27,31 @@ export async function ensureSession(): Promise<string> {
 export function resetSession(): void {
   pending = null;
 }
+
+function isUnauthorized(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "UNAUTHORIZED"
+  );
+}
+
+/**
+ * Run one state-changing send with the CSRF token; a lost/expired session is
+ * retried exactly once with a fresh token. Callers must keep their request
+ * idempotent (server-side request-id dedupe) because the retry repeats the
+ * exact same request, not a new one.
+ */
+export async function withCsrfSession<T>(send: (csrfToken: string) => Promise<T>): Promise<T> {
+  const csrfToken = await ensureSession();
+  try {
+    return await send(csrfToken);
+  } catch (error) {
+    if (isUnauthorized(error)) {
+      resetSession();
+      return send(await ensureSession());
+    }
+    throw error;
+  }
+}
