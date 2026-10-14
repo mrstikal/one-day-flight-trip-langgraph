@@ -4,11 +4,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -106,10 +107,53 @@ function copyIfChanged(source: string, target: string): boolean {
 }
 
 function shippedLicenseFiles(root: string): string[] {
-  return readdirSync(root).filter((entry) => /^licen[cs]e/i.test(entry));
+  const found: string[] = [];
+  const scan = (dir: string, prefix: string): void => {
+    if (!existsSync(dir)) {
+      return;
+    }
+    for (const entry of readdirSync(dir)) {
+      if (/licen[cs]e/i.test(entry)) {
+        found.push(`${prefix}${entry}`);
+      }
+    }
+  };
+  // Both the package root and its dist/ (the pinned vad-web bundle ships an
+  // ONNX Runtime license notice as `dist/bundle.min.js.LICENSE.txt`).
+  scan(root, "");
+  scan(join(root, "dist"), "dist/");
+  return found;
 }
 
-function main(): void {
+export interface VoiceVadAssetCopy {
+  readonly target: string;
+  readonly sourcePackage: string;
+  readonly source: string;
+}
+
+export interface VoiceVadAssetsResult {
+  readonly outputDir: string;
+  readonly assets: readonly VoiceVadAssetCopy[];
+  readonly copied: number;
+  readonly packages: ReadonlyArray<{
+    readonly name: string;
+    readonly version: string;
+    readonly declaredLicense: string | null;
+    readonly shippedLicenseFiles: readonly string[];
+  }>;
+  readonly copiedLicenseFiles: ReadonlyArray<{
+    readonly packageName: string;
+    readonly source: string;
+    readonly target: string;
+  }>;
+}
+
+/**
+ * Copy the pinned VAD/model/runtime assets (fail closed when any pinned file is
+ * missing) and write the provenance manifest. Exported so the VAD asset test can
+ * run the exact same preparation without spawning a process.
+ */
+export function prepareVoiceVadAssets(): VoiceVadAssetsResult {
   const vadRoot = packageRoot("@ricky0123/vad-web");
   const ortRoot = packageRoot("onnxruntime-web");
   const assets = pinnedAssets(vadRoot, ortRoot);
@@ -138,23 +182,26 @@ function main(): void {
     { root: vadRoot, manifest: packageManifest(vadRoot) },
     { root: ortRoot, manifest: packageManifest(ortRoot) },
   ];
-  const copiedLicenses: Array<{ packageName: string; target: string }> = [];
+  const copiedLicenses: Array<{ packageName: string; source: string; target: string }> = [];
   for (const { root, manifest } of packageRoots) {
     for (const licenseFile of shippedLicenseFiles(root)) {
-      const target = `LICENSE-${manifest.name.replace(/[/@]/g, "-")}`;
+      const safeName = manifest.name.replace(/[@/]/g, "-").replace(/^-+/, "");
+      const target = `licenses/${safeName}-${basename(licenseFile)}`;
+      mkdirSync(join(outputDir, "licenses"), { recursive: true });
       copyFileSync(join(root, licenseFile), join(outputDir, target));
-      copiedLicenses.push({ packageName: manifest.name, target });
+      copiedLicenses.push({ packageName: manifest.name, source: licenseFile, target });
     }
   }
+  const packages = packageRoots.map(({ root, manifest }) => ({
+    name: manifest.name,
+    version: manifest.version,
+    declaredLicense: manifest.license ?? null,
+    shippedLicenseFiles: shippedLicenseFiles(root),
+  }));
   const provenance = {
     generatedBy: "scripts/voice-vad-assets.ts",
     note: "Generated copies of pinned VAD/model/runtime assets; safe to delete, regenerated on dev/build.",
-    packages: packageRoots.map(({ root, manifest }) => ({
-      name: manifest.name,
-      version: manifest.version,
-      declaredLicense: manifest.license ?? null,
-      shippedLicenseFiles: shippedLicenseFiles(root),
-    })),
+    packages,
     copiedLicenseFiles: copiedLicenses,
     files: assets.map((asset) => ({ target: asset.target, sourcePackage: asset.packageName })),
   };
@@ -164,14 +211,44 @@ function main(): void {
     "utf8",
   );
 
-  console.log(
-    `voice VAD assets ready in ${relative(repoRoot, outputDir)} (${String(assets.length)} pinned files, ${String(copied)} updated)`,
-  );
+  return {
+    outputDir,
+    assets: assets.map((asset) => ({
+      target: asset.target,
+      sourcePackage: asset.packageName,
+      source: asset.source,
+    })),
+    copied,
+    packages,
+    copiedLicenseFiles: copiedLicenses,
+  };
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+/**
+ * True when the module is the process entry point. Both sides are resolved
+ * through `realpathSync` so a symlinked checkout/entry path cannot silently
+ * skip preparation (which would leave the voice-vad assets missing while the
+ * dev/build hook exits successfully).
+ */
+export function isDirectScriptInvocation(entry: string | undefined, moduleUrl: string): boolean {
+  if (!entry) {
+    return false;
+  }
+  try {
+    return realpathSync(resolve(entry)) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectScriptInvocation(process.argv[1], import.meta.url)) {
+  try {
+    const result = prepareVoiceVadAssets();
+    console.log(
+      `voice VAD assets ready in ${relative(repoRoot, result.outputDir)} (${String(result.assets.length)} pinned files, ${String(result.copied)} updated)`,
+    );
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

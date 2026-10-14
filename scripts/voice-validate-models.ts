@@ -1,29 +1,32 @@
-import { readFileSync } from "node:fs";
-import { voiceProfilesFileSchema } from "@odft/contracts";
-import { resolveRepoConfigPath } from "@odft/ai";
 import { parseServerConfig } from "@odft/persistence";
+import {
+  assertDocumentedSpeechDefaults,
+  assertSpeechCapable,
+  loadVoiceProfiles,
+  refreshSpeechCapabilityManifest,
+  resolveVoiceConfigPath,
+  speechCapabilitiesPath,
+  stampVoicePricingVersion,
+  type SpeechCapabilityFetch,
+  VoiceConfigError,
+  writeVoiceProfiles,
+} from "@odft/ai";
 import { loadLocalEnv } from "./_load-env.js";
 
 /**
- * `npm run voice:validate-models` (VOICE_CONTROLL.md section 6; task V01/V02).
+ * `npm run voice:validate-models` (VOICE_CONTROLL.md section 6; task V02).
  *
- * V01 skeleton: resolves and strictly validates the local `voice-profiles.json`
- * operator file and prints a secret-free summary, then fails closed because the
- * live capability/endpoint/pricing validation and capability-cache stamping are
- * not implemented yet (planned V02). It never claims provider enforcement and
- * never stamps `pricingVersion`.
+ * Requires `AI_MODE=openrouter` and `VOICE_CONFIG_PATH` (a copy of
+ * `voice-profiles.example.json`). Fetches the public endpoint metadata for the
+ * configured STT/TTS models, verifies model/modality/endpoint/billing unit and
+ * exact pricing normalization, checks the profile limits and per-call ceilings,
+ * writes `<VOICE_CONFIG_PATH>.capabilities.json`, and stamps the verified
+ * `pricingVersion` into the profile file.
+ *
+ * It validates ONLY public metadata: the assigned Groq-restricted key policy and
+ * the actual serving provider/billing remain operator/live verification gates
+ * (T-LIVE-VOICE-01). It never prints credentials.
  */
-
-function formatIssues(
-  issues: readonly { path: readonly PropertyKey[]; message: string }[],
-): string {
-  return issues
-    .map(
-      (issue) =>
-        `${issue.path.map((part) => String(part)).join(".") || "(root)"}: ${issue.message}`,
-    )
-    .join("\n- ");
-}
 
 async function main(): Promise<void> {
   // Load .env/.env.local exactly like the other operational scripts, so the
@@ -40,45 +43,53 @@ async function main(): Promise<void> {
       "VOICE_CONFIG_PATH is required to validate speech models; copy voice-profiles.example.json to a git-ignored voice-profiles.json and point VOICE_CONFIG_PATH at it",
     );
   }
-  // Resolve like the web app/worker (cwd, then repo root) so the documented
-  // relative path works from every start location.
-  const resolvedConfigPath = resolveRepoConfigPath(config.voiceConfigPath, "VOICE_CONFIG_PATH");
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(resolvedConfigPath, "utf8"));
-  } catch (error) {
-    throw new Error(
-      `VOICE_CONFIG_PATH could not be read as JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  const parsed = voiceProfilesFileSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error(`Invalid voice profile file:\n- ${formatIssues(parsed.error.issues)}`);
-  }
-  const profiles = parsed.data;
-  console.log(
-    `voice profile file ok: schemaVersion=${profiles.schemaVersion}, pricingVersion=${profiles.pricingVersion}`,
-  );
-  console.log(
-    `stt: model=${profiles.stt.model} endpointProviderId=${profiles.stt.endpointProviderId} timeoutMs=${profiles.stt.timeoutMs} maxCallCostUsd=${profiles.stt.maxCallCostUsd}`,
-  );
-  console.log(
-    `tts: model=${profiles.tts.model} voice=${profiles.tts.voice} responseFormat=${profiles.tts.responseFormat} timeoutMs=${profiles.tts.timeoutMs} maxCallCostUsd=${profiles.tts.maxCallCostUsd}`,
-  );
-  console.log(
-    `limits: maxRecordingSeconds=${profiles.limits.maxRecordingSeconds} maxRequestAudioBytes=${profiles.limits.maxRequestAudioBytes} maxResponseAudioBytes=${profiles.limits.maxResponseAudioBytes} maxTranscriptCharacters=${profiles.limits.maxTranscriptCharacters} maxReplyCharacters=${profiles.limits.maxReplyCharacters} maxCallsPerTrip=${profiles.limits.maxCallsPerTrip} maxCostUsdPerTrip=${profiles.limits.maxCostUsdPerTrip}`,
-  );
   if (!config.openrouterSttApiKey) {
     console.warn(
-      "warning: OPENROUTER_STT_API_KEY is not set; live STT would refuse transport until the dedicated Groq-restricted key is configured",
+      "warning: OPENROUTER_STT_API_KEY is not set; live STT will refuse transport until the dedicated Groq-restricted key is configured",
     );
   }
-  throw new Error(
-    "capability/endpoint/pricing validation and capabilities-cache stamping are not implemented yet (planned V02); pricingVersion was not stamped",
+  // Resolve like the web app (cwd, then repo root) so both use the same file/cache.
+  const resolvedConfigPath = resolveVoiceConfigPath(config.voiceConfigPath);
+  const profiles = loadVoiceProfiles(resolvedConfigPath);
+  // Section 6: the documented models and STT endpoint cannot be swapped silently.
+  assertDocumentedSpeechDefaults(profiles);
+  const cachePath = speechCapabilitiesPath(resolvedConfigPath);
+  const fetchImpl: SpeechCapabilityFetch = (url, init) =>
+    fetch(url, { ...init, headers: { ...init?.headers } });
+
+  const manifest = await refreshSpeechCapabilityManifest({ cachePath, fetchImpl, profiles });
+
+  // Validate the stamped profile IN MEMORY first: a failed limit/ceiling check
+  // must not leave a freshly pinned profile on disk.
+  const stamped = stampVoicePricingVersion(profiles, manifest.pricingVersion);
+  for (const kind of ["stt", "tts"] as const) {
+    const check = assertSpeechCapable({ profiles: stamped.profiles, kind, manifest });
+    const source =
+      check.entry.minimumUnitsSource === "documented-provider-evidence"
+        ? " (documented provider evidence)"
+        : "";
+    console.log(
+      `${kind}: ${check.entry.model} endpoint=${check.entry.endpointProviderId} unit=${check.entry.unit} rate=${check.entry.ratePerUnitUsd} minimum=${check.entry.minimumUnits}${source} requestFee=${check.entry.requestFeeUsd} worst-call=${check.worstCallCostUsd} (ceiling ${stamped.profiles[kind].maxCallCostUsd})`,
+    );
+  }
+
+  // `pricingVersion` is the snapshot's fetch timestamp: stamp it only after every
+  // check passed, so the profile pins the exact price set that was verified.
+  if (stamped.changed) {
+    writeVoiceProfiles(resolvedConfigPath, stamped.profiles);
+    console.log(`stamped pricingVersion ${manifest.pricingVersion} into ${resolvedConfigPath}`);
+  }
+  console.log(`voice capability manifest cached at ${cachePath}`);
+  console.log(
+    "note: public model/pricing metadata validated only; the assigned Groq-only key policy and actual serving/billing remain operator/live gates",
   );
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  if (error instanceof VoiceConfigError) {
+    console.error(error.message);
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
   process.exitCode = 1;
 });
