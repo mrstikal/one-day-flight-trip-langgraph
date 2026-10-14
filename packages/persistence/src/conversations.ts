@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { ConversationRole } from "@odft/contracts";
 import { assertOperationFence, type OperationFence } from "./effects.js";
+import { insertEvent } from "./events.js";
 
 /**
  * Persistent conversation (07-conversation-and-intents.md section 6).
@@ -87,11 +88,15 @@ export async function insertConversationMessage(
   );
   const sequence = Number.parseInt(sequenceResult.rows[0]?.next ?? "1", 10);
   const id = randomUUID();
-  await client.query(
+  // RETURNING distinguishes a fresh insertion from a request-id duplicate: the
+  // durable `conversation.message_added` event is written exactly once, inside
+  // the same transaction as the message (VOICE_CONTROLL.md section 9).
+  const inserted = await client.query<{ id: string }>(
     `INSERT INTO odft_app.conversation_messages
        (id, trip_id, sequence, role, content, interpretation, result, operation_id, request_id)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
-     ON CONFLICT (trip_id, request_id) WHERE request_id IS NOT NULL DO NOTHING`,
+     ON CONFLICT (trip_id, request_id) WHERE request_id IS NOT NULL DO NOTHING
+     RETURNING id`,
     [
       id,
       input.tripId,
@@ -104,6 +109,17 @@ export async function insertConversationMessage(
       input.requestId ?? null,
     ],
   );
+  const insertedId = inserted.rows[0]?.id;
+  if (insertedId) {
+    // Exactly the allowlisted safe metadata; message content and interpretation
+    // never enter the event. The operation id stays the event's envelope field.
+    await insertEvent(client, {
+      tripId: input.tripId,
+      ...(input.operationId ? { operationId: input.operationId } : {}),
+      type: "conversation.message_added",
+      payload: { messageId: insertedId, sequence, role: input.role },
+    });
+  }
   // Re-read by request id so a duplicate request returns the stored message.
   const stored = input.requestId
     ? await client.query<MessageRow>(

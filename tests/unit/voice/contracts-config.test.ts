@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   errorCodeSchema,
   publicConversationMessageSchema,
+  publicInspectorSchema,
   publicVoiceCallSchema,
   publicVoiceCapabilitiesSchema,
   voiceProfilesFileSchema,
@@ -221,20 +222,19 @@ describe("public voice API schemas", () => {
 
   it("voice-call telemetry is safe and typed", () => {
     const row = {
-      id: MESSAGE_ID,
       kind: "stt",
       model: "openai/whisper-large-v3-turbo",
-      gateway: "openrouter",
       restrictedProviderId: "groq",
       servingProviderId: "groq",
+      unitKind: "audio_seconds",
       inputUnits: 9.2,
-      inputUnitKind: "audio_seconds",
       latencyMs: 620,
       status: "succeeded",
       costStatus: "actual",
       reservedCostUsd: "0.02",
       actualCostUsd: "0.000508",
       errorCode: null,
+      createdAt: "2026-10-14T12:00:00Z",
     };
     expect(publicVoiceCallSchema.safeParse(row).success).toBe(true);
     expect(publicVoiceCallSchema.safeParse({ ...row, text: "secret transcript" }).success).toBe(
@@ -244,6 +244,43 @@ describe("public voice API schemas", () => {
     expect(publicVoiceCallSchema.safeParse({ ...row, reservedCostUsd: "1e-3" }).success).toBe(
       false,
     );
+    expect(publicVoiceCallSchema.safeParse({ ...row, generationId: "gen-1" }).success).toBe(false);
+  });
+
+  it("embeds the voice rows in the strict inspector contract", () => {
+    const inspector = {
+      scenarioMode: "normal",
+      graph: null,
+      nodes: [],
+      operations: [],
+      checkpoints: [],
+      llmCalls: [],
+      faults: [],
+      events: [],
+    };
+    expect(publicInspectorSchema.safeParse(inspector).success).toBe(false);
+    const voiceCall = {
+      kind: "tts",
+      model: "elevenlabs/eleven-v4-turbo",
+      restrictedProviderId: null,
+      servingProviderId: "elevenlabs",
+      unitKind: "characters",
+      inputUnits: 120,
+      latencyMs: 900,
+      status: "reconciled",
+      costStatus: "actual",
+      reservedCostUsd: "0.05",
+      actualCostUsd: "0.0024",
+      errorCode: null,
+      createdAt: "2026-10-14T12:00:00Z",
+    };
+    expect(publicInspectorSchema.safeParse({ ...inspector, voiceCalls: [voiceCall] }).success).toBe(
+      true,
+    );
+    expect(
+      publicInspectorSchema.safeParse({ ...inspector, voiceCalls: [{ ...voiceCall, tokens: 5 }] })
+        .success,
+    ).toBe(false);
   });
 });
 

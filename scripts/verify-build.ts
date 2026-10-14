@@ -23,6 +23,10 @@ const PACKAGES: ReadonlyArray<readonly [string, string]> = [
 const FORBIDDEN_CLIENT_TOKENS = [
   "SESSION_HMAC_KEY",
   "OPENROUTER_API_KEY",
+  "OPENROUTER_STT_API_KEY",
+  "VOICE_CONFIG_PATH",
+  "VOICE_ENABLED",
+  "voice-profiles.json",
   "DATABASE_URL",
   "odft_checkpoint",
   "reference_cities",

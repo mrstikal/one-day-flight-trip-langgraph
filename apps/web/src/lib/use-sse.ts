@@ -32,6 +32,7 @@ const PROJECTION_EVENTS = [
   "route_change.committed",
   "node.started",
   "node.updated",
+  "conversation.message_added",
 ] as const;
 
 /** Bounded dedupe window: ids are monotonic, so only recent ones need keeping. */

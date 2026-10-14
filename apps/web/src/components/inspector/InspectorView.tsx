@@ -51,7 +51,9 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
   if (!projection) {
     return (
       <p role="status" className="text-sm text-ink-muted">
-        {error ? `The inspector could not load: ${error.message}` : "Loading the execution inspector…"}
+        {error
+          ? `The inspector could not load: ${error.message}`
+          : "Loading the execution inspector…"}
       </p>
     );
   }
@@ -138,7 +140,10 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
 
       <section aria-label="Operations">
         <h2 className="text-base font-semibold">Operations</h2>
-        <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="operation-table">
+        <table
+          className="mt-2 w-full border-collapse text-left text-xs"
+          data-testid="operation-table"
+        >
           <thead>
             <tr className="border-b border-border text-ink-muted">
               <th className="py-1 pr-3">Operation</th>
@@ -168,7 +173,10 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
 
       <section aria-label="Checkpoints and resumes">
         <h2 className="text-base font-semibold">Checkpoints &amp; resumes</h2>
-        <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="checkpoint-table">
+        <table
+          className="mt-2 w-full border-collapse text-left text-xs"
+          data-testid="checkpoint-table"
+        >
           <thead>
             <tr className="border-b border-border text-ink-muted">
               <th className="py-1 pr-3">Decision</th>
@@ -221,7 +229,10 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
           </thead>
           <tbody>
             {inspector.llmCalls.map((call, index) => (
-              <tr key={`${call.role}-${call.createdAt}-${index}`} className="border-b border-border/50">
+              <tr
+                key={`${call.role}-${call.createdAt}-${index}`}
+                className="border-b border-border/50"
+              >
                 <td className="py-1 pr-3">{call.role}</td>
                 <td className="py-1 pr-3">{call.model}</td>
                 <td className="py-1 pr-3 font-mono">{call.promptVersion}</td>
@@ -245,6 +256,60 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
         </table>
       </section>
 
+      <section aria-label="Voice usage">
+        <h2 className="text-base font-semibold">Voice usage</h2>
+        <p className="mt-1 text-xs text-ink-muted">
+          Safe voice telemetry only: kind, model, provider metadata, units, latency, and USD cost. A
+          separate ledger from LLM calls and travel prices; transcripts, audio, and reply text are
+          never stored.
+        </p>
+        <table className="mt-2 w-full border-collapse text-left text-xs" data-testid="voice-table">
+          <thead>
+            <tr className="border-b border-border text-ink-muted">
+              <th className="py-1 pr-3">Kind</th>
+              <th className="py-1 pr-3">Model</th>
+              <th className="py-1 pr-3">Provider</th>
+              <th className="py-1 pr-3">Units</th>
+              <th className="py-1 pr-3">Latency</th>
+              <th className="py-1 pr-3">Status</th>
+              <th className="py-1 pr-3">Cost (USD)</th>
+              <th className="py-1">Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {inspector.voiceCalls.map((call, index) => (
+              <tr
+                key={`${call.kind}-${call.createdAt}-${index}`}
+                className="border-b border-border/50"
+              >
+                <td className="py-1 pr-3">{call.kind}</td>
+                <td className="py-1 pr-3">{call.model}</td>
+                <td className="py-1 pr-3">
+                  {call.servingProviderId ?? call.restrictedProviderId ?? "—"}
+                </td>
+                <td className="py-1 pr-3">
+                  {call.inputUnits === null
+                    ? "—"
+                    : `${call.inputUnits} ${call.unitKind === "characters" ? "chars" : "s"}`}
+                </td>
+                <td className="py-1 pr-3">
+                  {call.latencyMs === null ? "—" : `${call.latencyMs} ms`}
+                </td>
+                <td className="py-1 pr-3">
+                  {call.status}
+                  {call.costStatus ? ` (${call.costStatus})` : ""}
+                </td>
+                <td className="py-1 pr-3">
+                  {call.actualCostUsd ?? call.reservedCostUsd}
+                  {call.actualCostUsd === null ? " (reserved)" : ""}
+                </td>
+                <td className="py-1">{formatTime(call.createdAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
       <section aria-label="Faults">
         <h2 className="text-base font-semibold">Faults</h2>
         {inspector.faults.length === 0 ? (
@@ -254,7 +319,10 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
         ) : (
           <ul className="mt-2 flex flex-col gap-1 text-xs" data-testid="fault-list">
             {inspector.faults.map((fault) => (
-              <li key={`${fault.domain}-${fault.mode}-${fault.at}`} className="rounded border border-border bg-cream px-2 py-1">
+              <li
+                key={`${fault.domain}-${fault.mode}-${fault.at}`}
+                className="rounded border border-border bg-cream px-2 py-1"
+              >
                 <strong>{fault.label}</strong> · {fault.domain} · {fault.mode}
                 {fault.note ? ` — ${fault.note}` : ""} · {formatTime(fault.at)}
               </li>

@@ -5,11 +5,14 @@ import {
   operationStatusSchema,
   publicInspectorFaultSchema,
   publicInspectorSchema,
+  publicVoiceCallSchema,
   scenarioDomainSchema,
   type PublicInspector,
   type PublicInspectorEvent,
   type PublicInspectorNode,
+  type PublicVoiceCall,
 } from "@odft/contracts";
+import { formatUsdAmount, usdFromDb } from "./usd.js";
 
 /**
  * Phase 11 execution-inspector projection (08-frontend-ux.md section 10).
@@ -49,7 +52,9 @@ function toIso(value: string): string {
 }
 
 function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 /** One safe line of evidence per event type; never a payload dump. */
@@ -124,7 +129,10 @@ export function deriveOperationFrontier(
   }[],
   newestOperation: { readonly id: string; readonly status: string } | null,
 ): { readonly node: string | null; readonly status: "active" | "failed" } {
-  if (!newestOperation || (newestOperation.status !== "running" && newestOperation.status !== "failed")) {
+  if (
+    !newestOperation ||
+    (newestOperation.status !== "running" && newestOperation.status !== "failed")
+  ) {
     return { node: null, status: newestOperation?.status === "failed" ? "failed" : "active" };
   }
   const relevant = events.filter((event) => event.operationId === newestOperation.id);
@@ -161,90 +169,124 @@ export async function loadPublicInspector(
   client: Queryable,
   tripId: string,
 ): Promise<PublicInspector> {
-  const [graphResult, nodeEvents, operationsResult, checkpointsResult, llmResult, faultsResult, eventsResult, activeResult] =
-    await Promise.all([
-      client.query<{ payload: unknown }>(
-        `SELECT payload FROM odft_app.execution_events
+  const [
+    graphResult,
+    nodeEvents,
+    operationsResult,
+    checkpointsResult,
+    llmResult,
+    voiceResult,
+    faultsResult,
+    eventsResult,
+    activeResult,
+  ] = await Promise.all([
+    client.query<{ payload: unknown }>(
+      `SELECT payload FROM odft_app.execution_events
           WHERE trip_id = $1 AND type = 'graph.initialized'
           ORDER BY id DESC LIMIT 1`,
-        [tripId],
-      ),
-      client.query<EventRow & { operation_id: string | null }>(
-        `SELECT id::text AS id, type, payload, created_at::text AS created_at, operation_id
+      [tripId],
+    ),
+    client.query<EventRow & { operation_id: string | null }>(
+      `SELECT id::text AS id, type, payload, created_at::text AS created_at, operation_id
            FROM odft_app.execution_events
           WHERE trip_id = $1 AND type IN ('node.started', 'node.updated')
           ORDER BY id DESC LIMIT $2`,
-        [tripId, MAX_ROWS],
-      ),
-      client.query<{
-        id: string;
-        kind: string;
-        status: string;
-        attempts: number;
-        accepted_revision: number;
-        created_at: string;
-        updated_at: string;
-      }>(
-        `SELECT id, kind, status, attempts, accepted_revision,
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{
+      id: string;
+      kind: string;
+      status: string;
+      attempts: number;
+      accepted_revision: number;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `SELECT id, kind, status, attempts, accepted_revision,
                 created_at::text AS created_at, updated_at::text AS updated_at
            FROM odft_app.workflow_operations
           WHERE trip_id = $1 ORDER BY created_at DESC LIMIT $2`,
-        [tripId, MAX_ROWS],
-      ),
-      client.query<{
-        id: string;
-        kind: string;
-        status: string;
-        created_revision: number;
-        checkpoint_id: string | null;
-        interrupt_id: string | null;
-        created_at: string;
-      }>(
-        `SELECT id, kind, status, created_revision, checkpoint_id, interrupt_id,
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{
+      id: string;
+      kind: string;
+      status: string;
+      created_revision: number;
+      checkpoint_id: string | null;
+      interrupt_id: string | null;
+      created_at: string;
+    }>(
+      `SELECT id, kind, status, created_revision, checkpoint_id, interrupt_id,
                 created_at::text AS created_at
            FROM odft_app.pending_decisions
           WHERE trip_id = $1 ORDER BY created_at DESC LIMIT $2`,
-        [tripId, MAX_ROWS],
-      ),
-      client.query<{
-        role: string;
-        model: string;
-        prompt_version: string;
-        mode: string;
-        status: string;
-        validation_status: string | null;
-        attempts: number;
-        reserved_tokens: number;
-        actual_tokens: number | null;
-        reserved_cost_usd: string;
-        actual_cost_usd: string | null;
-        created_at: string;
-      }>(
-        `SELECT role, model, prompt_version, mode, status, validation_status, attempts,
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{
+      role: string;
+      model: string;
+      prompt_version: string;
+      mode: string;
+      status: string;
+      validation_status: string | null;
+      attempts: number;
+      reserved_tokens: number;
+      actual_tokens: number | null;
+      reserved_cost_usd: string;
+      actual_cost_usd: string | null;
+      created_at: string;
+    }>(
+      `SELECT role, model, prompt_version, mode, status, validation_status, attempts,
                 reserved_tokens, actual_tokens, reserved_cost_usd::text AS reserved_cost_usd,
                 actual_cost_usd::text AS actual_cost_usd, created_at::text AS created_at
            FROM odft_app.llm_calls
           WHERE trip_id = $1 ORDER BY created_at DESC LIMIT $2`,
-        [tripId, MAX_ROWS],
-      ),
-      client.query<{ domain: string; fault: string; label: string | null; updated_at: string }>(
-        `SELECT domain, fault, state->>'label' AS label, updated_at::text AS updated_at
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{
+      kind: string;
+      model: string;
+      provider_restriction: string | null;
+      serving_provider: string | null;
+      unit_kind: string | null;
+      input_units: string | null;
+      latency_ms: number | null;
+      status: string;
+      cost_status: string | null;
+      reserved_cost_usd: string;
+      actual_cost_usd: string | null;
+      error_code: string | null;
+      created_at: string;
+    }>(
+      // Voice usage stays a separate USD-only ledger; no audio/transcripts.
+      `SELECT kind, model, provider_restriction, serving_provider, unit_kind,
+                input_units::text AS input_units, latency_ms, status, cost_status,
+                reserved_cost_usd::text AS reserved_cost_usd,
+                actual_cost_usd::text AS actual_cost_usd, error_code,
+                created_at::text AS created_at
+           FROM odft_app.voice_calls
+          WHERE trip_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{ domain: string; fault: string; label: string | null; updated_at: string }>(
+      `SELECT domain, fault, state->>'label' AS label, updated_at::text AS updated_at
            FROM odft_app.simulation_faults
           WHERE trip_id = $1 ORDER BY updated_at DESC LIMIT 50`,
-        [tripId],
-      ),
-      client.query<EventRow>(
-        `SELECT id::text AS id, type, payload, created_at::text AS created_at
+      [tripId],
+    ),
+    client.query<EventRow>(
+      `SELECT id::text AS id, type, payload, created_at::text AS created_at
            FROM odft_app.execution_events
           WHERE trip_id = $1 ORDER BY id DESC LIMIT $2`,
-        [tripId, MAX_ROWS],
-      ),
-      client.query<{ id: string; kind: string }>(
-        `SELECT id, kind FROM odft_app.pending_decisions
+      [tripId, MAX_ROWS],
+    ),
+    client.query<{ id: string; kind: string }>(
+      `SELECT id, kind FROM odft_app.pending_decisions
           WHERE trip_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
-        [tripId],
-      ),
-    ]);
+      [tripId],
+    ),
+  ]);
 
   const graphParsed = graphResult.rows[0]
     ? graphDefinitionSchema.safeParse(graphResult.rows[0].payload)
@@ -304,9 +346,7 @@ export async function loadPublicInspector(
       {
         operationId: row.id,
         kind: (row.kind === "creation" || row.kind === "decision" ? row.kind : "command") as
-          | "command"
-          | "creation"
-          | "decision",
+          "command" | "creation" | "decision",
         status: status.data,
         attempts: row.attempts,
         acceptedRevision: row.accepted_revision,
@@ -318,9 +358,10 @@ export async function loadPublicInspector(
 
   const checkpoints = checkpointsResult.rows.flatMap((row) => {
     const kind = decisionKindSchema.safeParse(row.kind);
-    const status = row.status === "pending" || row.status === "resolved" || row.status === "cancelled"
-      ? row.status
-      : undefined;
+    const status =
+      row.status === "pending" || row.status === "resolved" || row.status === "cancelled"
+        ? row.status
+        : undefined;
     if (!kind.success || !status) {
       return [];
     }
@@ -339,7 +380,10 @@ export async function loadPublicInspector(
 
   const llmCalls = llmResult.rows.flatMap((row) => {
     const role =
-      row.role === "intent" || row.role === "recommendation" || row.role === "planner" || row.role === "reviewer"
+      row.role === "intent" ||
+      row.role === "recommendation" ||
+      row.role === "planner" ||
+      row.role === "reviewer"
         ? row.role
         : null;
     if (!role || (row.mode !== "fixture" && row.mode !== "openrouter")) {
@@ -361,6 +405,27 @@ export async function loadPublicInspector(
         createdAt: toIso(row.created_at),
       },
     ];
+  });
+
+  const voiceCalls = voiceResult.rows.flatMap((row): PublicVoiceCall[] => {
+    const parsed = publicVoiceCallSchema.safeParse({
+      kind: row.kind,
+      model: row.model,
+      restrictedProviderId: row.provider_restriction,
+      servingProviderId: row.serving_provider,
+      unitKind: row.unit_kind,
+      inputUnits: row.input_units === null ? null : Number(row.input_units),
+      latencyMs: row.latency_ms,
+      status: row.status,
+      costStatus: row.cost_status,
+      // Trim numeric(18,9) padding so the DTO never implies false precision.
+      reservedCostUsd: formatUsdAmount(usdFromDb(row.reserved_cost_usd)),
+      actualCostUsd:
+        row.actual_cost_usd === null ? null : formatUsdAmount(usdFromDb(row.actual_cost_usd)),
+      errorCode: row.error_code,
+      createdAt: toIso(row.created_at),
+    });
+    return parsed.success ? [parsed.data] : [];
   });
 
   const faults = faultsResult.rows.flatMap((row) => {
@@ -392,6 +457,7 @@ export async function loadPublicInspector(
     operations,
     checkpoints,
     llmCalls,
+    voiceCalls,
     faults,
     events,
   };
@@ -408,6 +474,7 @@ export async function loadPublicInspector(
     operations: [],
     checkpoints: [],
     llmCalls: [],
+    voiceCalls: [],
     faults: [],
     events: [],
   });

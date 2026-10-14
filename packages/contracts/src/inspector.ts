@@ -2,6 +2,7 @@ import { z } from "zod";
 import { decisionKindSchema, operationStatusSchema, scenarioDomainSchema } from "./enums.js";
 import { graphDefinitionSchema } from "./graph-definition.js";
 import { instantSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
+import { publicVoiceCallSchema } from "./voice.js";
 
 /**
  * Safe execution-inspector projection (08-frontend-ux.md section 10, Phase 11).
@@ -71,7 +72,10 @@ export const publicInspectorLlmCallSchema = z
     actualTokens: z.number().int().min(0).nullable(),
     /** Decimal USD strings (never lossy floats). */
     reservedCostUsd: z.string().regex(/^\d+(\.\d+)?$/),
-    actualCostUsd: z.string().regex(/^\d+(\.\d+)?$/).nullable(),
+    actualCostUsd: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/)
+      .nullable(),
     createdAt: instantSchema,
   })
   .strict();
@@ -111,6 +115,8 @@ export const publicInspectorSchema = z
     operations: z.array(publicInspectorOperationSchema).max(200),
     checkpoints: z.array(publicInspectorCheckpointSchema).max(200),
     llmCalls: z.array(publicInspectorLlmCallSchema).max(200),
+    /** Voice usage stays a separate, USD-only section — never merged into LLM or travel totals. */
+    voiceCalls: z.array(publicVoiceCallSchema).max(200),
     faults: z.array(publicInspectorFaultSchema).max(50),
     events: z.array(publicInspectorEventSchema).max(200),
   })

@@ -63,6 +63,8 @@ const EVENT_FIELD_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   "itinerary.approved": ["itineraryId", "version", "decisionId"],
   "node.started": ["node"],
   "node.updated": ["node"],
+  // Atomic conversation delivery metadata only; content/interpretation never.
+  "conversation.message_added": ["messageId", "sequence", "role"],
   "graph.initialized": ["graphVersion", "nodes", "edges"],
   "route_change.previewed": ["proposalId", "affectedReservationIds"],
   "route_change.committed": ["proposalId", "affectedReservationIds", "cancelledReservationIds"],

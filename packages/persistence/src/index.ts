@@ -189,7 +189,12 @@ export {
 } from "./scenario/snapshots.js";
 export type { ExtensionInput } from "./scenario/snapshots.js";
 
-export { loadOverlay, loadOverlaySummaries, recordFaultOutcome, upsertFault } from "./scenario/faults.js";
+export {
+  loadOverlay,
+  loadOverlaySummaries,
+  recordFaultOutcome,
+  upsertFault,
+} from "./scenario/faults.js";
 export type {
   FaultDomain,
   FaultOutcomeInput,
@@ -310,6 +315,26 @@ export {
   type ReserveCallInput,
   type ReserveCallOutcome,
 } from "./llm-calls.js";
+
+/* ---- Voice control: durable voice-call ledger (VOICE_CONTROLL.md section 9) -- */
+
+export {
+  countTripVoiceCalls,
+  getVoiceCall,
+  listTripVoiceCalls,
+  markVoiceCallFailed,
+  markVoiceCallUnknown,
+  reconcileVoiceCallBilling,
+  reserveVoiceCall,
+  settleVoiceCallSuccess,
+  sumTripVoiceCostUsd,
+  type ReserveVoiceCallInput,
+  type ReserveVoiceCallOutcome,
+  type SettleVoiceCallInput,
+  type VoiceCallFailureInput,
+  type VoiceCallRecord,
+  type VoiceCallStatus,
+} from "./voice-calls.js";
 
 export {
   appendConversationMessage,

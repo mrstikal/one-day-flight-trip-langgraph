@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { aiModeSchema, costStatusSchema, usdDecimalSchema } from "./ai.js";
 import { errorCodeSchema } from "./errors.js";
-import { nonEmptyStringSchema, uuidSchema } from "./primitives.js";
+import { instantSchema, nonEmptyStringSchema, uuidSchema } from "./primitives.js";
 
 /**
  * Voice-control contracts (VOICE_CONTROLL.md sections 6, 7 and 9).
@@ -127,26 +127,28 @@ export const voiceUnitKindSchema = z.enum(["audio_seconds", "characters"]);
 export type VoiceUnitKind = z.infer<typeof voiceUnitKindSchema>;
 
 /**
- * Safe voice-call telemetry for the inspector: kind, model, provider metadata,
- * latency, status and reserved/actual USD. Never audio, transcripts, reply text,
- * key identities, generation IDs, or provider payloads.
+ * Safe voice-call telemetry row for the inspector (VOICE_CONTROLL.md section 9):
+ * kind, model, verified provider metadata, units, latency, call status, and
+ * reserved/actual USD. Never audio, transcripts, reply text, key identities,
+ * generation IDs, or provider payloads. Units are never rendered as tokens.
  */
 export const publicVoiceCallSchema = z
   .object({
-    id: uuidSchema,
     kind: voiceKindSchema,
-    model: nonEmptyStringSchema,
-    gateway: voiceGatewaySchema,
-    restrictedProviderId: nonEmptyStringSchema.nullable(),
-    servingProviderId: nonEmptyStringSchema.nullable(),
+    model: nonEmptyStringSchema.max(200),
+    /** Configured restriction target when known (e.g. the Groq-only tag). */
+    restrictedProviderId: nonEmptyStringSchema.max(80).nullable(),
+    /** Verified serving provider once observed (never guessed). */
+    servingProviderId: nonEmptyStringSchema.max(80).nullable(),
+    unitKind: voiceUnitKindSchema.nullable(),
     inputUnits: z.number().min(0).nullable(),
-    inputUnitKind: voiceUnitKindSchema.nullable(),
     latencyMs: z.number().int().min(0).nullable(),
     status: voiceCallStatusSchema,
     costStatus: costStatusSchema.nullable(),
     reservedCostUsd: usdDecimalSchema,
     actualCostUsd: usdDecimalSchema.nullable(),
     errorCode: errorCodeSchema.nullable(),
+    createdAt: instantSchema,
   })
   .strict();
 export type PublicVoiceCall = z.infer<typeof publicVoiceCallSchema>;
