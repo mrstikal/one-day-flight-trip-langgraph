@@ -6,6 +6,7 @@ import { resolveSession } from "@/lib/session";
 import { buildTripProjection } from "@/lib/projection";
 import { BookServiceButton } from "@/components/booking/BookServiceButton";
 import { ChangeServiceButton } from "@/components/booking/ChangeServiceButton";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { CONFIRMATION_DISCLAIMER, DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { formatLocalDate } from "@/lib/format/datetime";
 import { formatEuroMinor } from "@/lib/format/money";
@@ -60,6 +61,7 @@ export default async function SummaryPage({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
+        <StepIndicator step="summary" />
         <h1 className="text-2xl">Trip summary</h1>
         <p className="text-sm text-ink-muted">
           {trip.userName} · {trip.adults} {trip.adults === 1 ? "adult" : "adults"} ·{" "}

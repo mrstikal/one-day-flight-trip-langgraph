@@ -19,6 +19,7 @@ import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
 import { ServiceLevelSelect } from "@/components/preferences/ServiceLevelSelect";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
@@ -267,7 +268,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
           </p>
         ) : null}
         <header className="flex flex-col gap-2">
-          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 4 of 5</p>
+          <StepIndicator step="hotel" />
           <h1 className="text-2xl">Choose your hotel</h1>
           <p className="text-sm text-ink-muted">
             Simulated offers in EUR. Selecting a card starts a review; nothing is booked yet.

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import type { PublicDecisionResponse } from "@odft/contracts";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
@@ -337,7 +338,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
       <div className="flex flex-col gap-6">
         {stalenessBanner}
         <header className="flex flex-col gap-2">
-          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 3 of 3</p>
+          <StepIndicator step="flights" />
           <h1 className="text-2xl">Choose your flights</h1>
           <p className="text-sm text-ink-muted">
             These combinations passed the independent schedule validator. Prices are simulated in

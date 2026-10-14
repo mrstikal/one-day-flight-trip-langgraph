@@ -18,6 +18,7 @@ import { StaleProposalNotice } from "@/components/booking/StaleProposalNotice";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferGrid } from "@/components/offers/OfferGrid";
 import { ServiceLevelSelect } from "@/components/preferences/ServiceLevelSelect";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 import { ResearchFailurePanel, SimulatedFailureNote } from "@/components/wizard/ResearchGap";
@@ -259,7 +260,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
       <div className="flex flex-col gap-6">
         {banner}
         <header className="flex flex-col gap-2">
-          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 5 of 5</p>
+          <StepIndicator step="meals" />
           <h1 className="text-2xl">Plan your day</h1>
           <p className="text-sm text-ink-muted">
             Choose one option per meal; activities live on their own step. Selecting a meal here does
@@ -517,7 +518,7 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           </p>
         ) : null}
         <header className="flex flex-col gap-2">
-          <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 5 of 5</p>
+          <StepIndicator step="meals" />
           <h1 className="text-2xl">Meals</h1>
           <p className="text-sm text-ink-muted">
             Meal selections are saved. Restaurant reservations are optional and confirmed one meal

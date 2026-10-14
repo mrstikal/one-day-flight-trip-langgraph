@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { searchAirports } from "@/lib/reference-client";
 import { validateWelcomeDraft, type WelcomeErrors } from "@/lib/wizard-form";
 import { TripCreatedNotice } from "./TripCreatedNotice";
@@ -70,7 +71,7 @@ export function WelcomeStep(): React.JSX.Element {
       }}
     >
       <header className="flex flex-col gap-2">
-        <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 1 of 3</p>
+        <StepIndicator step="details" />
         <h1 id="welcome-heading" className="text-2xl">
           Plan one sightseeing day
         </h1>

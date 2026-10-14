@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { createTripRequestSchema } from "@odft/contracts";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ApiError, apiPost } from "@/lib/api-client";
 import { searchCities, searchCountries, type CityOption } from "@/lib/reference-client";
 import { ensureSession } from "@/lib/session-client";
@@ -127,7 +128,7 @@ export function DestinationStep(): React.JSX.Element {
   return (
     <section className="flex flex-col gap-6" aria-labelledby="destination-heading">
       <header className="flex flex-col gap-2">
-        <p className="text-sm font-medium uppercase tracking-wide text-teal">Step 2 of 3</p>
+        <StepIndicator step="destination" />
         <h1 id="destination-heading" className="text-2xl">
           Choose your destination
         </h1>

@@ -15,6 +15,7 @@ import { CostBreakdown } from "@/components/itinerary/cost-breakdown";
 import { Timeline } from "@/components/itinerary/timeline";
 import { ValidationSummary } from "@/components/itinerary/validation-summary";
 import { MapPanel } from "@/components/map/map-panel";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 
@@ -163,6 +164,7 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
     return (
       <section className="flex flex-col gap-4">
         <header className="flex flex-col gap-2">
+          <StepIndicator step="itinerary" />
           <h1 className="text-2xl">Itinerary</h1>
           <p className="text-sm text-ink-muted">
             No itinerary version exists yet. Planning starts automatically after you save your
@@ -203,27 +205,30 @@ export function ItineraryView({ tripId }: { readonly tripId: string }): React.JS
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl">Itinerary</h1>
-        <span
-          data-testid="itinerary-status"
-          className={`rounded px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${
-            itinerary.status === "approved"
-              ? "bg-teal text-paper"
-              : "border border-clay text-clay"
-          }`}
-        >
-          {itinerary.status === "approved" ? "Approved" : "Draft"}
-        </span>
-        <span className="text-sm text-ink-muted" data-testid="itinerary-version">
-          Version {itinerary.version} · {formatLocalDate(itinerary.sightseeingDate)} ·{" "}
-          {itinerary.adults} {itinerary.adults === 1 ? "adult" : "adults"} · {itinerary.zone}
-        </span>
-        {itinerary.status === "draft" && itinerary.approvedVersion !== null ? (
-          <span className="text-sm text-ink-muted">
-            Replaces approved version {itinerary.approvedVersion} when approved.
+      <header className="flex flex-col gap-2">
+        <StepIndicator step="itinerary" />
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl">Itinerary</h1>
+          <span
+            data-testid="itinerary-status"
+            className={`rounded px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${
+              itinerary.status === "approved"
+                ? "bg-teal text-paper"
+                : "border border-clay text-clay"
+            }`}
+          >
+            {itinerary.status === "approved" ? "Approved" : "Draft"}
           </span>
-        ) : null}
+          <span className="text-sm text-ink-muted" data-testid="itinerary-version">
+            Version {itinerary.version} · {formatLocalDate(itinerary.sightseeingDate)} ·{" "}
+            {itinerary.adults} {itinerary.adults === 1 ? "adult" : "adults"} · {itinerary.zone}
+          </span>
+          {itinerary.status === "draft" && itinerary.approvedVersion !== null ? (
+            <span className="text-sm text-ink-muted">
+              Replaces approved version {itinerary.approvedVersion} when approved.
+            </span>
+          ) : null}
+        </div>
       </header>
 
       {projection.pendingDecision?.kind === "clarification" ? (

@@ -3,6 +3,7 @@ import {
   hasSavedProgram,
   nextTripStep,
   recoveryOptionHref,
+  tripStepHeading,
   tripStepStates,
 } from "../../apps/web/src/lib/trip-step.js";
 
@@ -126,6 +127,30 @@ describe("tripStepStates (no server calls)", () => {
     );
     expect(bothKept.meals?.enabled).toBe(true);
     expect(bothKept.meals?.requires).toBeNull();
+  });
+});
+
+describe("tripStepHeading (no server calls)", () => {
+  it("numbers every screen in the same order as the step navigation", () => {
+    const steps = tripStepStates({
+      tripId,
+      reservations: [],
+      hasProgram: false,
+      hasItinerary: false,
+    });
+    expect(steps.map((step) => step.key)).toEqual([
+      "details",
+      "destination",
+      "flights",
+      "hotel",
+      "meals",
+      "activities",
+      "itinerary",
+      "summary",
+    ]);
+    steps.forEach((step, index) => {
+      expect(tripStepHeading(step.key)).toBe(`Step ${index + 1} of ${steps.length}`);
+    });
   });
 });
 

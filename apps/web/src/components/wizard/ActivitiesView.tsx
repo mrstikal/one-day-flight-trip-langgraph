@@ -16,6 +16,7 @@ import { useTripEvents } from "@/lib/use-sse";
 import { ActivityCard } from "@/components/program/ActivityCard";
 import { InterestControls } from "@/components/program/InterestControls";
 import { RecoveryCard } from "@/components/booking/RecoveryCard";
+import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ErrorPanel, StatusPanel } from "@/components/wizard/FlightGating";
 import { PlanningStoppedCard } from "@/components/wizard/PlanningStoppedCard";
 
@@ -291,6 +292,7 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
       <div className="flex flex-col gap-6">
         {banner}
         <header className="flex flex-col gap-2">
+          <StepIndicator step="activities" />
           <h1 className="text-2xl">Activities</h1>
           <p className="text-sm text-ink-muted">
             These are demo activity choices for your sightseeing day. They are recorded preferences

@@ -104,6 +104,27 @@ export type TripStepKey =
   | "itinerary"
   | "summary";
 
+/**
+ * The canonical order of the trip's screens. The sticky step navigation renders
+ * the steps in this order and every screen header derives its `Step N of M`
+ * indicator from it, so the two can never drift apart.
+ */
+const TRIP_STEP_SEQUENCE: readonly TripStepKey[] = [
+  "details",
+  "destination",
+  "flights",
+  "hotel",
+  "meals",
+  "activities",
+  "itinerary",
+  "summary",
+];
+
+/** The `Step N of M` indicator shown in a screen header. */
+export function tripStepHeading(key: TripStepKey): string {
+  return `Step ${TRIP_STEP_SEQUENCE.indexOf(key) + 1} of ${TRIP_STEP_SEQUENCE.length}`;
+}
+
 export interface TripStepEntry {
   readonly key: TripStepKey;
   readonly label: string;

@@ -58,7 +58,7 @@ Direction: a warm travel journal: cream paper, ink text, teal accent, restrained
 
 ## 5. Wizard Steps
 
-Routes below match the brief's Step 0-10. Welcome/country/city are a local draft before the first trip exists. After Step 2, `POST /api/trips` receives the complete validated input and `requestId`; a creation request has no existing trip revision. Existing-trip writes use the command/resume routes with `requestId` and `expectedRevision`. All trip reads use the authorized projection.
+Routes below match the brief's Step 0-10. Welcome/country/city are a local draft before the first trip exists. After Step 2, `POST /api/trips` receives the complete validated input and `requestId`; a creation request has no existing trip revision. Existing-trip writes use the command/resume routes with `requestId` and `expectedRevision`. All trip reads use the authorized projection. The UI's screen headers carry a shared step indicator, `Step N of 8`, over the eight user-facing screens (details, destination, flights, hotel, meals, activities, itinerary, summary), derived from the shared step list in `apps/web/src/lib/trip-step.ts` — the same order the sticky step navigation renders, so the captions cannot drift from each other or from the nav. The brief's Step 0-10 numbering is the planning reference for routes, never a header label (2026-10-14).
 
 | Step | Route | Content and required controls |
 | --- | --- | --- |
