@@ -99,7 +99,7 @@ test("plans PRG -> Rome and books the demo flight with a reference", async ({ pa
   await expect(page.getByRole("link", { name: "Continue to hotel selection" })).toBeVisible();
 });
 
-test("going back to steps 1-2 keeps the created trip's values visible and read-only", async ({
+test("going back to steps 1-2 keeps the created trip's values visible and read-only, reload included", async ({
   page,
 }) => {
   await page.goto("/");
@@ -112,6 +112,7 @@ test("going back to steps 1-2 keeps the created trip's values visible and read-o
   await selectCombobox(page, "City", "Rome");
   await page.getByRole("button", { name: "Create trip" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/flights$/, { timeout: 60_000 });
+  const tripPath = new URL(page.url()).pathname;
 
   // Step 2 survives the trip round trip: values visible, the wizard read-only.
   await page.goBack();
@@ -131,8 +132,32 @@ test("going back to steps 1-2 keeps the created trip's values visible and read-o
   await expect(page.getByRole("combobox", { name: "Origin airport" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Continue to destination" })).toBeDisabled();
 
-  // Starting a new trip clears the read-only draft.
+  // A reload keeps the created-trip record: the wizard steps show the values
+  // read-only instead of an empty new-trip form.
+  await page.reload();
+  await expect(page.getByLabel("Your name")).toHaveValue("Grace Hopper");
+  await expect(page.getByRole("button", { name: "Continue to destination" })).toBeDisabled();
+  await page.goto("/destination");
+  await expect(page.getByRole("combobox", { name: "Country" })).toHaveValue("Italy");
+  await expect(page.getByRole("button", { name: "Create trip" })).toBeDisabled();
+
+  // The reported flow: refresh the trip page, then use the Trip steps links.
+  await page.goto(tripPath);
+  await page.reload();
+  await page.getByTestId("step-nav-destination").click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Choose your destination");
+  await expect(page.getByRole("combobox", { name: "City" })).toHaveValue("Rome");
+  await expect(page.getByRole("combobox", { name: "City" })).toBeDisabled();
+  await page.goto(tripPath);
+  await page.getByTestId("step-nav-details").click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Plan one sightseeing day");
+  await expect(page.getByLabel("Your name")).toHaveValue("Grace Hopper");
+
+  // Starting a new trip clears the read-only draft and its stored record.
   await page.getByRole("button", { name: "Start a new trip" }).click();
+  await expect(page.getByLabel("Your name")).toBeEnabled();
+  await expect(page.getByLabel("Your name")).toHaveValue("");
+  await page.reload();
   await expect(page.getByLabel("Your name")).toBeEnabled();
   await expect(page.getByLabel("Your name")).toHaveValue("");
 });
