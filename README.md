@@ -273,7 +273,7 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
 {
   "intent": {
     "provider": "openrouter",
-    "model": "openai/gpt-4.1-mini",
+    "model": "openai/gpt-6-luna",
     "reasoningEffort": "low",
     "temperature": 0,
     "timeoutMs": 20000,
@@ -281,9 +281,9 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
     "maxOutputTokens": 1024,
     "maxAttempts": 2,
     "maxCallCostUsd": "0.05",
-    "inputPriceUsdPerMillion": "0.40",
-    "outputPriceUsdPerMillion": "1.60",
-    "requestPriceUsd": "0",
+    "inputPriceUsdPerMillion": "0.9",
+    "outputPriceUsdPerMillion": "1.5",
+    "requestPriceUsd": "0.01",
     "pricingVersion": "unverified",
     "allowedEndpointProviderIds": ["openai"]
   },
@@ -331,11 +331,13 @@ model, writes the verified manifest to `$AI_CONFIG_PATH.capabilities.json`, stam
 The worker also refreshes the manifest automatically when the cache is missing, stale (> 24 h), or does
 not cover the configured models. A model whose capability or pricing is unknown is never called.
 
-The committed example uses `openai/gpt-4.1-mini`; its endpoints publish no `reasoning` parameter, so the
-example omits `reasoningEffort` (set it only for a reasoning-capable model). The example price fields are
-the verified worst case for that model's `openai` endpoint (prompt 0.40 + cache read 0.10 = 0.50 USD/M
-input, 1.60 USD/M output, 0.01 USD per web search), giving a worst-case call of $0.0146 (intent) and
-$0.0163 (planner) — comfortably under the example ceilings.
+The committed example uses `openai/gpt-6-luna`; its endpoints publish a `reasoning` parameter (the
+model is reasoning-capable), but the example omits `reasoningEffort` — set it only when you want to
+pin the effort. The example price fields are the verified worst case over the matched
+`openai`-prefixed endpoint variants (`openai` and `openai/fast`; a base slug also matches its
+variants): prompt 0.40 + cache write 0.50 = 0.90 USD/M input, 1.50 USD/M output, 0.01 USD per web
+search, giving a worst-case call of $0.016936 (intent) and $0.018472 (planner) — comfortably under
+the example ceilings.
 
 ### What the assistant can do
 
