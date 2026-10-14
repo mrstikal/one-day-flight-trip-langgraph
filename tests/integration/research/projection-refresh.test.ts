@@ -87,10 +87,11 @@ describe("projection refresh, artifact binding, and fencing (real PostgreSQL)", 
     const { tripId, sessionId } = await createHarnessTrip(pool);
     await driveTripToReady(pool, pools, tripId, sessionId);
 
-    const tripRow = await pool.query<{ preferences: unknown; adults: number; travel_variant: string }>(
-      `SELECT preferences, adults, travel_variant FROM odft_app.trips WHERE id = $1`,
-      [tripId],
-    );
+    const tripRow = await pool.query<{
+      preferences: unknown;
+      adults: number;
+      travel_variant: string;
+    }>(`SELECT preferences, adults, travel_variant FROM odft_app.trips WHERE id = $1`, [tripId]);
     const preferences = tripPreferencesSchema.parse(tripRow.rows[0]?.preferences);
     const adults = tripRow.rows[0]?.adults ?? 1;
     const variant = tripRow.rows[0]?.travel_variant === "one_night" ? "one_night" : "two_nights";
@@ -218,18 +219,23 @@ describe("projection refresh, artifact binding, and fencing (real PostgreSQL)", 
     await driveTripToReady(pool, pools, tripId, sessionId);
 
     const before = await buildTripProjection(pool, tripId, DISPLAY);
-    expect((before?.hotel.length ?? 0)).toBeGreaterThan(0);
+    expect(before?.hotel.length ?? 0).toBeGreaterThan(0);
     expect(before?.research?.domains.find((entry) => entry.domain === "hotel")?.status).toBe("ok");
 
     await armFault(pool, tripId, "hotels", "hotels_unavailable");
-    const operationIdsBefore = new Set((await researchEvents(pool, tripId)).map((e) => e.operationId));
-    await runCommand(tripId, sessionId, { type: "set_activity_pace", pace: "relaxed" });
+    const operationIdsBefore = new Set(
+      (await researchEvents(pool, tripId)).map((e) => e.operationId),
+    );
+    // A retry control re-derives the current step through progress detection and
+    // dispatches research by fingerprint diff — unlike a pace change, which now
+    // re-plans the itinerary directly and never reaches research dispatch.
+    await runCommand(tripId, sessionId, { type: "retry_failed_domains" });
 
     const refreshEvents = (await researchEvents(pool, tripId)).filter(
       (event) => !operationIdsBefore.has(event.operationId),
     );
-    // Only the hotel domain is re-researched: the overlay is part of its
-    // fingerprint, the activity-pace change is not part of any other.
+    // Only the hotel domain is re-researched: the armed overlay is part of its
+    // fingerprint, while the retry control changes no other domain's inputs.
     expect(refreshEvents.map((event) => event.domain)).toEqual(["hotel", "hotel"]);
     const hotelFinished = refreshEvents.find((event) => event.phase === "finished");
     expect(hotelFinished?.status).toBe("unavailable");
@@ -246,7 +252,7 @@ describe("projection refresh, artifact binding, and fencing (real PostgreSQL)", 
     expect(after?.research?.domains.find((entry) => entry.domain === "breakfast")?.status).toBe(
       "ok",
     );
-    expect((after?.meals.length ?? 0)).toBeGreaterThan(0);
+    expect(after?.meals.length ?? 0).toBeGreaterThan(0);
     const decision = await getPendingDecisionForTrip(pools.operations, tripId);
     expect(decision?.kind).toBe("program_choices");
   }, 180_000);

@@ -16,9 +16,16 @@ import {
   type ClaimedOperation,
   type ServerConfig,
 } from "@odft/persistence";
-import { buildHarnessGraph, buildTravelGraph, buildTravelStartInput, chooseInvocation, TRAVEL_GRAPH_VERSION } from "@odft/workflow";
+import {
+  buildHarnessGraph,
+  buildTravelGraph,
+  buildTravelStartInput,
+  chooseInvocation,
+  TRAVEL_GRAPH_VERSION,
+} from "@odft/workflow";
 import type { OperationDriver } from "../../../apps/worker/src/driver.js";
 import { createOperationDriver } from "../../../apps/worker/src/driver.js";
+import { FencedSaver } from "../../../apps/worker/src/checkpointer/fenced-saver.js";
 import { createAiService, type AiService } from "../../../apps/worker/src/ai/service.js";
 import { createTravelPortsFactory } from "../../../apps/worker/src/travel/ports.js";
 import { createFixtureSession } from "../../fixtures/session.js";
@@ -129,10 +136,27 @@ export function createTravelDriver(
   });
 }
 
+/**
+ * Read-only checkpoint head resolver for tests, mirroring the production read
+ * path: `FencedSaver` resolves the thread's causal leaf (the newest checkpoint
+ * that no other checkpoint names as its parent) instead of the saver's
+ * `ORDER BY checkpoint_id DESC`, which can return a MID-RUN checkpoint when the
+ * upstream id clock is not monotonic across module instances. Reads never
+ * acquire the guard gate, so the real guard pool is passed only for shape
+ * compatibility with production construction.
+ */
+function readOnlySaver(pools: WorkerPools, tripId: string): FencedSaver {
+  const delegate = new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA });
+  return new FencedSaver(delegate, pools.guard, {
+    tripId,
+    operationId: "read-only",
+    fencingToken: "0",
+  });
+}
+
 /** Read the persisted travel-graph checkpoint state for a trip (no writes). */
 export async function readTravelState(pools: WorkerPools, tripId: string) {
-  const saver = new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA });
-  const graph = buildTravelGraph({ checkpointer: saver });
+  const graph = buildTravelGraph({ checkpointer: readOnlySaver(pools, tripId) });
   return graph.getState({ configurable: { thread_id: tripId } });
 }
 
@@ -237,8 +261,7 @@ export async function retryFailedOperation(
 
 /** Read the persisted harness checkpoint state for a trip (no writes). */
 export async function readHarnessState(pools: WorkerPools, tripId: string) {
-  const saver = new PostgresSaver(pools.saver, undefined, { schema: CHECKPOINT_SCHEMA });
-  const graph = buildHarnessGraph({ checkpointer: saver });
+  const graph = buildHarnessGraph({ checkpointer: readOnlySaver(pools, tripId) });
   return graph.getState({ configurable: { thread_id: tripId } });
 }
 

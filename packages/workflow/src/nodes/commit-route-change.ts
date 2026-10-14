@@ -53,6 +53,12 @@ export async function commitRouteChangeNode(
     scheduleValidationId: null,
     scheduleStatus: "PENDING",
     validCombinationIds: [],
+    // A confirmed route change invalidates the previous destination's domain
+    // extension: the flag must not leak into this run, or `routeAfterSchedules`
+    // dispatches research BEFORE the fresh flight choice instead of presenting
+    // the flight decision (the new snapshot is ensured only after the flight
+    // booking via `ensure_domains`).
+    domainsEnsured: false,
     // The route change is a new operation: the research status AND the
     // per-operation provider-attempt budget/run scope restart (Phase 11 review
     // fix) so successive route changes cannot exceed the task attempt ceiling.
