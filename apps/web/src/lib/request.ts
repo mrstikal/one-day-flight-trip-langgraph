@@ -4,21 +4,27 @@
  */
 
 export const MAX_JSON_BODY_BYTES = 64 * 1024;
+/** Hard cap for one raw audio/wav voice recording (VOICE_CONTROLL.md section 7). */
+export const MAX_VOICE_AUDIO_BODY_BYTES = 2 * 1024 * 1024;
+
+export type BodyReadFailure = "invalid" | "too_large";
 
 export type JsonReadResult =
   | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly reason: "invalid" | "too_large" };
+  | { readonly ok: false; readonly reason: BodyReadFailure };
+
+export type BytesReadResult =
+  | { readonly ok: true; readonly bytes: Uint8Array }
+  | { readonly ok: false; readonly reason: BodyReadFailure };
 
 /**
- * Read and parse a JSON body with a hard byte cap enforced BEFORE allocation
- * completes, so an oversized body cannot exhaust BFF memory. `content-length` is
- * checked first; the stream is then read chunk-by-chunk and cancelled as soon as
- * the cap is exceeded.
+ * Read a request body with a hard byte cap enforced BEFORE allocation completes,
+ * so an oversized body cannot exhaust BFF memory. `content-length` is checked
+ * first when present; the stream is then read chunk-by-chunk and cancelled as
+ * soon as the cap is exceeded. A missing or false `content-length` never lets
+ * the body grow past the cap.
  */
-export async function readJsonResult(
-  request: Request,
-  maxBytes = MAX_JSON_BODY_BYTES,
-): Promise<JsonReadResult> {
+async function readBodyBytes(request: Request, maxBytes: number): Promise<BytesReadResult> {
   const lengthHeader = request.headers.get("content-length");
   if (lengthHeader) {
     const declared = Number(lengthHeader);
@@ -53,9 +59,38 @@ export async function readJsonResult(
   } catch {
     return { ok: false, reason: "invalid" };
   }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
+}
+
+/** Read a bounded binary body (default the 2 MiB voice audio cap). */
+export async function readBytesResult(
+  request: Request,
+  maxBytes: number = MAX_VOICE_AUDIO_BODY_BYTES,
+): Promise<BytesReadResult> {
+  return readBodyBytes(request, maxBytes);
+}
+
+/**
+ * Read and parse a JSON body with the existing 64 KiB default cap. The default
+ * and the error behavior are unchanged by the voice addition: command bodies are
+ * never allowed to grow to the binary audio limit.
+ */
+export async function readJsonResult(
+  request: Request,
+  maxBytes = MAX_JSON_BODY_BYTES,
+): Promise<JsonReadResult> {
+  const result = await readBodyBytes(request, maxBytes);
+  if (!result.ok) {
+    return result;
+  }
   try {
-    const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), received).toString("utf8");
-    return { ok: true, value: JSON.parse(text) };
+    return { ok: true, value: JSON.parse(Buffer.from(result.bytes).toString("utf8")) };
   } catch {
     return { ok: false, reason: "invalid" };
   }
@@ -82,7 +117,10 @@ export function clientIp(request: Request, trustProxy = false): string {
   }
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) {
-    const parts = forwarded.split(",").map((part) => part.trim()).filter(Boolean);
+    const parts = forwarded
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
     return parts[parts.length - 1] ?? "unknown";
   }
   return "unknown";

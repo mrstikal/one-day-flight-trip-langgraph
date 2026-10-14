@@ -3,8 +3,15 @@ import type { ErrorCode, ErrorEnvelope } from "@odft/contracts";
 
 /** Shared HTTP helpers for the BFF: error envelopes, JSON parsing, origin. */
 
-export { clientIp, MAX_JSON_BODY_BYTES, readJson, readJsonResult } from "@/lib/request";
-export type { JsonReadResult } from "@/lib/request";
+export {
+  clientIp,
+  MAX_JSON_BODY_BYTES,
+  MAX_VOICE_AUDIO_BODY_BYTES,
+  readBytesResult,
+  readJson,
+  readJsonResult,
+} from "@/lib/request";
+export type { BodyReadFailure, BytesReadResult, JsonReadResult } from "@/lib/request";
 
 /** Session-dependent responses are private and varied by cookie. */
 export const PRIVATE_HEADERS = { "cache-control": "no-store", vary: "Cookie" } as const;
@@ -63,7 +70,11 @@ export function errorResponse(
   });
 }
 
-export function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): NextResponse {
+export function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): NextResponse {
   return NextResponse.json(body, { status, headers: { ...PRIVATE_HEADERS, ...headers } });
 }
 
@@ -76,7 +87,9 @@ export function notFoundResponse(): NextResponse {
 export function envelopeResponse(envelope: ErrorEnvelope): NextResponse {
   return errorResponse(envelope.code, envelope.message, {
     retryable: envelope.retryable,
-    ...(envelope.currentRevision !== undefined ? { currentRevision: envelope.currentRevision } : {}),
+    ...(envelope.currentRevision !== undefined
+      ? { currentRevision: envelope.currentRevision }
+      : {}),
     ...(envelope.operationId ? { operationId: envelope.operationId } : {}),
   });
 }

@@ -188,3 +188,21 @@ export async function latestClarification(
   );
   return result.rows[0]?.interpretation;
 }
+
+/**
+ * One message by trip and id (VOICE_CONTROLL.md section 7 synthesis): the trip
+ * predicate makes a wrong-trip id indistinguishable from a missing one.
+ */
+export async function getConversationMessage(
+  client: Pool | PoolClient,
+  tripId: string,
+  messageId: string,
+): Promise<ConversationMessageRecord | undefined> {
+  const result = await client.query<MessageRow>(
+    `SELECT ${MESSAGE_COLUMNS} FROM odft_app.conversation_messages
+      WHERE trip_id = $1 AND id = $2`,
+    [tripId, messageId],
+  );
+  const row = result.rows[0];
+  return row ? toRecord(row) : undefined;
+}

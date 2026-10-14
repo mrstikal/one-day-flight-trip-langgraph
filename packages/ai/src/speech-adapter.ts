@@ -23,18 +23,29 @@ export type SpeechErrorCode =
 /**
  * Typed speech failure. `retryable` describes whether a deliberate user retry
  * could help; it is never permission for an automatic billable retry.
+ * `ledgerOutcome` tells the BFF voice service how to close the reservation:
+ * `failed` only when the provider provably rejected the request before doing
+ * (billable) work; everything uncertain stays `unknown` and keeps the
+ * reservation until explicit reconciliation.
  * `VOICE_REQUEST_ABORTED` is a deliberate caller cancellation, not a provider
  * failure, and must not surface as a successful result.
  */
 export class SpeechError extends Error {
   readonly code: SpeechErrorCode;
   readonly retryable: boolean;
+  readonly ledgerOutcome: "failed" | "unknown";
 
-  constructor(code: SpeechErrorCode, message: string, retryable = false) {
+  constructor(
+    code: SpeechErrorCode,
+    message: string,
+    retryable = false,
+    ledgerOutcome: "failed" | "unknown" = "unknown",
+  ) {
     super(message);
     this.name = "SpeechError";
     this.code = code;
     this.retryable = retryable;
+    this.ledgerOutcome = ledgerOutcome;
   }
 }
 

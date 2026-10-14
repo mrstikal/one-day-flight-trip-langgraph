@@ -68,19 +68,32 @@ function classifyHttpFailure(status: number): SpeechError {
       "VOICE_NOT_CONFIGURED",
       `the speech provider rejected the configured key or credits (HTTP ${String(status)})`,
       false,
+      "failed",
     );
   }
-  if (status === 429 || status >= 500) {
+  if (status === 429) {
+    // Rate limited before any processing: provably not billed.
+    return new SpeechError(
+      "VOICE_UPSTREAM_FAILED",
+      `the speech provider rate limited the request (HTTP 429)`,
+      true,
+      "failed",
+    );
+  }
+  if (status >= 500) {
+    // The provider may have billed the call before failing: keep the reservation.
     return new SpeechError(
       "VOICE_UPSTREAM_FAILED",
       `the speech provider returned status ${String(status)}`,
       true,
+      "unknown",
     );
   }
   return new SpeechError(
     "VOICE_UPSTREAM_FAILED",
     `the speech provider rejected the request (HTTP ${String(status)})`,
     false,
+    "failed",
   );
 }
 

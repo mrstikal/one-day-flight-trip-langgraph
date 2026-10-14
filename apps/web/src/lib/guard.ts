@@ -24,18 +24,35 @@ export interface SessionGuard {
 }
 
 export type GuardResult =
-  | { readonly ok: true; readonly deps: ReturnType<typeof getServerDeps>; readonly session: SessionGuard }
+  | {
+      readonly ok: true;
+      readonly deps: ReturnType<typeof getServerDeps>;
+      readonly session: SessionGuard;
+    }
   | { readonly ok: false; readonly response: NextResponse };
 
+/**
+ * `overrideDeps` lets tests and the voice routes reuse this exact guard against
+ * an explicitly provided pool/config (the default remains the HMR-cached
+ * singleton, so ordinary routes are unchanged).
+ */
 export async function guardMutation(
   request: Request,
   policy: RateLimitPolicy,
+  overrideDeps?: ReturnType<typeof getServerDeps>,
 ): Promise<GuardResult> {
   let deps: ReturnType<typeof getServerDeps>;
-  try {
-    deps = getServerDeps();
-  } catch {
-    return { ok: false, response: errorResponse("INTERNAL_ERROR", "server configuration is invalid", {}, 503) };
+  if (overrideDeps) {
+    deps = overrideDeps;
+  } else {
+    try {
+      deps = getServerDeps();
+    } catch {
+      return {
+        ok: false,
+        response: errorResponse("INTERNAL_ERROR", "server configuration is invalid", {}, 503),
+      };
+    }
   }
 
   if (!hasValidOrigin(request, deps.config.publicBaseUrl)) {
@@ -46,7 +63,10 @@ export async function guardMutation(
     renew: false,
   });
   if (!session) {
-    return { ok: false, response: errorResponse("UNAUTHORIZED", "missing or expired session", {}, 401) };
+    return {
+      ok: false,
+      response: errorResponse("UNAUTHORIZED", "missing or expired session", {}, 401),
+    };
   }
   if (!verifyCsrf(session, request.headers.get(CSRF_HEADER), deps.config)) {
     return { ok: false, response: errorResponse("FORBIDDEN", "missing or invalid CSRF token") };

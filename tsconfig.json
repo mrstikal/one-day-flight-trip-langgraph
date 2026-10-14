@@ -8,7 +8,9 @@
     "sourceMap": false,
     "types": ["node"],
     "paths": {
-      "@odft/*": ["./packages/*/src/index.ts"]
+      "@odft/*": ["./packages/*/src/index.ts"],
+      "@/*": ["./apps/web/src/*.ts"],
+      "next/server": ["./node_modules/next/server.d.ts"]
     }
   },
   "include": [

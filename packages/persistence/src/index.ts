@@ -338,6 +338,7 @@ export {
 
 export {
   appendConversationMessage,
+  getConversationMessage,
   insertConversationMessage,
   latestClarification,
   listConversation,

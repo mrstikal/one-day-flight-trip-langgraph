@@ -95,7 +95,7 @@ export interface SpeechCapabilityFetchResponse {
 
 export type SpeechCapabilityFetch = (
   url: string,
-  init?: { readonly headers?: Record<string, string> },
+  init?: { readonly headers?: Record<string, string>; readonly signal?: AbortSignal },
 ) => Promise<SpeechCapabilityFetchResponse>;
 
 /** Billing-relevant pricing keys; any other component fails closed. */
@@ -304,7 +304,7 @@ export function loadSpeechCapabilityManifest(options: {
   } catch {
     throw new SpeechError(
       "VOICE_NOT_CONFIGURED",
-      `no valid voice capability manifest at ${options.cachePath}; run \`npm run voice:validate-models\` and restart the web process`,
+      "no valid voice capability manifest; run `npm run voice:validate-models` on the server and restart the web process",
     );
   }
   assertSpeechManifestFresh(manifest, now, maxAgeMs);

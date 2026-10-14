@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { roleProfilesSchema, type AIRole, type RoleProfile, type RoleProfiles } from "@odft/contracts";
+import {
+  roleProfilesSchema,
+  type AIRole,
+  type RoleProfile,
+  type RoleProfiles,
+} from "@odft/contracts";
 import { assertProfileWithinCeiling } from "./costs.js";
 import { INTENT_LIMITS } from "./roles/intent.js";
 import { PLANNER_LIMITS } from "./roles/planner.js";
@@ -64,9 +69,14 @@ export function stampPricingVersion(
   return { profiles: stamped as RoleProfiles, changed };
 }
 
-/** Repository root derived from this module (`src/` and `dist/` are both 3 deep). */
+/** Repository root derived from this module (four levels up from the file). */
 export function aiConfigRepoRoot(): string {
-  return fileURLToPath(new URL("../../../", import.meta.url));
+  // This module lives at `<root>/packages/ai/{src,dist}/config.*`: four levels
+  // up from the file is the repository root. A `dirname` chain is used instead
+  // of `new URL("../../../", import.meta.url)` because Turbopack treats the URL
+  // form as a bundled asset reference when a web route imports this package,
+  // and a directory cannot be resolved as an asset.
+  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 }
 
 /**
@@ -142,7 +152,9 @@ function validateProfile(role: AIRole, profile: RoleProfile, issues: string[]): 
     );
   }
   if (profile.allowedEndpointProviderIds.length === 0) {
-    issues.push(`${role}: allowedEndpointProviderIds must list at least one verified endpoint provider`);
+    issues.push(
+      `${role}: allowedEndpointProviderIds must list at least one verified endpoint provider`,
+    );
   }
 }
 

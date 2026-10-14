@@ -16,6 +16,10 @@ const alias = {
   "@odft/ai": src("./packages/ai/src/index.ts"),
   "@odft/persistence": src("./packages/persistence/src/index.ts"),
   "@odft/workflow": src("./packages/workflow/src/index.ts"),
+  // Web-lib routes/handlers are importable in Node tests: map the `@/` alias and
+  // Next's `next/server` entry (Node resolves it only with the `.js` suffix).
+  "@": src("./apps/web/src"),
+  "next/server": src("./node_modules/next/server.js"),
 };
 
 export default defineConfig({

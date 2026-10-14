@@ -67,6 +67,21 @@ export const voiceLimitsSchema = z
   .strict();
 export type VoiceLimits = z.infer<typeof voiceLimitsSchema>;
 
+/**
+ * Documented default limits (VOICE_CONTROLL.md sections 6 and 10). Used only
+ * when voice is disabled or runs in credential-free fixture mode without an
+ * operator profile; live mode always uses the validated profile file.
+ */
+export const VOICE_DEFAULT_LIMITS: VoiceLimits = voiceLimitsSchema.parse({
+  maxRecordingSeconds: 60,
+  maxRequestAudioBytes: 2_097_152,
+  maxResponseAudioBytes: 8_388_608,
+  maxTranscriptCharacters: 2_000,
+  maxReplyCharacters: 2_000,
+  maxCallsPerTrip: 60,
+  maxCostUsdPerTrip: "1.00",
+});
+
 /** The whole `voice-profiles.json` operator file (strict, exact shape). */
 export const voiceProfilesFileSchema = z
   .object({
