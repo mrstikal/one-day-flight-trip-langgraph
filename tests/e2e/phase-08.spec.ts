@@ -112,13 +112,11 @@ test("assistant rail interprets a chat request and applies a clarification choic
   );
   await expect(rail.getByTestId("interpretation-card").first()).toContainText("relaxed pace");
 
-  // The chat re-derived the program decision; save it to return to a chat-ready state.
-  await expect(page.getByRole("button", { name: "Save program" })).toBeVisible({ timeout: 60_000 });
-  await page.getByRole("button", { name: "Save program" }).click();
-  await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({
-    timeout: 60_000,
-  });
-  // Phase 10: rebuilds the draft; approve it before the next chat.
+  // A relaxed pace invalidates the saved program and re-plans the itinerary
+  // directly — no second "Save program" decision is created. The rail
+  // auto-opens the itinerary step, where the fresh draft only needs approval.
+  await expect(page).toHaveURL(new RegExp(`/trips/${tripId}/itinerary$`), { timeout: 60_000 });
+  await expect(page.getByTestId("open-approval")).toBeVisible({ timeout: 60_000 });
   await approveItinerary(page, tripId);
   await page.goto(`/trips/${tripId}/meals`);
 
