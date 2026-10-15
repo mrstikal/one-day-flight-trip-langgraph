@@ -50,6 +50,7 @@ function manifest(overrides: Partial<RoleProfile> = {}): CapabilityManifest {
             providerId: "openai",
             supportsStructuredOutputs: true,
             supportsReasoning: true,
+            supportsTemperature: true,
             inputPriceUsdPerMillion: "1",
             outputPriceUsdPerMillion: "2",
             requestPriceUsd: "0",
@@ -87,6 +88,19 @@ describe("model capability and pricing (T-UT-AI-02)", () => {
     expect(() => assertModelCapable(profile(), base)).toThrow(/structured outputs/);
   });
 
+  it("refuses a configured temperature no verified endpoint publishes", () => {
+    const base = manifest();
+    const entry = base.models["openai/gpt-demo"];
+    if (entry?.endpoints[0]) {
+      entry.endpoints[0].supportsTemperature = false;
+    }
+    expect(() => assertModelCapable(profile(), base)).toThrow(
+      /does not publish a temperature parameter/,
+    );
+    // The same manifest accepts a profile that does not pin a temperature.
+    expect(() => assertModelCapable(profile({ temperature: undefined }), base)).not.toThrow();
+  });
+
   it("refuses stale pricing versions and underpriced profiles", () => {
     const stale = manifest();
     const entry = stale.models["openai/gpt-demo"];
@@ -112,6 +126,7 @@ describe("model capability and pricing (T-UT-AI-02)", () => {
               providerId: "openai",
               supportsStructuredOutputs: true,
               supportsReasoning: true,
+              supportsTemperature: true,
               inputPriceUsdPerMillion: "1",
               outputPriceUsdPerMillion: "2",
               requestPriceUsd: "0",
@@ -123,6 +138,7 @@ describe("model capability and pricing (T-UT-AI-02)", () => {
               providerId: "openai/turbo",
               supportsStructuredOutputs: true,
               supportsReasoning: true,
+              supportsTemperature: true,
               inputPriceUsdPerMillion: "3",
               outputPriceUsdPerMillion: "4",
               requestPriceUsd: "0",

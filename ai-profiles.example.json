@@ -2,7 +2,6 @@
   "intent": {
     "provider": "openrouter",
     "model": "openai/gpt-6-luna",
-    "temperature": 0,
     "timeoutMs": 20000,
     "maxInputTokens": 6000,
     "maxOutputTokens": 1024,
@@ -17,7 +16,6 @@
   "recommendation": {
     "provider": "openrouter",
     "model": "openai/gpt-6-luna",
-    "temperature": 0.2,
     "timeoutMs": 20000,
     "maxInputTokens": 6000,
     "maxOutputTokens": 1024,
@@ -32,7 +30,6 @@
   "planner": {
     "provider": "openrouter",
     "model": "openai/gpt-6-luna",
-    "temperature": 0.2,
     "timeoutMs": 30000,
     "maxInputTokens": 6000,
     "maxOutputTokens": 2048,
@@ -47,7 +44,6 @@
   "reviewer": {
     "provider": "openrouter",
     "model": "openai/gpt-6-luna",
-    "temperature": 0,
     "timeoutMs": 20000,
     "maxInputTokens": 6000,
     "maxOutputTokens": 1024,

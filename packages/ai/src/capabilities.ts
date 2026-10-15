@@ -21,6 +21,7 @@ export const capabilityEndpointSchema = z
     providerId: nonEmptyStringSchema,
     supportsStructuredOutputs: z.boolean(),
     supportsReasoning: z.boolean().optional(),
+    supportsTemperature: z.boolean().optional(),
     inputPriceUsdPerMillion: usdDecimalSchema,
     outputPriceUsdPerMillion: usdDecimalSchema,
     requestPriceUsd: usdDecimalSchema,
@@ -196,6 +197,7 @@ export function normalizeEndpointEntry(
         supportsStructuredOutputs:
           supported.includes("structured_outputs") || supported.includes("response_format"),
         supportsReasoning: supported.includes("reasoning"),
+        supportsTemperature: supported.includes("temperature"),
         inputPriceUsdPerMillion: perTokenToMillion(worst.input),
         outputPriceUsdPerMillion: perTokenToMillion(worst.output),
         requestPriceUsd: formatUsd(parseUsd(worst.request)),
@@ -387,6 +389,15 @@ export function assertModelCapable(
     throw new AdapterError(
       "AI_UNSUPPORTED",
       `model ${profile.model} does not support the configured reasoning effort`,
+    );
+  }
+  // Routing uses `require_parameters`, so ANY parameter the matched endpoints do not
+  // publish makes the whole request unroutable (HTTP 404, AI_UNSUPPORTED). Refuse it
+  // before billing instead: `temperature` must be dropped or the model swapped.
+  if (profile.temperature !== undefined && !structured.some((endpoint) => endpoint.supportsTemperature)) {
+    throw new AdapterError(
+      "AI_UNSUPPORTED",
+      `model ${profile.model} does not publish a temperature parameter on any verified endpoint; remove the profile temperature or choose a model that supports it`,
     );
   }
   const mismatched = structured.filter(

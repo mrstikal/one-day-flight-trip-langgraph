@@ -258,6 +258,9 @@ export async function recordCallResult(
       : usage.validationStatus === "valid"
         ? "succeeded"
         : "failed";
+  // A negative or non-finite latency (e.g. a backward clock step) must never fail the
+  // settlement and orphan a reservation; telemetry clamps to zero instead.
+  const latencyMs = Number.isFinite(usage.latencyMs) ? Math.max(0, Math.round(usage.latencyMs)) : 0;
   await pool.query(
     `UPDATE odft_app.llm_calls
         SET input_tokens = $2, output_tokens = $3, cached_input_tokens = $4,
@@ -274,7 +277,7 @@ export async function recordCallResult(
       usage.reasoningOutputTokens ?? null,
       usage.costStatus === "unknown_reserved" ? null : (usage.costUsd ?? null),
       usage.costStatus,
-      usage.latencyMs,
+      latencyMs,
       usage.finishReason ?? null,
       usage.attempts,
       usage.validationStatus,

@@ -277,8 +277,6 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
   "intent": {
     "provider": "openrouter",
     "model": "openai/gpt-6-luna",
-    "reasoningEffort": "low",
-    "temperature": 0,
     "timeoutMs": 20000,
     "maxInputTokens": 6000,
     "maxOutputTokens": 1024,
@@ -303,7 +301,7 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
 | `provider`                                                               | Must be `"openrouter"`                                                                                                             |
 | `model`                                                                  | Exact OpenRouter model id (`author/slug`)                                                                                          |
 | `reasoningEffort`                                                        | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint                          |
-| `temperature`                                                            | Optional, 0–2                                                                                                                      |
+| `temperature`                                                            | Optional, 0–2; only when the matched endpoints publish `temperature` — an unpublished parameter makes routing fail with HTTP 404 (checked pre-billing) |
 | `timeoutMs`                                                              | 1000–45000; keep below the worker operation lease (default 60 s)                                                                   |
 | `maxInputTokens`                                                         | ≤ 6000 (whole role input cap, history included)                                                                                    |
 | `maxOutputTokens`                                                        | Role output cap (defaults: 1024; planner 2048)                                                                                     |
@@ -341,7 +339,10 @@ capability or pricing is unknown is never called.
 
 The committed example uses `openai/gpt-6-luna`; its endpoints publish a `reasoning` parameter (the
 model is reasoning-capable), but the example omits `reasoningEffort` — set it only when you want to
-pin the effort. The example price fields are the verified worst case over the matched
+pin the effort. The Luna endpoints do not publish `temperature`, so the example omits it too: a profile
+`temperature` against endpoints without the parameter fails closed before billing (OpenRouter routing
+with `require_parameters` would reject the whole request with a 404 otherwise). The example price fields
+are the verified worst case over the matched
 `openai`-prefixed endpoint variants (`openai` and `openai/fast`; a base slug also matches its
 variants): prompt 0.40 + cache write 0.50 = 0.90 USD/M input, 1.50 USD/M output, 0.01 USD per web
 search, giving a worst-case call of $0.016936 (intent) and $0.018472 (planner) — comfortably under

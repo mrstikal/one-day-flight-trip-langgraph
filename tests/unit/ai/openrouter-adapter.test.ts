@@ -50,6 +50,7 @@ function manifest(): CapabilityManifest {
             providerId: "openai",
             supportsStructuredOutputs: true,
             supportsReasoning: true,
+            supportsTemperature: true,
             inputPriceUsdPerMillion: "1",
             outputPriceUsdPerMillion: "2",
             requestPriceUsd: "0",

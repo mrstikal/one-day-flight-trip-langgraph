@@ -57,7 +57,7 @@ const endpointPayload = {
     endpoints: [
       {
         tag: "openai",
-        supported_parameters: ["structured_outputs", "reasoning"],
+        supported_parameters: ["structured_outputs", "reasoning", "temperature"],
         pricing: { prompt: "0.0000004", completion: "0.0000008", request: "0" },
       },
     ],
@@ -152,6 +152,7 @@ describe("capability manifest loading", () => {
     expect(fetched).toEqual([`${OPENROUTER_MODELS_URL}/openai/gpt-demo/endpoints`]);
     expect(loaded.pricingVersion).toBe(now.toISOString());
     expect(loaded.models["openai/gpt-demo"]?.endpoints[0]?.inputPriceUsdPerMillion).toBe("0.4");
+    expect(loaded.models["openai/gpt-demo"]?.endpoints[0]?.supportsTemperature).toBe(true);
     const rewritten = JSON.parse(readFileSync(cachePath, "utf8")) as CapabilityManifest;
     expect(rewritten.pricingVersion).toBe(now.toISOString());
   });
