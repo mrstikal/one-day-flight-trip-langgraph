@@ -9,9 +9,19 @@ import {
 const ROUTING = {
   estimate(leg: ItineraryRouteLeg) {
     if (leg.mode === "walking") {
-      return { distanceKm: 0.4, estimatedMinutes: 20, partyTotalMinor: 0, simulated: true as const };
+      return {
+        distanceKm: 0.4,
+        estimatedMinutes: 20,
+        partyTotalMinor: 0,
+        simulated: true as const,
+      };
     }
-    return { distanceKm: 3.1, estimatedMinutes: 25, partyTotalMinor: 600, simulated: true as const };
+    return {
+      distanceKm: 3.1,
+      estimatedMinutes: 25,
+      partyTotalMinor: 600,
+      simulated: true as const,
+    };
   },
 };
 
@@ -94,6 +104,202 @@ describe("ensureTransferAllowance (Phase 10)", () => {
     expect(normalized[2]?.startMinute).toBe(545 + 20 + MODERATE_BUFFER);
     // The following stop moves by the same shift, keeping its own (large) gap.
     expect(normalized[3]?.startMinute).toBe(12 * 60 + 35);
+  });
+
+  it("reserves transfer time from optional filler without delaying visits", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "meal",
+        refId: "breakfast",
+        anchor: at,
+        latestStartMinute: 450,
+        earliestStartMinute: 450,
+        startMinute: 450,
+        durationMinutes: 30,
+      },
+      {
+        kind: "free_time",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 480,
+        durationMinutes: 60,
+      },
+      {
+        kind: "activity",
+        refId: "museum",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: 540,
+        startMinute: 540,
+        durationMinutes: 90,
+      },
+    ];
+    const normalized = allowance(stops);
+    expect(normalized.map((stop) => [stop.kind, stop.startMinute, stop.durationMinutes])).toEqual([
+      ["meal", 450, 30],
+      ["free_time", 480, 25],
+      ["activity", 540, 90],
+    ]);
+    expect(allowance(normalized)).toEqual(normalized);
+  });
+
+  it("drops a tiny filler remnant instead of moving a fixed reservation", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "activity",
+        refId: "museum",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: 540,
+        startMinute: 540,
+        durationMinutes: 90,
+      },
+      {
+        kind: "free_time",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 630,
+        durationMinutes: 38,
+      },
+      {
+        kind: "meal",
+        refId: "lunch",
+        anchor: at,
+        latestStartMinute: 668,
+        earliestStartMinute: 668,
+        startMinute: 668,
+        durationMinutes: 60,
+      },
+    ];
+    expect(
+      allowance(stops).map((stop) => [stop.refId, stop.startMinute, stop.durationMinutes]),
+    ).toEqual([
+      ["museum", 540, 90],
+      ["lunch", 668, 60],
+    ]);
+  });
+
+  it("preserves real breaks while reclaiming only optional free time", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "activity",
+        refId: "museum",
+        anchor: at,
+        latestStartMinute: null,
+        startMinute: 540,
+        durationMinutes: 60,
+      },
+      {
+        kind: "break",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 600,
+        durationMinutes: 20,
+      },
+      {
+        kind: "free_time",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 620,
+        durationMinutes: 40,
+      },
+      {
+        kind: "meal",
+        refId: "lunch",
+        anchor: at,
+        latestStartMinute: 660,
+        earliestStartMinute: 660,
+        startMinute: 660,
+        durationMinutes: 60,
+      },
+    ];
+    const normalized = allowance(stops);
+    expect(normalized.find((stop) => stop.kind === "break")).toEqual(stops[1]);
+    expect(normalized.find((stop) => stop.kind === "free_time")?.durationMinutes).toBe(5);
+    expect(normalized.find((stop) => stop.refId === "lunch")?.startMinute).toBe(660);
+  });
+
+  it("does not reclaim earlier free time across a protected break", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "meal",
+        refId: "breakfast",
+        anchor: at,
+        latestStartMinute: 450,
+        earliestStartMinute: 450,
+        startMinute: 450,
+        durationMinutes: 30,
+      },
+      {
+        kind: "free_time",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 480,
+        durationMinutes: 30,
+      },
+      {
+        kind: "break",
+        refId: null,
+        anchor: null,
+        latestStartMinute: null,
+        startMinute: 510,
+        durationMinutes: 20,
+      },
+      {
+        kind: "activity",
+        refId: "museum",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: 540,
+        startMinute: 540,
+        durationMinutes: 60,
+      },
+    ];
+    const normalized = allowance(stops);
+    expect(normalized.find((stop) => stop.kind === "free_time")).toEqual(stops[1]);
+    expect(normalized.find((stop) => stop.kind === "break")).toEqual(stops[2]);
+    expect(normalized.find((stop) => stop.refId === "museum")?.startMinute).toBe(565);
+  });
+
+  it("does not propagate an impossible shift past a clamped meal window", () => {
+    const stops: AllowanceStop[] = [
+      {
+        kind: "activity",
+        refId: "museum",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: 540,
+        startMinute: 660,
+        durationMinutes: 60,
+      },
+      {
+        kind: "meal",
+        refId: "lunch",
+        anchor: at,
+        latestStartMinute: 720,
+        earliestStartMinute: 720,
+        startMinute: 720,
+        durationMinutes: 60,
+      },
+      {
+        kind: "activity",
+        refId: "park",
+        anchor: at,
+        latestStartMinute: null,
+        earliestStartMinute: 480,
+        startMinute: 1020,
+        durationMinutes: 60,
+      },
+    ];
+    const normalized = allowance(stops);
+    expect(normalized.find((stop) => stop.refId === "museum")?.startMinute).toBe(625);
+    expect(normalized.find((stop) => stop.refId === "lunch")?.startMinute).toBe(720);
+    expect(normalized.find((stop) => stop.refId === "park")?.startMinute).toBe(1020);
   });
 
   it("keeps a fixed meal window and pulls the earlier stop back to make room", () => {

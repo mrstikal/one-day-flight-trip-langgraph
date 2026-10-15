@@ -12,9 +12,9 @@ import { PACE_PROFILES } from "./taxonomy.js";
  * selection and order; the required room between consecutive located stops is
  * domain arithmetic, never model arithmetic. A live planner reliably leaves some
  * back-to-back pairs (a meal ending exactly when the next stop starts), which the
- * assembler can only report as `transfer_gap`. This pass widens each such pair —
- * by moving the later stop and everything after it — until the gap fits the
- * simulated route estimate plus the pace buffer. A stop with a fixed window (a
+ * assembler can only report as `transfer_gap`. This pass first reclaims optional
+ * free time for the transfer, then moves the later stop and everything after it
+ * only as far as needed. A stop with a fixed window (a
  * meal) is never moved past what its window allows, and genuine conflicts are
  * left for the validator to report.
  */
@@ -75,11 +75,18 @@ export function ensureTransferAllowance(input: TransferAllowanceInput): Allowanc
   const ordered = [...input.stops].sort((a, b) => a.startMinute - b.startMinute);
   const out: AllowanceStop[] = [];
   let shift = 0;
-  let previousLocated: { readonly anchor: ItineraryLatLon; readonly ref: string; readonly end: number } | null =
-    null;
-  let lastBlockEnd = 0;
+  let previousLocated: {
+    readonly anchor: ItineraryLatLon;
+    readonly ref: string;
+    readonly end: number;
+    readonly index: number;
+  } | null = null;
   for (const stop of ordered) {
     let start = stop.startMinute + shift;
+    if (stop.latestStartMinute !== null && start > stop.latestStartMinute) {
+      shift -= start - stop.latestStartMinute;
+      start = stop.latestStartMinute;
+    }
     if (previousLocated && stop.anchor) {
       const required = requiredMinutes(
         input,
@@ -88,17 +95,37 @@ export function ensureTransferAllowance(input: TransferAllowanceInput): Allowanc
         previousLocated.ref,
         stop.refId ?? stop.kind,
       );
+      // Model-generated free time is slack, not a reservation or a required rest.
+      // Reserve the transfer inside that slack before delaying any located stop.
+      const transferStart = start - required;
+      for (let index = out.length - 1; index > previousLocated.index; index -= 1) {
+        const block = out[index];
+        if (block?.kind !== "free_time") {
+          break;
+        }
+        if (block.startMinute + block.durationMinutes <= transferStart) {
+          continue;
+        }
+        const durationMinutes = transferStart - block.startMinute;
+        if (durationMinutes < 5) {
+          out.splice(index, 1);
+        } else {
+          out[index] = { ...block, durationMinutes };
+        }
+      }
+      const lastBlockEnd = out
+        .slice(previousLocated.index + 1)
+        .reduce((end, block) => Math.max(end, block.startMinute + block.durationMinutes), 0);
       const freeStart = Math.max(previousLocated.end, lastBlockEnd);
       const free = start - freeStart;
       if (free < required) {
-        shift += required - free;
-        start = stop.startMinute + shift;
+        const nextStart =
+          stop.latestStartMinute === null
+            ? start + required - free
+            : Math.min(stop.latestStartMinute, start + required - free);
+        shift += nextStart - start;
+        start = nextStart;
       }
-    }
-    if (stop.latestStartMinute !== null && start > stop.latestStartMinute) {
-      // A fixed window wins: the validator reports the remaining conflict instead
-      // of the pass silently moving a confirmed meal time.
-      start = stop.latestStartMinute;
     }
     out.push({ ...stop, startMinute: start });
     if (stop.anchor) {
@@ -106,10 +133,8 @@ export function ensureTransferAllowance(input: TransferAllowanceInput): Allowanc
         anchor: stop.anchor,
         ref: stop.refId ?? stop.kind,
         end: start + stop.durationMinutes,
+        index: out.length - 1,
       };
-      lastBlockEnd = 0;
-    } else {
-      lastBlockEnd = Math.max(lastBlockEnd, start + stop.durationMinutes);
     }
   }
   return pullBackward(input, out);

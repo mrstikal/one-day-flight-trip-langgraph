@@ -123,6 +123,12 @@ Output: `{ stops: ProposedStop[], explanation: string, compromises: string[] }`,
 
 The domain assembly service resolves UTC times, actual reservation locks, route estimates, airport events, and costs. It inserts transfers into sufficient gaps, records conflicts if they do not fit, and does not silently compress an activity or move a fixed booking. Required activity-count constraints and user-selected IDs are checked against actual resolved tags.
 
+Before assembly, transfer normalization reclaims model-generated `free_time` padding for the required
+route estimate plus pace buffer before delaying visits. It preserves actual breaks, activity durations,
+opening windows, and confirmed meal times. A fixed window also stops a cumulative delay from propagating
+to later stops when the current stop could not actually move. This avoids billable replanning rounds
+caused solely by optional filler; genuinely incompatible requirements still produce validator conflicts.
+
 ### Reviewer
 
 Output: `{ verdict: "acceptable" | "revise" | "conflict", issues: ReviewIssue[], suggestedOrder: string[], explanation: string }`. Issues use enums `poor_sequence`, `excess_travel`, `pace_mismatch`, `interest_mismatch`, `insufficient_variety`, `unexplained_compromise`, and existing event IDs. Maximum eight issues. Suggested order contains known event IDs only, preserves fixed reservations, and is passed back to the planner, not applied as a state mutation.
