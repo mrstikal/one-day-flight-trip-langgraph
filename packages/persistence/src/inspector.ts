@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import {
   decisionKindSchema,
+  errorCodeSchema,
   graphDefinitionSchema,
   operationStatusSchema,
   publicInspectorFaultSchema,
@@ -422,7 +423,10 @@ export async function loadPublicInspector(
       reservedCostUsd: formatUsdAmount(usdFromDb(row.reserved_cost_usd)),
       actualCostUsd:
         row.actual_cost_usd === null ? null : formatUsdAmount(usdFromDb(row.actual_cost_usd)),
-      errorCode: row.error_code,
+      // Internal-only codes (e.g. VOICE_REQUEST_ABORTED) are not part of the
+      // public taxonomy: keep the row visible with a null safe code instead of
+      // dropping the whole telemetry row.
+      errorCode: errorCodeSchema.safeParse(row.error_code).success ? row.error_code : null,
       createdAt: toIso(row.created_at),
     });
     return parsed.success ? [parsed.data] : [];

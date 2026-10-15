@@ -1,4 +1,10 @@
-import { VOICE_COPY, VOICE_CAPTURE_LIMIT_MS, type VoicePhase } from "./voice-state";
+import {
+  recordingLimitAppliedCopy,
+  VOICE_COPY,
+  VOICE_CAPTURE_LIMIT_MS,
+  type VoicePhase,
+  type VoiceVadState,
+} from "./voice-state";
 import {
   beginCapture,
   cancelCapture,
@@ -31,7 +37,11 @@ export interface AudioContextLike {
 }
 
 export interface MediaStreamLike {
-  getTracks(): ReadonlyArray<{ stop(): void }>;
+  getTracks(): ReadonlyArray<{
+    stop(): void;
+    /** Optional: the controller reports unexpected device loss. */
+    addEventListener?: (type: "ended", listener: () => void) => void;
+  }>;
 }
 
 export interface RecorderLike {
@@ -48,6 +58,12 @@ export interface VadLike {
   start(): Promise<void>;
   pause(): Promise<void>;
   destroy(): Promise<void>;
+  /**
+   * Pinned-package fallback: MicVAD.destroy() throws before model.release()
+   * when the audio graph was never initialized; this releases the ONNX model
+   * without assuming an initialized graph.
+   */
+  releaseModel?(): Promise<void>;
 }
 
 export interface VadCallbacks {
@@ -64,7 +80,11 @@ export interface CaptureControllerPorts {
     stream: MediaStreamLike,
     callbacks: VadCallbacks,
   ) => Promise<VadLike>;
-  readonly normalize: (blob: Blob, context: AudioContextLike) => Promise<Uint8Array>;
+  readonly normalize: (
+    blob: Blob,
+    context: AudioContextLike,
+    maxSamples: number,
+  ) => Promise<{ readonly audio: Uint8Array; readonly bounded: boolean }>;
   readonly transcribe: (input: {
     readonly audio: Uint8Array;
     readonly requestId: string;
@@ -78,14 +98,21 @@ export interface CaptureControllerPorts {
   readonly callbacks: {
     readonly onPhase: (phase: VoicePhase) => void;
     readonly onConfirmedSpeech: (confirmed: boolean) => void;
-    readonly onVadUnavailable: () => void;
+    /** loading -> ready | unavailable: drives the "Preparing speech detection..." cue. */
+    readonly onVadState: (state: VoiceVadState) => void;
+    readonly onNotice: (message: string) => void;
     readonly onError: (message: string) => void;
     readonly onTranscript: (text: string) => void;
   };
 }
 
+export interface CaptureStartOptions {
+  /** Advertised recording limit (capabilities/profile); defaults to 60 s. */
+  readonly maxRecordingMs?: number;
+}
+
 export interface CaptureController {
-  start(): void;
+  start(options?: CaptureStartOptions): void;
   stopManual(): void;
   cancel(): void;
   dispose(): Promise<void>;
@@ -118,28 +145,68 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
   let durationTimer: ReturnType<typeof setTimeout> | null = null;
   let transcribeAbort: AbortController | null = null;
   let disposing = false;
+  /** Detector health for this session: a failed detector is UNKNOWN activity. */
+  let vadFailed = false;
+  /** Advertised recording limit for this session (defaults to the 60 s cap). */
+  let sessionLimitMs = VOICE_CAPTURE_LIMIT_MS;
 
   const active = (generation: number): boolean => isActiveGeneration(machine, generation);
+
+  /**
+   * Lifecycle-safe disposal for the pinned package: destroy() throws before
+   * releasing the ONNX model when the audio graph was never initialized, so an
+   * unstarted/partially started detector is first started on the SAME owned
+   * stream (never reacquiring the microphone) and then destroyed; if even that
+   * fails, the model is released directly. Nothing here claims success.
+   */
+  async function disposeVadInstance(current: VadLike | null, started: boolean): Promise<void> {
+    if (!current) {
+      return;
+    }
+    if (started) {
+      try {
+        await current.pause();
+      } catch {
+        // A pause failure must not block disposal of the rest.
+      }
+    }
+    try {
+      await current.destroy();
+      return;
+    } catch {
+      // Expected for an unstarted or partially initialized detector.
+    }
+    try {
+      await current.start();
+      await current.destroy();
+      return;
+    } catch {
+      // The graph could not be initialized (e.g. broken worklet assets).
+    }
+    try {
+      await current.releaseModel?.();
+    } catch {
+      // Best effort only; never reported as a completed release.
+    }
+  }
 
   async function disposeVad(): Promise<void> {
     const current = vad;
     const started = vadStarted;
     vad = null;
     vadStarted = false;
-    if (!current) {
-      return;
-    }
-    try {
-      if (started) {
-        await current.pause();
-      }
-    } catch {
-      // A pause failure must not block disposal of the rest.
-    }
-    try {
-      await current.destroy();
-    } catch {
-      // destroy() expects an initialized graph; early disposal is a no-op.
+    await disposeVadInstance(current, started);
+  }
+
+  /** Return to idle for THIS generation after a finalized capture. */
+  function completeCapture(generation: number): void {
+    if (isActiveGeneration(machine, generation)) {
+      machine = {
+        generation: machine.generation,
+        phase: "idle",
+        hasConfirmedSpeech: false,
+        stopGate: false,
+      };
     }
   }
 
@@ -200,12 +267,18 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
       if (!currentContext) {
         return;
       }
-      const audio = await ports.normalize(blob, currentContext);
+      const maxSamples = Math.min(Math.floor((sessionLimitMs / 1000) * 16000), 960_000);
+      const normalized = await ports.normalize(blob, currentContext, maxSamples);
       if (!active(generation)) {
         return;
       }
+      if (normalized.bounded) {
+        // A delayed background-tab timer must not discard valid dictation: the
+        // recording is bounded to the advertised limit with a visible notice.
+        ports.callbacks.onNotice(recordingLimitAppliedCopy(Math.round(sessionLimitMs / 1000)));
+      }
       const result = await ports.transcribe({
-        audio,
+        audio: normalized.audio,
         requestId: ports.randomId(),
         signal: controller.signal,
       });
@@ -224,6 +297,7 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
       // replaced by a newer capture in the meantime.
       closeContextInstance(currentContext);
       if (active(generation)) {
+        completeCapture(generation);
         ports.callbacks.onPhase("idle");
       }
     }
@@ -233,21 +307,28 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
   function finishCapture(mode: "silence" | "manual" | "duration", generation: number): void {
     ports.callbacks.onPhase("stopping");
     const currentRecorder = recorder;
-    if (!currentRecorder || currentRecorder.state === "inactive") {
-      void releaseCapture();
-      ports.callbacks.onPhase("idle");
-      return;
-    }
-    const stopped = new Promise<void>((resolve) => {
-      currentRecorder.onstop = () => resolve();
-    });
-    try {
-      currentRecorder.stop();
-    } catch {
-      // Already stopped.
+    const recorderActive = currentRecorder !== null && currentRecorder.state !== "inactive";
+    const stopped = recorderActive
+      ? new Promise<void>((resolve) => {
+          if (currentRecorder) {
+            currentRecorder.onstop = () => resolve();
+          } else {
+            resolve();
+          }
+        })
+      : Promise.resolve();
+    if (recorderActive) {
+      try {
+        currentRecorder?.stop();
+      } catch {
+        // Already stopped.
+      }
     }
     void stopped.then(async () => {
-      const blob = new Blob(chunks, { type: currentRecorder.mimeType || "audio/webm" });
+      const blob =
+        chunks.length > 0
+          ? new Blob(chunks, { type: currentRecorder?.mimeType || "audio/webm" })
+          : null;
       chunks = [];
       chunkBytes = 0;
       await releaseCapture({ closeContext: false });
@@ -255,10 +336,20 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
         // Cancelled/trip-changed mid-finalize: not a transcription.
         return;
       }
-      if (mode === "duration" && !machine.hasConfirmedSpeech) {
-        // No valid speech at the hard limit: discard with zero STT transport.
+      if (mode === "duration" && !machine.hasConfirmedSpeech && !vadFailed) {
+        // A HEALTHY detector saw no valid speech at the hard limit: discard
+        // with zero STT transport. A failed detector is unknown activity and
+        // still transcribes (below).
         closeContext();
+        completeCapture(generation);
         ports.callbacks.onError(VOICE_COPY.noSpeech);
+        ports.callbacks.onPhase("idle");
+        return;
+      }
+      if (!blob || blob.size === 0) {
+        // Nothing was captured (e.g. an immediate device loss).
+        closeContext();
+        completeCapture(generation);
         ports.callbacks.onPhase("idle");
         return;
       }
@@ -293,10 +384,12 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
   }
 
   return {
-    start(): void {
+    start(options?: CaptureStartOptions): void {
       if (machine.phase !== "idle" || disposing) {
         return;
       }
+      sessionLimitMs = options?.maxRecordingMs ?? VOICE_CAPTURE_LIMIT_MS;
+      vadFailed = false;
       machine = beginCapture(machine);
       const generation = machine.generation;
       context = ports.createContext();
@@ -329,6 +422,19 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
           return;
         }
         stream = acquired;
+        // Unexpected microphone loss must be reported, not silently swallowed.
+        for (const track of acquired.getTracks()) {
+          track.addEventListener?.("ended", () => {
+            if (!active(generation) || machine.stopGate) {
+              return;
+            }
+            ports.callbacks.onError(VOICE_COPY.deviceLost);
+            if (machine.phase === "recording" || machine.phase === "preparing") {
+              machine = { ...machine, phase: "stopping", stopGate: true };
+              finishCapture("manual", generation);
+            }
+          });
+        }
 
         let created: RecorderLike;
         try {
@@ -371,11 +477,12 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
           if (outcome.discard || outcome.finalize) {
             finishCapture("duration", generation);
           }
-        }, VOICE_CAPTURE_LIMIT_MS);
+        }, sessionLimitMs);
         machine = captureReady(machine, generation);
         ports.callbacks.onPhase("recording");
 
         // Local VAD on the SAME stream; failure keeps manual dictation.
+        ports.callbacks.onVadState("loading");
         try {
           const createdVad = await ports.loadVad(context as AudioContextLike, acquired, {
             onSpeechRealStart: () => {
@@ -394,15 +501,20 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
             },
           });
           if (!active(generation)) {
-            await createdVad.destroy().catch(() => {});
+            // Cancelled while loading assets: lifecycle-safe disposal.
+            await disposeVadInstance(createdVad, false);
             return;
           }
           vad = createdVad;
           await createdVad.start();
           vadStarted = true;
-        } catch {
           if (active(generation)) {
-            ports.callbacks.onVadUnavailable();
+            ports.callbacks.onVadState("ready");
+          }
+        } catch {
+          vadFailed = true;
+          if (active(generation)) {
+            ports.callbacks.onVadState("unavailable");
           }
         }
       })();
@@ -410,6 +522,16 @@ export function createCaptureController(ports: CaptureControllerPorts): CaptureC
 
     stopManual(): void {
       const generation = machine.generation;
+      // The recorder starts before detector assets finish loading; a manual
+      // stop must work from the moment audio is actually being captured.
+      if (machine.phase === "preparing" && recorder) {
+        if (machine.stopGate) {
+          return;
+        }
+        machine = { ...machine, phase: "stopping", stopGate: true };
+        finishCapture("manual", generation);
+        return;
+      }
       const outcome = manualStop(machine, generation);
       machine = outcome.state;
       if (outcome.finalize) {

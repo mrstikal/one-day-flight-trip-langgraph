@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   anchorReplyRefresh,
   appendTranscript,
+  listeningCopy,
+  recordingCopy,
+  recordingLimitAppliedCopy,
   canPlayReply,
   clearInFlightReply,
   initialReplySelection,
@@ -233,6 +236,15 @@ describe("playback state", () => {
     expect(canPlayReply(ready)).toBe(true);
     expect(canPlayReply(playbackStart(ready, "m1"))).toBe(false);
     expect(canPlayReply(INITIAL_PLAYBACK_STATE)).toBe(false);
+  });
+});
+
+describe("advertised-limit copy", () => {
+  it("templates the seconds and matches the documented default at 60", () => {
+    expect(listeningCopy(60)).toBe("Listening... Start speaking. Maximum 60 seconds.");
+    expect(recordingCopy(60)).toContain("Maximum 60 seconds.");
+    expect(recordingCopy(30)).toContain("Maximum 30 seconds.");
+    expect(recordingLimitAppliedCopy(30)).toBe("The 30-second recording limit was applied.");
   });
 });
 

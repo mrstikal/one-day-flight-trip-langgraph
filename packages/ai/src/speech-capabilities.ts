@@ -52,6 +52,7 @@ export const DOCUMENTED_SPEECH_MODELS: Readonly<Record<VoiceKind, string>> = {
   tts: "elevenlabs/eleven-v4-turbo",
 };
 export const DOCUMENTED_STT_ENDPOINT_PROVIDER_ID = "groq";
+export const DOCUMENTED_TTS_VOICE = "george";
 
 const rawDecimalSchema = z
   .string()
@@ -342,6 +343,11 @@ export function assertDocumentedSpeechDefaults(profiles: VoiceProfilesFile): voi
   if (profiles.stt.endpointProviderId !== DOCUMENTED_STT_ENDPOINT_PROVIDER_ID) {
     issues.push(
       `stt.endpointProviderId "${profiles.stt.endpointProviderId}" is not the documented endpoint "${DOCUMENTED_STT_ENDPOINT_PROVIDER_ID}"`,
+    );
+  }
+  if (profiles.tts.voice !== DOCUMENTED_TTS_VOICE) {
+    issues.push(
+      `tts.voice "${profiles.tts.voice}" is not the documented voice "${DOCUMENTED_TTS_VOICE}"`,
     );
   }
   if (issues.length > 0) {

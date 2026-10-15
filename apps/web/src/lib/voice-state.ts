@@ -9,9 +9,13 @@ export type VoicePhase =
 /** User-visible English copy (VOICE_CONTROLL.md section 12). */
 export const VOICE_COPY = {
   preparing: "Preparing speech detection...",
+  /** Advertised recording limit applied to the UI copy and the capture bound. */
   listening: "Listening... Start speaking. Maximum 60 seconds.",
   recording:
     "Recording... Stops automatically after 2 seconds without speech. You can also stop manually. Maximum 60 seconds.",
+  deviceLost: "The microphone disconnected. Recording stopped - review the draft before sending.",
+  availabilityError:
+    "Voice availability could not be checked. Typed chat remains available; reload to retry.",
   vadUnavailable: "Automatic stopping is unavailable. Use Stop recording.",
   preparingRecording: "Preparing your recording...",
   transcribing: "Transcribing...",
@@ -24,7 +28,6 @@ export const VOICE_COPY = {
   noSpeech: "No speech was detected. Try again or type your request.",
   voiceDisabled: "Voice control is not enabled on this server.",
   replyNotAvailable: "The assistant reply is not available yet.",
-  maxDuration: "The recording reached the 60-second limit. Try again with a shorter message.",
   fixtureMode: "Voice fixture mode: scripted transcription and test audio, no live speech service.",
   dictate: "Dictate",
   stopRecording: "Stop recording",
@@ -38,6 +41,24 @@ export const VOICE_COPY = {
   pauseHint:
     "A pause longer than two seconds may split the question; edit the draft or dictate more before sending.",
 } as const;
+
+/** The prepared detector state for the capture UI cue. */
+export type VoiceVadState = "loading" | "ready" | "unavailable";
+
+/** "Listening..." copy with the ADVERTISED limit (the profile may narrow it). */
+export function listeningCopy(maxSeconds: number): string {
+  return `Listening... Start speaking. Maximum ${String(maxSeconds)} seconds.`;
+}
+
+/** "Recording..." copy with the ADVERTISED limit (the profile may narrow it). */
+export function recordingCopy(maxSeconds: number): string {
+  return `Recording... Stops automatically after 2 seconds without speech. You can also stop manually. Maximum ${String(maxSeconds)} seconds.`;
+}
+
+/** Visible explanation when a delayed timer had to bound the recording. */
+export function recordingLimitAppliedCopy(maxSeconds: number): string {
+  return `The ${String(maxSeconds)}-second recording limit was applied.`;
+}
 
 /**
  * Pure voice state/selection helpers (VOICE_CONTROLL.md sections 10 and 11).

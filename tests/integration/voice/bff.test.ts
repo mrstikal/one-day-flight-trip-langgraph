@@ -835,6 +835,47 @@ describe("voice BFF routes", () => {
       expect(fetchImpl.calls).toEqual({ catalog: 0, stt: 0, tts: 0 });
     });
 
+    it("refuses live transport once the pinned manifest is older than 24 hours", async () => {
+      const freshnessDir = mkdtempSync(join(tempDir, "freshness-"));
+      const profilesPath = writeLiveProfileFiles(freshnessDir);
+      const config = liveConfig(profilesPath);
+      const fetchImpl = fakeFetch();
+      const start = Date.now();
+      let clock = start;
+      const service = createVoiceService({
+        pool,
+        config,
+        fetchImpl: fetchImpl as SpeechFetch,
+        now: () => new Date(clock),
+      });
+      const { tripId, headers } = await createOwnedTrip(pool, config);
+
+      const first = await handleVoiceTranscribe(
+        transcribeRequest(tripId, headers, wav(16_000)),
+        paramsFor(tripId),
+        { pool, config, service },
+      );
+      expect(first.status).toBe(200);
+      expect(fetchImpl.calls.stt).toBe(1);
+
+      // 25 h later the runtime cache is still warm, but EVERY live call must
+      // re-check the pinned manifest age and refuse transport.
+      clock = start + 25 * 60 * 60 * 1000;
+      const second = await handleVoiceTranscribe(
+        transcribeRequest(tripId, headers, wav(16_000)),
+        paramsFor(tripId),
+        { pool, config, service },
+      );
+      expect(second.status).toBe(503);
+      expect((await jsonRecord(second)).code).toBe("VOICE_CAPABILITY_UNKNOWN");
+      expect(fetchImpl.calls.stt).toBe(1);
+      const ledger = await pool.query<{ status: string }>(
+        `SELECT status FROM odft_app.voice_calls WHERE trip_id = $1 ORDER BY created_at ASC`,
+        [tripId],
+      );
+      expect(ledger.rows.map((row) => row.status)).toEqual(["succeeded", "failed"]);
+    });
+
     it("synthesizes only the authoritative message content and never accepts other fields", async () => {
       const synthDir = mkdtempSync(join(tempDir, "synth-"));
       const profilesPath = writeLiveProfileFiles(synthDir);

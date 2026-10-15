@@ -11,6 +11,7 @@ import {
 } from "@odft/contracts";
 import {
   assertSpeechCapable,
+  assertSpeechManifestFresh,
   FixtureSpeechAdapter,
   formatUsd,
   loadSpeechCapabilityManifest,
@@ -285,8 +286,12 @@ export function createVoiceService(deps: VoiceServiceDeps): VoiceService {
         signal: AbortSignal.any([signal, deadline]),
       });
     try {
-      // Section 5: recheck the published endpoint/tariffs before every live
-      // call; any drift refuses transport until an explicit re-validation.
+      // Section 5: the pinned manifest must stay fresh (24 h) for EVERY live
+      // call - a long-running process must not keep transporting on an
+      // expired snapshot even when the published prices happen to match.
+      assertSpeechManifestFresh(state.manifest, now());
+      // Recheck the published endpoint/tariffs before every live call; any
+      // drift refuses transport until an explicit re-validation.
       await revalidateSpeechTariffs({ manifest: state.manifest, fetchImpl });
       return { ok: true, value: true };
     } catch (error) {

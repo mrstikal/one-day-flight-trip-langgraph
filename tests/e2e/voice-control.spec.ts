@@ -560,21 +560,20 @@ test("the 60-second hard cap stays effective without VAD confirmation (desktop o
   test.skip(testInfo.project.name === "mobile", "60 s wall-clock cap runs on desktop only");
   const tracker = trackRequests(page);
   const tripId = await createTripViaApi(page);
-  // Manual mode (automatic stopping unavailable). This deliberately exercises
-  // the PLAN-ALLOWED weaker variant: with no VAD confirmation the hard limit
-  // discards with the no-speech copy and zero STT (a failed detector is unknown
-  // activity, never proof of silence). The confirmed-speech duration finalize
-  // is covered by the unit capture-machine tests and the VAD auto-stop e2e.
+  // Manual mode (automatic stopping unavailable). A FAILED detector is unknown
+  // activity, never proof of silence, so the hard limit must finalize and
+  // transcribe the captured audio instead of discarding it. (The bounded-timer
+  // notice and the healthy-detector discard are covered by the unit tests.)
   await page.route("**/voice-vad/silero_vad_v5.onnx", (route) => route.abort());
   await openRail(page, tripId);
   await page.getByTestId("voice-dictate").click();
   await expect(page.getByTestId("voice-status")).toHaveText(VAD_UNAVAILABLE_COPY, {
     timeout: 30_000,
   });
-  await expect(page.getByTestId("voice-error")).toHaveText(NO_SPEECH_COPY, {
-    timeout: 90_000,
-  });
-  expect(tracker.transcribe).toBe(0);
+  await expect
+    .poll(async () => chatValue(page), { timeout: 90_000, intervals: [1_000] })
+    .toContain(FIXTURE_TRANSCRIPT);
+  expect(tracker.transcribe).toBe(1);
   await expect(page.getByTestId("voice-dictate")).toHaveText("Dictate");
   await expect
     .poll(async () => (await probe(page)).trackStops, { timeout: 15_000 })

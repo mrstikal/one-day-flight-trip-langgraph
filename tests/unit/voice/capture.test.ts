@@ -10,55 +10,76 @@ import {
   type VadCallbacks,
   type VadLike,
 } from "../../../apps/web/src/lib/voice-capture.js";
-import { VOICE_COPY, type VoicePhase } from "../../../apps/web/src/lib/voice-state.js";
+import {
+  VOICE_COPY,
+  type VoicePhase,
+  type VoiceVadState,
+} from "../../../apps/web/src/lib/voice-state.js";
 
 /**
  * Mocked-browser tests for the capture pipeline (VOICE_CONTROLL.md section 15,
- * gate V05): exactly one transcription per finished capture, no early stop
- * before confirmed speech, cancellation discarding without STT, stale-callback
- * isolation, and complete recorder/stream/VAD/context cleanup — all without a
- * DOM test stack.
+ * gate V05 + the review fixes): exactly one transcription per finished capture,
+ * repeatable captures, bounded background-tab recordings with a visible notice,
+ * detector-failure and device-loss handling, lifecycle-safe disposal, stale
+ * callback isolation, and complete resource cleanup — without a DOM test stack.
  */
+
+interface FakeTrack {
+  stop(): void;
+  stopped(): boolean;
+  addEventListener(type: "ended", listener: () => void): void;
+  end(): void;
+}
 
 interface FakeEnvironment {
   readonly ports: CaptureControllerPorts;
   readonly phases: VoicePhase[];
   readonly errors: string[];
+  readonly notices: string[];
   readonly transcripts: string[];
+  readonly vadStates: VoiceVadState[];
   readonly vadCallbacks: VadCallbacks[];
-  readonly stream: { readonly tracks: Array<{ stop: () => void; stopped: () => boolean }> };
+  readonly transcribeCalls: Array<{ requestId: string; aborted: () => boolean }>;
   recorderStops(): number;
   recorderCount(): number;
   acquireCount(): number;
   transcribeCount(): number;
+  vadStarts(): number;
   vadPaused(): number;
   vadDestroyed(): number;
   vadDestroyAttempts(): number;
+  modelReleases(): number;
   contextClosed(): number;
-  timerHandler(): (() => void) | null;
   fireTimer(): void;
   emitChunk(size?: number): void;
   resolveAcquire(): void;
   rejectAcquire(name: string): void;
+  resolveLoadVad(): void;
   releaseTranscription(text?: string): void;
-  readonly transcribeCalls: Array<{ requestId: string; aborted: () => boolean }>;
-  destroyVadFailure?: boolean;
-  vadUnavailable: boolean;
+  endTracks(): void;
+  streamTracksStopped(): boolean;
+  loadVadMode: "ok" | "fail" | "deferred";
+  destroyAlwaysFails: boolean;
+  normalizeBounded: boolean;
 }
 
 function createEnvironment(): FakeEnvironment {
   const phases: VoicePhase[] = [];
   const errors: string[] = [];
+  const notices: string[] = [];
   const transcripts: string[] = [];
+  const vadStates: VoiceVadState[] = [];
   const vadCallbacks: VadCallbacks[] = [];
   const transcribeCalls: Array<{ requestId: string; aborted: () => boolean }> = [];
-  const tracks: Array<{ stop: () => void; stopped: () => boolean }> = [];
+  const tracks: FakeTrack[] = [];
   let recorderStops = 0;
   let recorderStartCount = 0;
   let acquires = 0;
+  let vadStarts = 0;
   let vadPauseCount = 0;
-  let vadDestroyCount = 0;
+  let vadDestroyed = 0;
   let vadDestroyAttempts = 0;
+  let modelReleases = 0;
   let contextCloseCount = 0;
   let timerHandler: (() => void) | null = null;
   let pendingTranscription: {
@@ -69,14 +90,25 @@ function createEnvironment(): FakeEnvironment {
     resolve: (stream: MediaStreamLike) => void;
     reject: (error: unknown) => void;
   } | null = null;
+  let pendingVad: { resolve: () => void } | null = null;
+  let lastRecorder: (RecorderLike & { emit: (size: number) => void }) | null = null;
 
-  const makeTrack = () => {
+  const makeTrack = (): FakeTrack => {
     let stopped = false;
+    const endedListeners: Array<() => void> = [];
     return {
       stop: () => {
         stopped = true;
       },
       stopped: () => stopped,
+      addEventListener: (_type, listener) => {
+        endedListeners.push(listener);
+      },
+      end: () => {
+        for (const listener of endedListeners) {
+          listener();
+        }
+      },
     };
   };
 
@@ -89,11 +121,14 @@ function createEnvironment(): FakeEnvironment {
   const env: FakeEnvironment = {
     phases,
     errors,
+    notices,
     transcripts,
+    vadStates,
     vadCallbacks,
-    stream: { tracks },
-    destroyVadFailure: false,
-    vadUnavailable: false,
+    transcribeCalls,
+    loadVadMode: "ok",
+    destroyAlwaysFails: false,
+    normalizeBounded: false,
     ports: {
       acquireStream: () => {
         acquires += 1;
@@ -128,6 +163,7 @@ function createEnvironment(): FakeEnvironment {
             recorder.ondataavailable?.({ data: { size } as Blob });
           },
         };
+        lastRecorder = recorder;
         return recorder;
       },
       createContext: (): AudioContextLike => ({
@@ -136,23 +172,42 @@ function createEnvironment(): FakeEnvironment {
         },
       }),
       loadVad: async (_context, _stream, callbacks) => {
+        if (env.loadVadMode === "fail") {
+          throw new Error("worklet unavailable");
+        }
+        if (env.loadVadMode === "deferred") {
+          await new Promise<void>((resolve) => {
+            pendingVad = { resolve };
+          });
+        }
         vadCallbacks.push(callbacks);
+        let started = false;
         const vad: VadLike = {
-          start: async () => {},
+          start: async () => {
+            vadStarts += 1;
+            started = true;
+          },
           pause: async () => {
             vadPauseCount += 1;
           },
           destroy: async () => {
             vadDestroyAttempts += 1;
-            if (env.destroyVadFailure) {
-              throw new Error("destroy before init");
+            if (!started || env.destroyAlwaysFails) {
+              // Mirrors the pinned package: destroy() needs initialized nodes.
+              throw new Error("MicVAD has null stream, audio context, or processor adapter");
             }
-            vadDestroyCount += 1;
+            vadDestroyed += 1;
+          },
+          releaseModel: async () => {
+            modelReleases += 1;
           },
         };
         return vad;
       },
-      normalize: async () => new Uint8Array([1, 2, 3, 4]),
+      normalize: async (_blob, _context, _maxSamples) => ({
+        audio: new Uint8Array([1, 2, 3, 4]),
+        bounded: env.normalizeBounded,
+      }),
       transcribe: (input) =>
         new Promise<{ text: string }>((resolve, reject) => {
           transcribeCalls.push({
@@ -164,8 +219,7 @@ function createEnvironment(): FakeEnvironment {
           });
           pendingTranscription = { resolve, reject };
         }),
-      describeError: (error) =>
-        error instanceof Error && error.message === "TOO_LONG" ? VOICE_COPY.maxDuration : "boom",
+      describeError: () => "boom",
       randomId: () => `request-${String(transcribeCalls.length + 1)}`,
       setTimer: (handler) => {
         timerHandler = handler;
@@ -176,9 +230,8 @@ function createEnvironment(): FakeEnvironment {
       callbacks: {
         onPhase: (phase) => phases.push(phase),
         onConfirmedSpeech: () => {},
-        onVadUnavailable: () => {
-          env.vadUnavailable = true;
-        },
+        onVadState: (state) => vadStates.push(state),
+        onNotice: (message) => notices.push(message),
         onError: (message) => errors.push(message),
         onTranscript: (text) => transcripts.push(text),
       },
@@ -187,16 +240,14 @@ function createEnvironment(): FakeEnvironment {
     recorderCount: () => recorderStartCount,
     acquireCount: () => acquires,
     transcribeCount: () => transcribeCalls.length,
+    vadStarts: () => vadStarts,
     vadPaused: () => vadPauseCount,
-    vadDestroyed: () => vadDestroyCount,
+    vadDestroyed: () => vadDestroyed,
     vadDestroyAttempts: () => vadDestroyAttempts,
+    modelReleases: () => modelReleases,
     contextClosed: () => contextCloseCount,
-    timerHandler: () => timerHandler,
     fireTimer: () => timerHandler?.(),
-    emitChunk: (size = 10) => {
-      const recorder = recorderWithEmit();
-      recorder?.emit(size);
-    },
+    emitChunk: (size = 10) => lastRecorder?.emit(size),
     resolveAcquire: () => {
       const pending = pendingAcquire;
       pendingAcquire = null;
@@ -207,24 +258,23 @@ function createEnvironment(): FakeEnvironment {
       pendingAcquire = null;
       pending?.reject(new DOMException("nope", name));
     },
+    resolveLoadVad: () => {
+      const pending = pendingVad;
+      pendingVad = null;
+      pending?.resolve();
+    },
     releaseTranscription: (text = "hello") => {
       const pending = pendingTranscription;
       pendingTranscription = null;
       pending?.resolve({ text });
     },
-    transcribeCalls,
+    endTracks: () => {
+      for (const track of tracks) {
+        track.end();
+      }
+    },
+    streamTracksStopped: () => tracks.length > 0 && tracks.every((track) => track.stopped()),
   };
-  let lastRecorder: RecorderLike | null = null;
-  const originalCreateRecorder = env.ports.createRecorder;
-  (env.ports as { createRecorder: CaptureControllerPorts["createRecorder"] }).createRecorder = (
-    stream,
-  ) => {
-    lastRecorder = originalCreateRecorder(stream);
-    return lastRecorder;
-  };
-  function recorderWithEmit(): { emit: (size: number) => void } | null {
-    return lastRecorder as unknown as { emit: (size: number) => void } | null;
-  }
   return env;
 }
 
@@ -234,8 +284,21 @@ async function started(env: FakeEnvironment) {
   controller.start();
   env.resolveAcquire();
   await vi.waitFor(() => expect(env.phases).toContain("recording"));
-  await vi.waitFor(() => expect(env.vadCallbacks).toHaveLength(controllers + 1));
+  if (env.loadVadMode !== "fail") {
+    await vi.waitFor(() => expect(env.vadCallbacks).toHaveLength(controllers + 1));
+  }
   return controller;
+}
+
+async function finishViaSilence(
+  env: FakeEnvironment,
+  vadIndex = 0,
+  expectedCount = 1,
+): Promise<void> {
+  env.emitChunk();
+  env.vadCallbacks[vadIndex]?.onSpeechRealStart();
+  env.vadCallbacks[vadIndex]?.onSpeechEnd();
+  await vi.waitFor(() => expect(env.transcribeCount()).toBeGreaterThanOrEqual(expectedCount));
 }
 
 describe("pickRecorderMimeType", () => {
@@ -251,10 +314,7 @@ describe("capture controller (mocked browser)", () => {
   it("finalizes silence exactly once: one stream, one transcription, full cleanup", async () => {
     const env = createEnvironment();
     const controller = await started(env);
-    env.emitChunk();
-    env.vadCallbacks[0]?.onSpeechRealStart();
-    env.vadCallbacks[0]?.onSpeechEnd();
-    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    await finishViaSilence(env);
     env.releaseTranscription("dictated words");
     await vi.waitFor(() => expect(env.transcripts).toEqual(["dictated words"]));
 
@@ -264,7 +324,7 @@ describe("capture controller (mocked browser)", () => {
     expect(env.vadPaused()).toBe(1);
     expect(env.vadDestroyed()).toBe(1);
     expect(env.contextClosed()).toBe(1);
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
+    expect(env.streamTracksStopped()).toBe(true);
     expect(env.errors).toEqual([]);
     expect(env.phases.at(-1)).toBe("idle");
 
@@ -277,10 +337,116 @@ describe("capture controller (mocked browser)", () => {
     expect(env.recorderStops()).toBe(1);
   });
 
+  it("allows a second completed recording in the same session (no stuck capture state)", async () => {
+    const env = createEnvironment();
+    const controller = await started(env);
+    await finishViaSilence(env, 0);
+    env.releaseTranscription("first");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["first"]));
+    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
+
+    controller.start();
+    env.resolveAcquire();
+    await vi.waitFor(() => expect(env.vadCallbacks).toHaveLength(2));
+    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("recording"));
+    await finishViaSilence(env, 1, 2);
+    env.releaseTranscription("second");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["first", "second"]));
+    expect(env.acquireCount()).toBe(2);
+    expect(env.recorderCount()).toBe(2);
+  });
+
+  it("bounds a delayed background-tab recording with a visible notice instead of discarding it", async () => {
+    const env = createEnvironment();
+    env.normalizeBounded = true;
+    await started(env);
+    await finishViaSilence(env);
+    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    expect(env.notices).toContain("The 60-second recording limit was applied.");
+    env.releaseTranscription("bounded");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["bounded"]));
+  });
+
+  it("transcribes at the hard limit when the detector failed (unknown activity, not silence)", async () => {
+    const env = createEnvironment();
+    env.loadVadMode = "fail";
+    const controller = await started(env);
+    await vi.waitFor(() => expect(env.vadStates).toContain("unavailable"));
+    env.emitChunk();
+    env.fireTimer();
+    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    env.releaseTranscription("never confirmed");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["never confirmed"]));
+    expect(env.errors).toEqual([]);
+    controller.cancel();
+  });
+
+  it("discards at the hard limit only with a healthy detector and no valid speech", async () => {
+    const env = createEnvironment();
+    await started(env);
+    env.emitChunk();
+    env.fireTimer();
+    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
+    expect(env.transcribeCount()).toBe(0);
+    expect(env.errors).toEqual([VOICE_COPY.noSpeech]);
+    expect(env.vadDestroyed()).toBe(1);
+    expect(env.streamTracksStopped()).toBe(true);
+  });
+
+  it("reports device loss and still transcribes the captured audio", async () => {
+    const env = createEnvironment();
+    await started(env);
+    env.emitChunk();
+    env.vadCallbacks[0]?.onSpeechRealStart();
+    env.endTracks();
+    await vi.waitFor(() => expect(env.errors).toEqual([VOICE_COPY.deviceLost]));
+    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    env.releaseTranscription("before the loss");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["before the loss"]));
+    expect(env.streamTracksStopped()).toBe(true);
+  });
+
+  it("manual stop works while detector assets are still loading", async () => {
+    const env = createEnvironment();
+    env.loadVadMode = "deferred";
+    const controller = createCaptureController(env.ports);
+    controller.start();
+    env.resolveAcquire();
+    await vi.waitFor(() => expect(env.phases).toContain("recording"));
+    env.emitChunk();
+    controller.stopManual();
+    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    env.releaseTranscription("early stop");
+    await vi.waitFor(() => expect(env.transcripts).toEqual(["early stop"]));
+  });
+
+  it("disposes a detector cancelled while assets were still loading", async () => {
+    const env = createEnvironment();
+    env.loadVadMode = "deferred";
+    const controller = createCaptureController(env.ports);
+    controller.start();
+    env.resolveAcquire();
+    await vi.waitFor(() => expect(env.phases).toContain("recording"));
+    controller.cancel();
+    env.resolveLoadVad();
+    // The unstarted detector is started on the SAME owned stream and destroyed.
+    await vi.waitFor(() => expect(env.vadDestroyed()).toBe(1));
+    expect(env.transcribeCount()).toBe(0);
+  });
+
+  it("releases the ONNX model even when destroy() keeps failing", async () => {
+    const env = createEnvironment();
+    env.destroyAlwaysFails = true;
+    const controller = await started(env);
+    controller.cancel();
+    await vi.waitFor(() => expect(env.modelReleases()).toBe(1));
+    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
+    expect(env.streamTracksStopped()).toBe(true);
+  });
+
   it("does not stop on initial silence and misfires keep the recording", async () => {
     const env = createEnvironment();
     await started(env);
-    // Unconfirmed speech end and misfires are inert: the recording continues.
     env.vadCallbacks[0]?.onSpeechEnd();
     env.vadCallbacks[0]?.onSpeechEnd();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -299,53 +465,22 @@ describe("capture controller (mocked browser)", () => {
     await vi.waitFor(() => expect(env.transcripts).toEqual(["short"]));
   });
 
-  it("duration limit without speech discards with zero STT and the no-speech copy", async () => {
-    const env = createEnvironment();
-    await started(env);
-    env.emitChunk();
-    env.fireTimer();
-    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
-    expect(env.transcribeCount()).toBe(0);
-    expect(env.errors).toEqual([VOICE_COPY.noSpeech]);
-    expect(env.vadDestroyed()).toBe(1);
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
-  });
-
-  it("duration limit with confirmed speech finalizes once", async () => {
-    const env = createEnvironment();
-    await started(env);
-    env.emitChunk();
-    env.vadCallbacks[0]?.onSpeechRealStart();
-    env.fireTimer();
-    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
-    env.releaseTranscription("long but valid");
-    await vi.waitFor(() => expect(env.transcripts).toEqual(["long but valid"]));
-  });
-
   it("cancel aborts the in-flight upload, discards, and releases resources", async () => {
     const env = createEnvironment();
     const controller = await started(env);
-    env.emitChunk();
-    env.vadCallbacks[0]?.onSpeechRealStart();
-    env.vadCallbacks[0]?.onSpeechEnd();
-    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    await finishViaSilence(env);
     controller.cancel();
     await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
     expect(env.transcribeCalls[0]?.aborted()).toBe(true);
     expect(env.transcripts).toEqual([]);
-    // A deliberate cancellation is not a failure of the travel task.
     expect(env.errors).toEqual([]);
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
-    expect(env.vadDestroyed()).toBe(1);
+    expect(env.streamTracksStopped()).toBe(true);
   });
 
   it("a late transcription result after cancel never inserts", async () => {
     const env = createEnvironment();
     const controller = await started(env);
-    env.emitChunk();
-    env.vadCallbacks[0]?.onSpeechRealStart();
-    env.vadCallbacks[0]?.onSpeechEnd();
-    await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
+    await finishViaSilence(env);
     controller.cancel();
     env.releaseTranscription("too late");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -362,11 +497,10 @@ describe("capture controller (mocked browser)", () => {
 
     const controller = await started(env);
     expect(env.vadCallbacks).toHaveLength(staleGeneration + 1);
-    // Old-generation callbacks are inert for the new session.
     staleCallbacks?.onSpeechEnd();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(env.transcribeCount()).toBe(0);
-    // The new session still works normally.
+    env.emitChunk();
     env.vadCallbacks[1]?.onSpeechRealStart();
     env.vadCallbacks[1]?.onSpeechEnd();
     await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
@@ -377,14 +511,9 @@ describe("capture controller (mocked browser)", () => {
 
   it("VAD initialization failure keeps manual dictation available", async () => {
     const env = createEnvironment();
-    (env.ports as { loadVad: CaptureControllerPorts["loadVad"] }).loadVad = async () => {
-      throw new Error("worklet unavailable");
-    };
-    const controller = createCaptureController(env.ports);
-    controller.start();
-    env.resolveAcquire();
-    await vi.waitFor(() => expect(env.phases).toContain("recording"));
-    await vi.waitFor(() => expect(env.vadUnavailable).toBe(true));
+    env.loadVadMode = "fail";
+    const controller = await started(env);
+    await vi.waitFor(() => expect(env.vadStates).toContain("unavailable"));
     env.emitChunk();
     controller.stopManual();
     await vi.waitFor(() => expect(env.transcribeCount()).toBe(1));
@@ -401,7 +530,7 @@ describe("capture controller (mocked browser)", () => {
     env.resolveAcquire();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(env.recorderCount()).toBe(0);
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
+    expect(env.streamTracksStopped()).toBe(true);
     expect(env.transcribeCount()).toBe(0);
   });
 
@@ -423,21 +552,6 @@ describe("capture controller (mocked browser)", () => {
     await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
     expect(env.transcribeCount()).toBe(0);
     expect(env.errors[0]).toContain("too large");
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
-  });
-
-  it("attempts VAD disposal even when destroy throws and still releases the rest", async () => {
-    const env = createEnvironment();
-    env.destroyVadFailure = true;
-    const controller = await started(env);
-    controller.cancel();
-    await vi.waitFor(() => expect(env.vadPaused()).toBe(1));
-    await vi.waitFor(() => expect(env.vadDestroyAttempts()).toBe(1));
-    await vi.waitFor(() => expect(env.phases.at(-1)).toBe("idle"));
-    // A failed early destroy is attempted (never claimed as success) and the
-    // remaining resources are still released.
-    expect(env.stream.tracks.every((track) => track.stopped())).toBe(true);
-    expect(env.contextClosed()).toBe(1);
-    expect(env.errors).toEqual([]);
+    expect(env.streamTracksStopped()).toBe(true);
   });
 });

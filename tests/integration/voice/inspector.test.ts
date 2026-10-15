@@ -29,6 +29,35 @@ describe("inspector voice section", () => {
     await pool.end();
   });
 
+  it("keeps a cancelled reservation visible with a null safe error code", async () => {
+    const { tripId } = await createHarnessTrip(pool);
+    const reserved = await reserveVoiceCall(pool, {
+      tripId,
+      requestId: randomUUID(),
+      requestFingerprint: "fingerprint-abort",
+      kind: "stt",
+      model: "openai/whisper-large-v3-turbo",
+      providerRestriction: "groq",
+      unitKind: "audio_seconds",
+      inputUnits: 8,
+      reservedCostUsd: "0.004",
+      maxCallCostUsd: "0.02",
+      maxCallsPerTrip: 60,
+      maxCostUsdPerTrip: "1.00",
+    });
+    if (!reserved.ok) {
+      throw new Error("expected the reservation to succeed");
+    }
+    await markVoiceCallUnknown(pool, reserved.callId, { errorCode: "VOICE_REQUEST_ABORTED" });
+    const inspector = await loadPublicInspector(pool, tripId);
+    expect(inspector.voiceCalls).toHaveLength(1);
+    expect(inspector.voiceCalls[0]).toMatchObject({
+      status: "unknown_reserved",
+      errorCode: null,
+      reservedCostUsd: "0.004",
+    });
+  });
+
   it("shows safe voice rows separately and leaves LLM and travel accounting untouched", async () => {
     const { tripId, creationOperationId } = await createHarnessTrip(pool);
 

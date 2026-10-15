@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError } from "./api-client";
-import {
-  downmixToMono,
-  encodePcmWav,
-  VOICE_WAV_MAX_SAMPLES,
-  VOICE_WAV_SAMPLE_RATE,
-} from "./voice-audio";
+import { downmixToMono, encodePcmWav, VOICE_WAV_SAMPLE_RATE } from "./voice-audio";
 import {
   createCaptureController,
   pickRecorderMimeType,
@@ -24,6 +19,7 @@ import {
   clearInFlightReply,
   initialReplySelection,
   initializeReplyBaseline,
+  listeningCopy,
   markReplyProcessed,
   playbackBufferReady,
   playbackComplete,
@@ -31,6 +27,7 @@ import {
   playbackPrepare,
   playbackStart,
   playbackStop,
+  recordingCopy,
   registerReplyRefresh,
   replyRefreshActive,
   resetReplyBaseline,
@@ -45,6 +42,7 @@ import {
   type VoiceOperationStatus,
   type VoicePhase,
   type VoiceReplyMessage,
+  type VoiceVadState,
 } from "./voice-state";
 import {
   applyVadOrtBaseline,
@@ -77,8 +75,6 @@ interface VadOptionsLike extends VoiceVadOptions {
 
 export { VOICE_COPY, VOICE_CAPTURE_LIMIT_MS };
 
-const TOO_LONG_SENTINEL = "VOICE_CAPTURE_TOO_LONG";
-
 export interface UseAssistantVoiceOptions {
   readonly tripId: string;
   readonly messages: readonly VoiceReplyMessage[];
@@ -96,6 +92,8 @@ export interface AssistantVoice {
   readonly serverEnabled: boolean | null;
   /** Effective gateway mode once the capabilities query resolves. */
   readonly mode: "fixture" | "openrouter" | null;
+  /** Actionable message when the availability query itself failed. */
+  readonly availabilityError: string | null;
   readonly activated: boolean;
   readonly repliesEnabled: boolean;
   /** Recording/stopping/normalizing/transcribing — Send must stay disabled. */
@@ -144,9 +142,6 @@ function isAbortError(error: unknown): boolean {
 }
 
 function describeVoiceError(error: unknown): string {
-  if (error instanceof Error && error.message === TOO_LONG_SENTINEL) {
-    return VOICE_COPY.maxDuration;
-  }
   if (error instanceof ApiError) {
     switch (error.code) {
       case "VOICE_DISABLED":
@@ -170,6 +165,9 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
 
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
   const [mode, setMode] = useState<"fixture" | "openrouter" | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [maxRecordingSeconds, setMaxRecordingSeconds] = useState(60);
+  const [vadState, setVadState] = useState<VoiceVadState>("loading");
   const [activated, setActivated] = useState(false);
   const [repliesEnabled, setRepliesEnabledState] = useState(false);
   const [phase, setPhase] = useState<VoicePhase>("idle");
@@ -215,29 +213,36 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const capabilities = await fetchVoiceCapabilities(tripId);
-        if (!cancelled) {
-          setServerEnabled(capabilities.enabled);
-          setMode(capabilities.mode);
+      const apply = (capabilities: {
+        enabled: boolean;
+        mode: "fixture" | "openrouter";
+        maxRecordingSeconds: number;
+      }): void => {
+        if (cancelled) {
+          return;
         }
+        setServerEnabled(capabilities.enabled);
+        setMode(capabilities.mode);
+        setMaxRecordingSeconds(capabilities.maxRecordingSeconds);
+        setAvailabilityError(null);
+      };
+      try {
+        apply(await fetchVoiceCapabilities(tripId));
       } catch (error) {
         if (error instanceof ApiError && error.code === "UNAUTHORIZED") {
           try {
             await ensureSession();
-            const capabilities = await fetchVoiceCapabilities(tripId);
-            if (!cancelled) {
-              setServerEnabled(capabilities.enabled);
-              setMode(capabilities.mode);
-            }
+            apply(await fetchVoiceCapabilities(tripId));
             return;
           } catch {
-            // Fall through: treated as unknown below.
+            // Fall through: treated as an availability failure below.
           }
         }
         if (!cancelled) {
           setServerEnabled(null);
           setMode(null);
+          // Actionable, not silent: the controls render this message.
+          setAvailabilityError(VOICE_COPY.availabilityError);
         }
       }
     })();
@@ -281,14 +286,26 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
           },
           onSpeechEnd: callbacks.onSpeechEnd,
         };
-        return MicVAD.new(vadOptions as Parameters<typeof MicVAD.new>[0]);
+        const micVad = await MicVAD.new(vadOptions as Parameters<typeof MicVAD.new>[0]);
+        return {
+          start: () => micVad.start(),
+          pause: () => micVad.pause(),
+          destroy: () => micVad.destroy(),
+          // Pinned-package fallback: destroy() cannot release the ONNX model
+          // when the audio graph was never initialized.
+          releaseModel: async () => {
+            const internals = micVad as unknown as { model?: { release?: () => Promise<void> } };
+            await internals.model?.release?.();
+          },
+        };
       },
-      normalize: async (blob: Blob, context: AudioContextLike): Promise<Uint8Array> => {
+      normalize: async (blob: Blob, context: AudioContextLike, maxSamples: number) => {
         const samples = await normalizeTo16kMono(blob, context as AudioContext);
-        if (samples.length > VOICE_WAV_MAX_SAMPLES) {
-          throw new Error(TOO_LONG_SENTINEL);
+        if (samples.length > maxSamples) {
+          // Bound (never silently discard) and report the applied limit.
+          return { audio: encodePcmWav(samples.subarray(0, maxSamples)), bounded: true };
         }
-        return encodePcmWav(samples);
+        return { audio: encodePcmWav(samples), bounded: false };
       },
       transcribe: async (input: { audio: Uint8Array; requestId: string; signal: AbortSignal }) =>
         submitTranscription({
@@ -309,9 +326,15 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
             setHasConfirmedSpeech(confirmed);
           }
         },
-        onVadUnavailable: () => {
+        onVadState: (state: VoiceVadState) => {
           if (mountedRef.current) {
-            setVadUnavailable(true);
+            setVadState(state);
+            setVadUnavailable(state === "unavailable");
+          }
+        },
+        onNotice: (message: string) => {
+          if (mountedRef.current) {
+            setNotice(message);
           }
         },
         onError: (message: string) => {
@@ -386,8 +409,8 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
     void playbackContext()
       .resume()
       .catch(() => {});
-    controller().start();
-  }, [controller, serverEnabled, stopSpeaking, supported]);
+    controller().start({ maxRecordingMs: maxRecordingSeconds * 1000 });
+  }, [controller, maxRecordingSeconds, serverEnabled, stopSpeaking, supported]);
 
   const stopRecording = useCallback((): void => {
     controller().stopManual();
@@ -437,6 +460,7 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
         }
       };
       stopSource();
+      sourceRef.current = source;
       setPlayback((state) => playbackStart(state, messageId));
       source.start();
     },
@@ -446,9 +470,8 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
   const speakBuffer = useCallback(
     async (audio: ArrayBuffer, messageId: string, generation: number): Promise<void> => {
       const context = playbackContext();
-      if (context.state === "suspended") {
-        await context.resume().catch(() => {});
-      }
+      // Decode and retain FIRST: preparation must never depend on autoplay
+      // permission (a pending resume() could otherwise hide Play reply).
       let decoded: AudioBuffer;
       try {
         decoded = await context.decodeAudioData(audio.slice(0));
@@ -468,7 +491,8 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
       bufferRef.current = decoded;
       setPlayback((state) => playbackBufferReady(state, messageId));
       if (context.state !== "running") {
-        // Autoplay stayed blocked: the retained buffer enables Play reply.
+        // Autoplay stayed blocked: keep preparation done, offer Play reply.
+        void context.resume().catch(() => {});
         return;
       }
       startSource(decoded, messageId, generation);
@@ -676,11 +700,16 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
   if (phase === "preparing") {
     statusMessage = VOICE_COPY.preparing;
   } else if (phase === "recording") {
-    statusMessage = vadUnavailable
-      ? VOICE_COPY.vadUnavailable
-      : hasConfirmedSpeech
-        ? VOICE_COPY.recording
-        : VOICE_COPY.listening;
+    // The recorder runs while detector assets load; the user-facing cue waits
+    // for a ready (or failed) detector so nobody speaks into a cold start.
+    statusMessage =
+      vadState === "loading"
+        ? VOICE_COPY.preparing
+        : vadState === "unavailable"
+          ? VOICE_COPY.vadUnavailable
+          : hasConfirmedSpeech
+            ? recordingCopy(maxRecordingSeconds)
+            : listeningCopy(maxRecordingSeconds);
   } else if (phase === "stopping") {
     statusMessage = VOICE_COPY.preparingRecording;
   } else if (phase === "transcribing") {
@@ -695,6 +724,7 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
     supported,
     serverEnabled,
     mode,
+    availabilityError,
     activated,
     repliesEnabled,
     busy,

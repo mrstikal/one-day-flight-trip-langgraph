@@ -18,7 +18,14 @@ export function VoiceControls({
   readonly voice: AssistantVoice;
 }): React.JSX.Element | null {
   if (voice.serverEnabled === null) {
-    // Availability is still unknown: render nothing (no microphone access here).
+    // Availability unknown: never silent when the query itself failed.
+    if (voice.availabilityError) {
+      return (
+        <p role="status" className="text-xs text-ink-muted" data-testid="voice-availability-error">
+          {voice.availabilityError}
+        </p>
+      );
+    }
     return null;
   }
   if (voice.serverEnabled === false) {
