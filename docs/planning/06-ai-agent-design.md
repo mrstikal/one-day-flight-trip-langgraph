@@ -6,12 +6,12 @@ AI understands requests, evaluates supplied alternatives, proposes itinerary str
 
 Use four configurable roles, not a separate chatbot for each travel service. A role is a prompt/schema/configuration contract invoked by a graph node, not an autonomous agent allowed to spawn other agents.
 
-| Role | Input | Structured output | When called |
-| --- | --- | --- | --- |
-| `intent` | Current compact trip context + user message | `IntentResult` commands, clarification, or unsupported result | Chat only; direct UI actions bypass this call |
-| `recommendation` | Existing filtered candidates and an explicit tradeoff | Valid ranked IDs and concise rationale | Only when deterministic ranking does not resolve a requested qualitative tradeoff |
-| `planner` | Known candidates, selected/booked services, hard windows, pace/interests/count requirements | Proposed ordered stops/times with valid references | New/revised itinerary, at most three total attempts |
-| `reviewer` | Deterministically valid draft, metrics, user requirements | Typed qualitative findings and safe revision hints | Once per deterministically valid attempt; no review of a rejected draft |
+| Role             | Input                                                                                       | Structured output                                             | When called                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `intent`         | Current compact trip context + user message                                                 | `IntentResult` commands, clarification, or unsupported result | Chat only; direct UI actions bypass this call                                     |
+| `recommendation` | Existing filtered candidates and an explicit tradeoff                                       | Valid ranked IDs and concise rationale                        | Only when deterministic ranking does not resolve a requested qualitative tradeoff |
+| `planner`        | Known candidates, selected/booked services, hard windows, pace/interests/count requirements | Proposed ordered stops/times with valid references            | New/revised itinerary, at most three total attempts                               |
+| `reviewer`       | Deterministically valid draft, metrics, user requirements                                   | Typed qualitative findings and safe revision hints            | Once per deterministically valid attempt; no review of a rejected draft           |
 
 There is no separate Response Agent/model call. Outcome templates plus validated role explanations produce the assistant response from committed results. The same intent call can ask a clarification; recommendation/planner/reviewer output can explain their proposals. Another post-execution LLM call would add latency/cost without affecting this proof of concept's decisions. This is an explicit decision, not an omitted role.
 
@@ -78,12 +78,12 @@ No tool calling is necessary: the interpreter returns a strictly bounded command
 
 `AI_MODE=fixture` is the complete offline default. `AI_MODE=openrouter` requires the server API key and all four explicit role profiles in `AI_CONFIG_PATH`. Do not hardcode one application-wide model or silently substitute a default/free model. Profiles may deliberately share a model, but remain independently configurable and observable.
 
-| Role | Timeout | Output cap | Desired temperature, only if supported | Desired reasoning, only if supported | Per-call ceiling |
-| --- | --- | --- | --- | --- | --- |
-| intent | 20,000 ms | 1,024 tokens | 0 | Low or omitted | USD 0.05 |
-| recommendation | 20,000 ms | 1,024 tokens | 0.2 | Low or omitted | USD 0.05 |
-| planner | 30,000 ms | 2,048 tokens | 0.2 | Low/medium or omitted | USD 0.20 |
-| reviewer | 20,000 ms | 1,024 tokens | 0 | Low or omitted | USD 0.05 |
+| Role           | Timeout   | Output cap   | Desired temperature, only if supported | Desired reasoning, only if supported | Per-call ceiling |
+| -------------- | --------- | ------------ | -------------------------------------- | ------------------------------------ | ---------------- |
+| intent         | 20,000 ms | 1,024 tokens | 0                                      | Low or omitted                       | USD 0.05         |
+| recommendation | 20,000 ms | 1,024 tokens | 0.2                                    | Low or omitted                       | USD 0.05         |
+| planner        | 30,000 ms | 2,048 tokens | 0.2                                    | Low/medium or omitted                | USD 0.20         |
+| reviewer       | 20,000 ms | 1,024 tokens | 0                                      | Low or omitted                       | USD 0.05         |
 
 Each profile defaults to 2 total attempts and maximum 6,000 input tokens. The conversation-history portion is capped separately at 4,096 tokens. Price fields are configured verified upper bounds, not invented live model prices. A chosen model whose worst-case request exceeds the ceiling fails configuration/preflight unless the operator explicitly changes the limit.
 
@@ -236,3 +236,15 @@ Checked 2026-10-10:
 - [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection): matched endpoint variants and hard max_price prompt/completion/request fields; no assumption about override-specific cap semantics.
 
 See [conversation flow](07-conversation-and-intents.md), [security](10-security-reliability.md), and [tests](11-testing-strategy.md).
+
+## Speech adapter and configuration addendum (2026-10-15)
+
+Speech is a **separate adapter and configuration domain**, not a fifth reasoning role.
+
+- **Exact defaults (operator profile template).** STT: `openai/whisper-large-v3-turbo`, `endpointProviderId: groq`, timeout 20 000 ms, `maxCallCostUsd 0.02`. TTS: `elevenlabs/eleven-v4-turbo`, `voice: george`, `response_format: mp3`, timeout 20 000 ms, `maxCallCostUsd 0.05`. Limits: 60 s / 2 MiB request / 8 MiB response audio / 2 000 transcript / 2 000 reply characters / 60 calls / 1.00 USD per trip. Profile changes of the model or the Groq endpoint require a new product decision (validator-enforced).
+- **Native audio endpoints.** STT uses `POST https://openrouter.ai/api/v1/audio/transcriptions` with JSON base64 `input_audio {data, format:"wav"}`, `response_format:"json"`; TTS uses `POST /api/v1/audio/speech` with `{model, input, voice, response_format:"mp3"}` and reads raw audio bytes - a successful speech response is never JSON-parsed. Exactly one attempt; no provider SDK; no undocumented routing fields.
+- **Assigned-key Groq enforcement.** The speech API exposes no per-request provider pin (`provider.only`/`allow_fallbacks` do not exist on these endpoints), so Groq-only STT relies on the dedicated key's **assigned** provider-allowlist guardrail; a model id or catalog entry alone is never treated as enforcement. Effective-policy verification is an operator/live gate (currently pending guardrail assignment).
+- **Audio pricing precision and units.** Published speech rates are raw decimal strings that may exceed nine fractional digits (observed Groq rate: 16); costs are computed with exact rational arithmetic and rounded UP to USD nanos, never through the nine-decimal token parser. STT bills per audio second with the documented Groq 10-second minimum (verified live: a 4.85 s recording reported `usage.seconds = 10`); TTS bills per UTF-16 character (never underestimating astral characters).
+- **Independent cost ledger.** Voice usage lives in `voice_calls` with its own reserved/actual USD semantics; it never merges with LLM call accounting or travel EUR money, and fixture mode creates zero billable rows.
+- **Fixture labels and no fallback/retry.** Fixture mode returns the known scripted transcript and generated canonical WAV test audio with zero egress and is labeled in the UI; live failures are terminal per request, never silently retried, re-priced, or switched to another model/provider.
+- **Verified dated sources.** Public model ids/endpoints/schemas/voice alias/billing units re-checked 2026-10-14 against the live OpenRouter catalog and docs; provider-level live smoke 2026-10-15: STT served by **Groq** (`usage.cost 0.000111111111111`, generation cost 0.000111111) and TTS by **ElevenLabs** (`elevenlabs/eleven-v4-turbo-20260930`, cost 0.00074 = 37 chars x 0.00002), both matching the reservation math.

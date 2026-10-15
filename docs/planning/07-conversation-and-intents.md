@@ -27,8 +27,7 @@ Implement a strict public request schema:
 
 ```typescript
 type CommandInput =
-  | { kind: "commands"; commands: DomainCommand[] }
-  | { kind: "chat"; message: string };
+  { kind: "commands"; commands: DomainCommand[] } | { kind: "chat"; message: string };
 
 interface CommandRequest {
   requestId: string;
@@ -45,19 +44,19 @@ Commands emitted by a model are validated against a restricted conversational sc
 
 ## 3. Interpretation Rules
 
-| Request | Safe interpretation | Must not do |
-| --- | --- | --- |
-| "Find a cheaper hotel." | Search below current selected/confirmed party-total price, preserving that hotel's category | Automatically downgrade or replace it |
-| "Find a cheaper hotel, but keep the flights and restaurants." | Same hotel search; preserve all named flight/meal refs and unaffected activities | Rebook flights, swap meals, regenerate the full scenario |
-| "Change dinner to a luxury restaurant." | Set dinner override to luxury, show eligible alternatives, request selection/replacement confirmation | Change global level, breakfast, lunch, or confirmed dinner immediately |
-| "Make the day less exhausting." | Propose lower pace/density/walking; preserve bookings and exact confirmed meal times | Interpret relaxed pace as parks only or silently remove required museums |
-| "Add more museums." | Increase museum emphasis; if current museum count is known, store at least one more as an explicit minimum | Only change a prose summary with no structured target |
-| "Add two more museums." | Persist absolute minimum `currentMuseumCount + 2` if <= 7 and feasible; otherwise clarify | Lose the number during compaction or ignore it during review |
-| "A better hotel." | Ask whether location, rating, amenities/category, or value matters when context does not resolve it | Assume "better" means higher price/category |
-| "Keep the flights but make the trip cheaper." | Search hotel/meals/free activity alternatives without committing replacements | Turn a price goal into cancellation of booked flights |
-| "I'd rather visit a park than another museum." | Change activity requirement/selection proposal and rebuild the affected program, explaining exact substitution | Cancel a reservation or invent a new park |
-| "Book it." | Open the existing valid selection's review, or clarify which service if there are several | Confirm solely from an LLM utterance |
-| "Change Rome to Ceske Budejovice." | Preview incompatible reservation effects; after explicit approval, run fresh Stage A | Reuse Rome approval, offer a fake flight, or imply the city is unreachable by ground |
+| Request                                                       | Safe interpretation                                                                                            | Must not do                                                                          |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| "Find a cheaper hotel."                                       | Search below current selected/confirmed party-total price, preserving that hotel's category                    | Automatically downgrade or replace it                                                |
+| "Find a cheaper hotel, but keep the flights and restaurants." | Same hotel search; preserve all named flight/meal refs and unaffected activities                               | Rebook flights, swap meals, regenerate the full scenario                             |
+| "Change dinner to a luxury restaurant."                       | Set dinner override to luxury, show eligible alternatives, request selection/replacement confirmation          | Change global level, breakfast, lunch, or confirmed dinner immediately               |
+| "Make the day less exhausting."                               | Propose lower pace/density/walking; preserve bookings and exact confirmed meal times                           | Interpret relaxed pace as parks only or silently remove required museums             |
+| "Add more museums."                                           | Increase museum emphasis; if current museum count is known, store at least one more as an explicit minimum     | Only change a prose summary with no structured target                                |
+| "Add two more museums."                                       | Persist absolute minimum `currentMuseumCount + 2` if <= 7 and feasible; otherwise clarify                      | Lose the number during compaction or ignore it during review                         |
+| "A better hotel."                                             | Ask whether location, rating, amenities/category, or value matters when context does not resolve it            | Assume "better" means higher price/category                                          |
+| "Keep the flights but make the trip cheaper."                 | Search hotel/meals/free activity alternatives without committing replacements                                  | Turn a price goal into cancellation of booked flights                                |
+| "I'd rather visit a park than another museum."                | Change activity requirement/selection proposal and rebuild the affected program, explaining exact substitution | Cancel a reservation or invent a new park                                            |
+| "Book it."                                                    | Open the existing valid selection's review, or clarify which service if there are several                      | Confirm solely from an LLM utterance                                                 |
+| "Change Rome to Ceske Budejovice."                            | Preview incompatible reservation effects; after explicit approval, run fresh Stage A                           | Reuse Rome approval, offer a fake flight, or imply the city is unreachable by ground |
 
 If there is no current price baseline, show a budget-cap clarification instead of pretending an offer is cheaper. If the effective preference has diverged from a booked hotel's level, preserve the booked category for relative searches unless the user explicitly asks for the target level.
 
@@ -72,9 +71,7 @@ Actual offer IDs are looked up server-side; these examples do not authorize exec
 ```json
 {
   "kind": "commands",
-  "commands": [
-    { "type": "find_alternatives", "target": "hotel", "objective": "cheaper" }
-  ],
+  "commands": [{ "type": "find_alternatives", "target": "hotel", "objective": "cheaper" }],
   "preserve": ["flights", "breakfast", "lunch", "dinner", "activities", "events"],
   "interpretation": "Search for a lower-priced hotel in your currently selected category; keep the rest of the trip."
 }
@@ -105,9 +102,7 @@ Apply safe preference/search changes together, but do not confirm any booking in
 ```json
 {
   "kind": "commands",
-  "commands": [
-    { "type": "set_service_override", "service": "dinner", "level": "luxury" }
-  ],
+  "commands": [{ "type": "set_service_override", "service": "dinner", "level": "luxury" }],
   "preserve": ["flights", "hotel", "breakfast", "lunch", "activities"],
   "interpretation": "Show luxury dinner alternatives without changing your existing reservation."
 }
@@ -146,16 +141,16 @@ Store the user's message on admission, an interpretation only after validation, 
 
 ## 7. Outcome Language
 
-| Application state | Example response |
-| --- | --- |
-| Queued | "Your request has been received. No selections have changed yet." |
-| Search succeeded | "I found three lower-priced luxury hotel alternatives. Your flights and meals are unchanged. Choose one to review a replacement." |
-| Preference changed, booking retained | "Dinner now has a Luxury preference. Your existing Standard demo reservation remains confirmed until you approve a replacement." |
-| Confirmed replacement committed | "Your new demo hotel reservation is confirmed. The previous demo reservation is marked superseded; flights and meals are unchanged." |
-| Itinerary rebuilt but not approved | "A less demanding draft is ready for review. Your confirmed flights, hotel, and meals were preserved." |
-| Provider error | "The simulated hotel provider failed. Restaurant and attraction results are saved; only the hotel search will be retried." |
-| Route rejected | "This flight-based trip is not practical under the demo route rules. No flights were generated. You can change destination or origin; ground travel may still be possible." |
-| Fixture mode | "This is a scripted fixture response. Use the listed demo requests or graphical controls." |
+| Application state                    | Example response                                                                                                                                                            |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Queued                               | "Your request has been received. No selections have changed yet."                                                                                                           |
+| Search succeeded                     | "I found three lower-priced luxury hotel alternatives. Your flights and meals are unchanged. Choose one to review a replacement."                                           |
+| Preference changed, booking retained | "Dinner now has a Luxury preference. Your existing Standard demo reservation remains confirmed until you approve a replacement."                                            |
+| Confirmed replacement committed      | "Your new demo hotel reservation is confirmed. The previous demo reservation is marked superseded; flights and meals are unchanged."                                        |
+| Itinerary rebuilt but not approved   | "A less demanding draft is ready for review. Your confirmed flights, hotel, and meals were preserved."                                                                      |
+| Provider error                       | "The simulated hotel provider failed. Restaurant and attraction results are saved; only the hotel search will be retried."                                                  |
+| Route rejected                       | "This flight-based trip is not practical under the demo route rules. No flights were generated. You can change destination or origin; ground travel may still be possible." |
+| Fixture mode                         | "This is a scripted fixture response. Use the listed demo requests or graphical controls."                                                                                  |
 
 Personalize with the escaped first name when useful, not in every sentence. Do not say "booked", "changed", "ready", or "approved" before the corresponding deterministic commit/validation succeeds. Explain partial success, preserved components, outstanding decisions, warnings, and limitations explicitly.
 
@@ -181,3 +176,12 @@ If another operation is active, show a busy conflict and preserve the typed mess
 - Fixture mode is visibly scripted; credentialed live mode uses the configured role and real validated model output.
 
 See [tests](11-testing-strategy.md), [booking lifecycle](09-booking-simulation.md), and [Phase 08](phases/phase-08.md).
+
+## Voice conversation addendum (2026-10-15)
+
+- **Transcript-to-current-draft append, manual Send.** A finished transcript is appended to the _current_ draft through the functional state updater (single separator only when needed, exact text preserved, combined 2 000-character limit with an explicit alert that keeps the original draft); focus returns to the composer. Sending always requires an explicit _Send_ click.
+- **No transcript persistence before submission.** Recording, transcription, and draft insertion create no conversation message, operation, preference change, or reservation; the transcript exists only in the composer until the ordinary chat admission runs. Automatic completion never calls Send.
+- **Linked post-outcome reply selection.** Only assistant messages newer than the first projection baseline, with a non-null `operationId` whose same-trip operation is settled (`succeeded`/`waiting`/`failed`), non-empty content, and no processed/in-flight id are eligible; the highest sequence wins and is marked in-flight before any asynchronous work. Disabling replies discards pending automatic speech without forgetting processed ids; re-enabling re-baselines so history never speaks.
+- **Waiting semantics.** A decision turn (`waiting`) with a persisted assistant message is speakable once settled; queued/running/cancelled operations and unlinked messages never are.
+- **Delayed message delivery.** After an accepted Send the hook registers the operation and runs a bounded refresh (1.5 s cadence, a single 10 s window anchored when the operation is first observed settled); expiry shows a quiet "not available yet" status, arrival stops the refresh, and duplicates/replays never repeat the speech.
+- **Never reads user/history/card content.** Selection and synthesis work on message DTOs only - the spoken input equals the message's plain `content`; user instructions, list history, interpretation cards, and option labels are never read or spoken.

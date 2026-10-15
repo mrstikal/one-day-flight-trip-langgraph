@@ -33,14 +33,14 @@ This demo applies those capabilities to:
 
 ### Supporting Technologies and AI
 
-| Technology | Role in the demo |
-| --- | --- |
-| Node.js / TypeScript / Zod | Server runtime, typed domain contracts, and strict validation of requests and model outputs. |
-| Next.js / React / Tailwind CSS | Graphical wizard, assistant, and presentation; Next.js also acts as the backend-for-frontend (BFF). |
-| Dedicated worker / PostgreSQL | The worker executes LangGraph outside browser requests; PostgreSQL stores domain truth, queued operations, events, AI cost records, and official LangGraph checkpoints. |
-| OpenRouter / AI adapters | Configurable model access for four roles: intent interpretation, optional recommendation ranking, itinerary planning, and qualitative review. |
-| Faker / Temporal | Seeded fictional labels and variation; correct calendar, time-zone, DST, and elapsed-time handling. Domain algorithms, not Faker or AI, own scheduling and pricing. |
-| Leaflet / SSE | Map presentation with a schematic fallback; Server-Sent Events deliver persisted workflow progress to the browser. |
+| Technology                     | Role in the demo                                                                                                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js / TypeScript / Zod     | Server runtime, typed domain contracts, and strict validation of requests and model outputs.                                                                            |
+| Next.js / React / Tailwind CSS | Graphical wizard, assistant, and presentation; Next.js also acts as the backend-for-frontend (BFF).                                                                     |
+| Dedicated worker / PostgreSQL  | The worker executes LangGraph outside browser requests; PostgreSQL stores domain truth, queued operations, events, AI cost records, and official LangGraph checkpoints. |
+| OpenRouter / AI adapters       | Configurable model access for four roles: intent interpretation, optional recommendation ranking, itinerary planning, and qualitative review.                           |
+| Faker / Temporal               | Seeded fictional labels and variation; correct calendar, time-zone, DST, and elapsed-time handling. Domain algorithms, not Faker or AI, own scheduling and pricing.     |
+| Leaflet / SSE                  | Map presentation with a schematic fallback; Server-Sent Events deliver persisted workflow progress to the browser.                                                      |
 
 AI returns structured **proposals**, never authoritative prices, feasibility decisions, or booking
 permissions. Existing candidate IDs and deterministic rules constrain every result. Direct graphical
@@ -76,13 +76,13 @@ simulated bookings, replacements, impactful route changes, and itinerary approva
 
 ### Data, Fakes, and Real Computation
 
-| Layer | What is real and what is simulated |
-| --- | --- |
-| Geographic references | Versioned offline GeoNames countries/cities (`cities15000` coverage), OurAirports airports/codes/coordinates, reviewed Wikidata landmarks, and resolved IANA time zones. Assets are loaded into PostgreSQL; normal startup does not download them. Rome, Paris, and Barcelona have richer curated coverage; other supported cities use labeled generic activities. |
+| Layer                      | What is real and what is simulated                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Geographic references      | Versioned offline GeoNames countries/cities (`cities15000` coverage), OurAirports airports/codes/coordinates, reviewed Wikidata landmarks, and resolved IANA time zones. Assets are loaded into PostgreSQL; normal startup does not download them. Rome, Paris, and Barcelona have richer curated coverage; other supported cities use labeled generic activities.                     |
 | Mock/fake travel providers | Synthetic providers read reproducible, seeded, persisted offer snapshots, not commercial APIs. Carriers, flight schedules, hotel/restaurant businesses, availability, ratings, events, prices, and opening hours are demo data. Hotel/restaurant pins are approximate positions, not real business addresses. Fault overlays change behavior without regenerating unrelated inventory. |
-| Actual calculations | Code really computes geographic distances, rule-based travel/transfer estimates, time-zone/DST conversions, feasibility, schedule constraints, pace metrics, and integer-cent party totals without double-counting. These calculations operate on demo assumptions, not live timetables, road routing, fares, or real availability. |
-| AI modes | Default `fixture` mode replaces model calls with deterministic scripted interpretations/plans/reviews: no AI credentials, OpenRouter requests, or billable usage. `openrouter` mode makes genuine configured model calls with structured-output validation and call/token/time/cost limits; the travel data remains synthetic in either mode. |
-| Reservations and maps | Confirmations create only internal `DEMO-*` records, never tickets, real reservations, or payments. Optional map tiles are external imagery, not a routing service; without usable tiles, a labeled SVG schematic and textual facts remain available. |
+| Actual calculations        | Code really computes geographic distances, rule-based travel/transfer estimates, time-zone/DST conversions, feasibility, schedule constraints, pace metrics, and integer-cent party totals without double-counting. These calculations operate on demo assumptions, not live timetables, road routing, fares, or real availability.                                                    |
+| AI modes                   | Default `fixture` mode replaces model calls with deterministic scripted interpretations/plans/reviews: no AI credentials, OpenRouter requests, or billable usage. `openrouter` mode makes genuine configured model calls with structured-output validation and call/token/time/cost limits; the travel data remains synthetic in either mode.                                          |
+| Reservations and maps      | Confirmations create only internal `DEMO-*` records, never tickets, real reservations, or payments. Optional map tiles are external imagery, not a routing service; without usable tiles, a labeled SVG schematic and textual facts remain available.                                                                                                                                  |
 
 The plan and detailed contracts are in [ODFT_PLAN.md](ODFT_PLAN.md) and
 [docs/planning](docs/planning/00-project-overview.md), especially the
@@ -189,18 +189,21 @@ CI order: `typecheck` -> `lint` -> `test:unit` -> `test:integration` -> `build` 
 All configuration is server-side and validated at startup (`parseServerConfig`). See `.env.example`
 for the full list. Key values:
 
-| Setting | Rule |
-| --- | --- |
-| `DATABASE_URL` | Required; never logged |
-| `PUBLIC_BASE_URL` | Exact origin used by cookie/CSRF checks |
-| `SESSION_HMAC_KEY` | Required random server secret (>= 32 chars) |
-| `DEMO_CONTROLS_ENABLED` | `true` enables the Inspector and protected simulation controls for owned trips in a local/demo deployment |
-| `WIKIDATA_DISCOVERY` | Optional (`true`): on the first trip to a city without reviewed landmarks, curate its notable attractions from Wikidata once and store them in the reference tables (see "Reference landmarks"); default off, tests never fetch |
-| `AI_MODE` | `fixture` (default, no credentials) or `openrouter` |
-| `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
-| `AI_CONFIG_PATH` | Required only in OpenRouter mode; path to the role-profile JSON file (see below) |
-| `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` | Bounded AI usage (defaults 40 calls / 1.00 USD) |
-| `MAP_TILE_URL` | Optional `{z}/{x}/{y}` tile URL template for the itinerary map; unset → labeled SVG fallback (see below) |
+| Setting                                                | Rule                                                                                                                                                                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                         | Required; never logged                                                                                                                                                                                                          |
+| `PUBLIC_BASE_URL`                                      | Exact origin used by cookie/CSRF checks                                                                                                                                                                                         |
+| `SESSION_HMAC_KEY`                                     | Required random server secret (>= 32 chars)                                                                                                                                                                                     |
+| `DEMO_CONTROLS_ENABLED`                                | `true` enables the Inspector and protected simulation controls for owned trips in a local/demo deployment                                                                                                                       |
+| `WIKIDATA_DISCOVERY`                                   | Optional (`true`): on the first trip to a city without reviewed landmarks, curate its notable attractions from Wikidata once and store them in the reference tables (see "Reference landmarks"); default off, tests never fetch |
+| `AI_MODE`                                              | `fixture` (default, no credentials) or `openrouter`                                                                                                                                                                             |
+| `OPENROUTER_API_KEY`                                   | Required only in OpenRouter mode                                                                                                                                                                                                |
+| `AI_CONFIG_PATH`                                       | Required only in OpenRouter mode; path to the role-profile JSON file (see below)                                                                                                                                                |
+| `VOICE_ENABLED`                                        | `true` shows the voice controls in the assistant rail (default `false`); see "Voice control (optional)"                                                                                                                         |
+| `VOICE_CONFIG_PATH`                                    | Required only for live voice; path to the speech-profile JSON file                                                                                                                                                              |
+| `OPENROUTER_STT_API_KEY`                               | Required only for live speech-to-text; a **separate** OpenRouter key restricted to Groq — never the shared `OPENROUTER_API_KEY`                                                                                                 |
+| `MAX_LLM_CALLS_PER_TRIP` / `MAX_LLM_COST_USD_PER_TRIP` | Bounded AI usage (defaults 40 calls / 1.00 USD)                                                                                                                                                                                 |
+| `MAP_TILE_URL`                                         | Optional `{z}/{x}/{y}` tile URL template for the itinerary map; unset → labeled SVG fallback (see below)                                                                                                                        |
 
 Secrets stay on the server. They are never placed in `NEXT_PUBLIC_*` and never sent to the browser;
 `npm run build` scans the client bundle to confirm this.
@@ -288,25 +291,27 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
     "allowedEndpointProviderIds": ["openai"]
   },
   "recommendation": { "...": "same shape" },
-  "planner": { "...": "same shape, e.g. timeoutMs 30000 / maxOutputTokens 2048 / maxCallCostUsd 0.20" },
+  "planner": {
+    "...": "same shape, e.g. timeoutMs 30000 / maxOutputTokens 2048 / maxCallCostUsd 0.20"
+  },
   "reviewer": { "...": "same shape" }
 }
 ```
 
-| Field | Rule |
-| --- | --- |
-| `provider` | Must be `"openrouter"` |
-| `model` | Exact OpenRouter model id (`author/slug`) |
-| `reasoningEffort` | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint |
-| `temperature` | Optional, 0–2 |
-| `timeoutMs` | 1000–45000; keep below the worker operation lease (default 60 s) |
-| `maxInputTokens` | ≤ 6000 (whole role input cap, history included) |
-| `maxOutputTokens` | Role output cap (defaults: 1024; planner 2048) |
-| `maxAttempts` | 1–2 (the adapter owns at most one repair/retry; never stacked) |
-| `maxCallCostUsd` | Worst-case per-call ceiling in USD; the tool refuses a profile whose worst case exceeds it |
+| Field                                                                    | Rule                                                                                                                               |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`                                                               | Must be `"openrouter"`                                                                                                             |
+| `model`                                                                  | Exact OpenRouter model id (`author/slug`)                                                                                          |
+| `reasoningEffort`                                                        | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint                          |
+| `temperature`                                                            | Optional, 0–2                                                                                                                      |
+| `timeoutMs`                                                              | 1000–45000; keep below the worker operation lease (default 60 s)                                                                   |
+| `maxInputTokens`                                                         | ≤ 6000 (whole role input cap, history included)                                                                                    |
+| `maxOutputTokens`                                                        | Role output cap (defaults: 1024; planner 2048)                                                                                     |
+| `maxAttempts`                                                            | 1–2 (the adapter owns at most one repair/retry; never stacked)                                                                     |
+| `maxCallCostUsd`                                                         | Worst-case per-call ceiling in USD; the tool refuses a profile whose worst case exceeds it                                         |
 | `inputPriceUsdPerMillion`, `outputPriceUsdPerMillion`, `requestPriceUsd` | **Verified upper bounds** (USD); must be ≥ every matched endpoint's published rate, otherwise the call fails closed before billing |
-| `pricingVersion` | Machine-managed pin; leave `"unverified"` and let `ai:validate-models` stamp the manifest version |
-| `allowedEndpointProviderIds` | Endpoint provider slugs (OpenRouter `tag`) allowed to serve the calls; fallback is disabled |
+| `pricingVersion`                                                         | Machine-managed pin; leave `"unverified"` and let `ai:validate-models` stamp the manifest version                                  |
+| `allowedEndpointProviderIds`                                             | Endpoint provider slugs (OpenRouter `tag`) allowed to serve the calls; fallback is disabled                                        |
 
 ### Setting it up (first run)
 
@@ -322,11 +327,11 @@ npm run ai:validate-models
 model, writes the verified manifest to `$AI_CONFIG_PATH.capabilities.json`, stamps the manifest's
 `pricingVersion` into the profiles, and asserts every role profile. Failures are actionable:
 
-- *no endpoint from the allowed providers; available: …* → put one of the listed slugs into
+- _no endpoint from the allowed providers; available: …_ → put one of the listed slugs into
   `allowedEndpointProviderIds` (slugs without "no structured outputs").
-- *configure at least X* → raise the matching price field to `X` (published worst case for the shown
+- _configure at least X_ → raise the matching price field to `X` (published worst case for the shown
   model).
-- *HTTP 404* → the model id does not exist on OpenRouter.
+- _HTTP 404_ → the model id does not exist on OpenRouter.
 
 The worker also refreshes the manifest automatically when the cache is missing, stale (> 24 h), or does
 not cover the configured models. A model whose capability or pricing is unknown is never called.
@@ -367,6 +372,82 @@ the example ceilings.
   working); a graceful shutdown is the exception and leaves the operation recoverable.
 - Prompts, raw model output, and reasoning are never persisted for display; only safe telemetry (role,
   model, prompt-version label, tokens, latency, cost status) is projected.
+
+## Voice control (optional)
+
+Voice control is opt-in and off by default (`VOICE_ENABLED=true` shows the Dictate controls in the
+assistant rail). The graphical and keyboard app is complete without it.
+
+- **Fixture mode (`AI_MODE=fixture`, the default).** Dictation returns the scripted test transcript and
+  spoken replies return generated test WAV audio: no credentials, no profile file, no network egress, and
+  zero billable rows. Fixture audio is test audio — it is not proof of live TTS.
+- **Live mode (`AI_MODE=openrouter`).** Requires `VOICE_CONFIG_PATH` and the **dedicated**
+  `OPENROUTER_STT_API_KEY`. Missing live configuration is an explicit voice-only `503`; the UI reports
+  voice as unavailable and typed chat keeps working (never a silent fallback to another key or model).
+
+### What `VOICE_CONFIG_PATH` is
+
+Path to a JSON file holding exactly two speech profiles (`stt`, `tts`) plus strict limits (60 s recording,
+2 MiB request / 8 MiB response audio, 2 000 transcript/reply characters, 60 calls and 1.00 USD per trip).
+Relative paths resolve from the repository root. Start from the committed template:
+
+```bash
+cp voice-profiles.example.json voice-profiles.json
+# optional: narrow the limits; the models, the groq STT endpoint, and the voice
+# alias are documented defaults and are enforced by the validator
+npm run voice:validate-models
+```
+
+`voice-profiles.json` and its generated cache are git-ignored. The validator fetches the public
+OpenRouter endpoint metadata, verifies the exact model ids/modalities/endpoint/billing units and exact
+pricing precision, writes `$VOICE_CONFIG_PATH.capabilities.json`, and stamps the verified
+`pricingVersion`. It validates **public metadata only**: the assigned-key policy and real serving/billing
+remain operator gates.
+
+### Dedicated Groq-restricted STT key (live mode)
+
+Speech-to-text must route only to Groq, and the OpenRouter speech API has no per-request provider pin, so
+the restriction lives on the key. Guardrails are managed per workspace
+(Workspaces → Default → Guardrails) and need organization-admin access:
+
+1. Create a **new inference key** for speech-to-text.
+2. Create a guardrail with a **provider allowlist of exactly `groq`** and a **model allowlist of exactly
+   `openai/whisper-large-v3-turbo`**.
+3. **Assign** that guardrail to the new key — a guardrail enforces nothing until it is assigned.
+4. Set only that key as `OPENROUTER_STT_API_KEY` and restart the web process.
+
+The shared `OPENROUTER_API_KEY` stays unrestricted for TTS/reasoning and is never used for STT. Native
+Groq/ElevenLabs credentials are not accepted anywhere; keys are server-side only, never in URLs, bodies,
+or the browser. Before treating live voice as enabled, verify the effective policy (a disallowed model
+must be refused) and the real serving/billing with a short non-sensitive recording.
+
+### Behavior and requirements
+
+- **Dictation only fills the draft.** Automatic completion (a two-second speech pause), manual _Stop
+  recording_, and the 60-second hard cap all transcribe into the composer; a longer pause may split the
+  question, so edit the draft or dictate more before sending. Sending always requires an explicit _Send_
+  click — voice never admits a command.
+- **Local VAD.** Speech detection runs in the browser with the pinned Silero model; the model, worklet,
+  and matching ONNX runtime files are served same-origin from `/voice-vad/` (prepared before web dev and
+  builds, licenses recorded in the generated `MANIFEST.json`; no CDN, no audio frames leave the device,
+  no VAD provider billing). If the detector cannot load, the UI says automatic stopping is unavailable
+  and manual recording still works.
+- **Replies.** "Read replies aloud" is per-tab and starts off; the first explicit Dictate enables it, and
+  turning it off later is respected. Playback starts in a user gesture; if autoplay stays blocked, a
+  _Play reply_ button appears. Only settled assistant replies are spoken — never cards, history, or your
+  own text.
+- **Browser prerequisites.** Microphone capture needs a secure context (https or localhost) and
+  permission; an unsupported browser shows the unsupported copy and typed chat remains.
+- **Separate accounting.** Voice calls are tracked in their own `voice_calls` ledger (USD plus
+  seconds/characters); they never count as LLM calls and never change trip revisions, decisions, or
+  bookings.
+- **Current verification status.** Fixture-mode behavior is covered by the unit/integration/E2E suites
+  (unit 504, voice integration 24, voice E2E 14 desktop / 13 mobile, plus the affected regressions). A
+  provider-level live smoke ran on 2026-10-15: real transcript from a short synthetic recording, Groq
+  serving evidence with the documented 10-second minimum (`usage.seconds = 10`), and an ElevenLabs
+  `eleven-v4-turbo-20260930` MP3 at the expected cost. Still pending: the assigned-guardrail
+  effective-policy proof, the full in-app live flow, audible listening, and real mobile/Safari/Firefox
+  behavior.
 
 ## Database safety
 

@@ -4,30 +4,30 @@ This document is the authoritative home for session/security controls, ownership
 
 ## 1. Trust Model and Data Classes
 
-| Class | Examples | Trust |
-| --- | --- | --- |
-| Server secrets | database URL, session HMAC key, OpenRouter key | Never client-visible; environment only |
-| Public configuration | uncredentialed tile URL, provenance/display flags | Validated safe projection; tile URLs necessarily reach the browser |
-| Server-validated inputs | command schemas, decision responses, revision | Untrusted until Zod + domain checks pass |
-| User-provided text | chat message, first name | Untrusted; rendered as text, never HTML/executable |
-| LLM output | intent, ranking, schedule/review proposals | Untrusted; schema-validated proposal only, never authority |
-| Synthetic domain data | offers, prices, schedules, references | Application-generated, clearly labeled demo |
-| External tiles | OSM raster tiles | Optional, cross-origin, policy-bound; failure degrades to fallback |
+| Class                   | Examples                                          | Trust                                                              |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
+| Server secrets          | database URL, session HMAC key, OpenRouter key    | Never client-visible; environment only                             |
+| Public configuration    | uncredentialed tile URL, provenance/display flags | Validated safe projection; tile URLs necessarily reach the browser |
+| Server-validated inputs | command schemas, decision responses, revision     | Untrusted until Zod + domain checks pass                           |
+| User-provided text      | chat message, first name                          | Untrusted; rendered as text, never HTML/executable                 |
+| LLM output              | intent, ranking, schedule/review proposals        | Untrusted; schema-validated proposal only, never authority         |
+| Synthetic domain data   | offers, prices, schedules, references             | Application-generated, clearly labeled demo                        |
+| External tiles          | OSM raster tiles                                  | Optional, cross-origin, policy-bound; failure degrades to fallback |
 
 There is no user registration or login. Anonymous sessions still enforce ownership, and every trip-scoped read/write is authorized against the owning session.
 
 ### Principal threats and controls
 
-| Threat | Control | Evidence |
-| --- | --- | --- |
-| Session token theft (XSS, logs) | HttpOnly cookie, no token in JS/logs/URLs, CSP, hashed storage | Cookie-matrix and bundle/log redaction tests |
-| CSRF from another origin | Exact-origin check plus per-session CSRF header | Missing/foreign origin and missing-token tests |
-| IDOR / trip probing | Per-trip session ownership; uniform 404 | Foreign-trip access tests |
-| Replay / duplicate booking | Request IDs, effect keys, one-active-reservation index | Duplicate-confirmation and crash-replay tests |
-| Prompt injection or forged approval | Typed commands only; booking/confirm actions are decisions, never model output | Adversarial chat tests; no model-emittable confirmation |
-| Cost abuse / call storms | PostgreSQL rate limits plus per-trip LLM call/cost caps | 429 matrix and LLM cap tests |
-| Secret leakage | Server-only env, least-privilege DB role, redaction, bundle scan | Production-build secret scan |
-| Tile-policy abuse | Attribution, referer, caching, no prefetch/offline packs ([08 Frontend UX](08-frontend-ux.md) section 9) | Map policy checks |
+| Threat                              | Control                                                                                                  | Evidence                                                |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Session token theft (XSS, logs)     | HttpOnly cookie, no token in JS/logs/URLs, CSP, hashed storage                                           | Cookie-matrix and bundle/log redaction tests            |
+| CSRF from another origin            | Exact-origin check plus per-session CSRF header                                                          | Missing/foreign origin and missing-token tests          |
+| IDOR / trip probing                 | Per-trip session ownership; uniform 404                                                                  | Foreign-trip access tests                               |
+| Replay / duplicate booking          | Request IDs, effect keys, one-active-reservation index                                                   | Duplicate-confirmation and crash-replay tests           |
+| Prompt injection or forged approval | Typed commands only; booking/confirm actions are decisions, never model output                           | Adversarial chat tests; no model-emittable confirmation |
+| Cost abuse / call storms            | PostgreSQL rate limits plus per-trip LLM call/cost caps                                                  | 429 matrix and LLM cap tests                            |
+| Secret leakage                      | Server-only env, least-privilege DB role, redaction, bundle scan                                         | Production-build secret scan                            |
+| Tile-policy abuse                   | Attribution, referer, caching, no prefetch/offline packs ([08 Frontend UX](08-frontend-ux.md) section 9) | Map policy checks                                       |
 
 ## 2. Sessions and Cookies
 
@@ -35,13 +35,13 @@ There is no user registration or login. Anonymous sessions still enforce ownersh
 - Stored form: the database never stores the raw token. `anonymous_sessions` stores an HMAC-SHA-256 hash (keyed with `SESSION_HMAC_KEY`, itself a fresh >= 256-bit server secret) and a separate hashed CSRF token ([04 Domain Model](04-domain-model.md) section 9).
 - Cookie flags (no `Domain` attribute is set for the single-host deployment):
 
-| Attribute | Production | Local development |
-| --- | --- | --- |
-| `HttpOnly` | true | true |
-| `Secure` | true (HTTPS required) | false only when `PUBLIC_BASE_URL` is an explicit localhost HTTP origin |
-| `SameSite` | `Lax` | `Lax` |
-| `Path` | `/` | `/` |
-| `Max-Age` | 30-day sliding | same |
+| Attribute  | Production            | Local development                                                      |
+| ---------- | --------------------- | ---------------------------------------------------------------------- |
+| `HttpOnly` | true                  | true                                                                   |
+| `Secure`   | true (HTTPS required) | false only when `PUBLIC_BASE_URL` is an explicit localhost HTTP origin |
+| `SameSite` | `Lax`                 | `Lax`                                                                  |
+| `Path`     | `/`                   | `/`                                                                    |
+| `Max-Age`  | 30-day sliding        | same                                                                   |
 
 - Lifetime: 30-day sliding expiry on session activity; expiry invalidates authorization but does not delete trip data before the retention cleanup in section 11.
 - Ordinary renewal preserves the session ID and cookie secret; it only extends expiry. Do not rotate the secret on each load/renewal and race concurrent tabs out of their owned trips.
@@ -53,16 +53,16 @@ Session lifecycle: create on first visit; renew on `POST /api/session` or accept
 
 Endpoint check matrix (`E` = enabled requirement):
 
-| Endpoint | Session | Origin + CSRF | Rate bucket | Additional validation |
-| --- | --- | --- | --- | --- |
-| `POST /api/session` | create | origin | session-create | HMAC-hashed storage |
-| `POST /api/trips` | E | E | trip-create | Zod welcome/destination contract; reference membership |
-| `GET /api/trips/:id` | E | read | read | Ownership; safe projection only |
-| `POST /api/trips/:id/commands` | E | E | commands | Revision, strict command union, preserve conflicts |
-| `POST /api/trips/:id/resume` | E | E | resume | Decision UUID, kind, interrupt binding, fingerprint, revision |
-| `POST /api/trips/:id/operations/:op/retry` | E | E | resume | Latest failed unfinished operation, stored-input identity, dedupe; no new business revision |
-| `GET /api/trips/:id/events` (SSE) | E | read | SSE | Ownership before replay; dedupe by event ID |
-| `POST /api/trips/:id/commands` (inspector simulation) | E | E | commands | `DEMO_CONTROLS_ENABLED` plus owned trip |
+| Endpoint                                              | Session | Origin + CSRF | Rate bucket    | Additional validation                                                                       |
+| ----------------------------------------------------- | ------- | ------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| `POST /api/session`                                   | create  | origin        | session-create | HMAC-hashed storage                                                                         |
+| `POST /api/trips`                                     | E       | E             | trip-create    | Zod welcome/destination contract; reference membership                                      |
+| `GET /api/trips/:id`                                  | E       | read          | read           | Ownership; safe projection only                                                             |
+| `POST /api/trips/:id/commands`                        | E       | E             | commands       | Revision, strict command union, preserve conflicts                                          |
+| `POST /api/trips/:id/resume`                          | E       | E             | resume         | Decision UUID, kind, interrupt binding, fingerprint, revision                               |
+| `POST /api/trips/:id/operations/:op/retry`            | E       | E             | resume         | Latest failed unfinished operation, stored-input identity, dedupe; no new business revision |
+| `GET /api/trips/:id/events` (SSE)                     | E       | read          | SSE            | Ownership before replay; dedupe by event ID                                                 |
+| `POST /api/trips/:id/commands` (inspector simulation) | E       | E             | commands       | `DEMO_CONTROLS_ENABLED` plus owned trip                                                     |
 
 ## 3. Ownership and Authorization
 
@@ -85,15 +85,15 @@ Endpoint check matrix (`E` = enabled requirement):
 
 Rate-limit buckets live in `rate_limit_buckets`, keyed by an HMAC of session ID (or IP for pre-session endpoints) plus endpoint class, with atomic increment/expiry. No Redis is introduced.
 
-| Bucket | Initial limit | Failure mode |
-| --- | --- | --- |
-| Session create/renew | 10/hour per IP hash | Fail closed (429) |
-| Reference search (countries/cities/airports) | 60/minute per session | Fail open with static client cache |
-| Trip commands (UI or chat) | 30/minute per trip | Fail closed |
-| Decision resume | 20/minute per trip | Fail closed |
-| Chat messages triggering LLM calls | 10/minute per trip plus the per-trip LLM caps ([02 Architecture](02-architecture.md) section 9) | Fail closed |
-| SSE connect/reconnect | 30/minute per trip | Fail closed |
-| Trip creation | 5/hour per IP hash | Fail closed |
+| Bucket                                       | Initial limit                                                                                   | Failure mode                       |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Session create/renew                         | 10/hour per IP hash                                                                             | Fail closed (429)                  |
+| Reference search (countries/cities/airports) | 60/minute per session                                                                           | Fail open with static client cache |
+| Trip commands (UI or chat)                   | 30/minute per trip                                                                              | Fail closed                        |
+| Decision resume                              | 20/minute per trip                                                                              | Fail closed                        |
+| Chat messages triggering LLM calls           | 10/minute per trip plus the per-trip LLM caps ([02 Architecture](02-architecture.md) section 9) | Fail closed                        |
+| SSE connect/reconnect                        | 30/minute per trip                                                                              | Fail closed                        |
+| Trip creation                                | 5/hour per IP hash                                                                              | Fail closed                        |
 
 Exceeded limits return `429` with `Retry-After`; counters never replace domain checks. Rejections use redacted server log events with hashed identifiers, not writes into a foreign trip's execution ledger. Reference cache fallback serves only public offline records. Isolate test buckets/databases per suite rather than claiming tests passed with security disabled.
 
@@ -113,7 +113,7 @@ Exceeded limits return `429` with `Retry-After`; counters never replace domain c
 - Logs redact cookies, CSRF tokens, `DATABASE_URL`, API keys, and full headers; errors returned to the browser use the safe envelope `{ code, message, retryable, currentRevision?, operationId? }`, never raw provider or database exceptions.
 - Production uses HTTPS, secure cookies, an explicit `PUBLIC_BASE_URL`, and a least-privilege database role. Local `.env` files are ignored; `.env.example` holds placeholders only.
 - Demo controls default off outside explicit local/demo deployment and require the flag plus an owned trip. `MAP_TILE_URL` is optional public configuration, never a place for a secret; reject credentialed URLs and invalid/non-HTTPS production schemes.
-- Prompt versions and model IDs are server configuration; the inspector may display role/model labels and prompt *version identifiers*, but never prompt text.
+- Prompt versions and model IDs are server configuration; the inspector may display role/model labels and prompt _version identifiers_, but never prompt text.
 - Client bundle exposure check: the production build is scanned to prove that no server secret, `DATABASE_URL`, `OPENROUTER_API_KEY`, `pg`, or LangGraph server module is present in client chunks; only public display flags reach the browser.
 - Rendered assistant output is plain text with no HTML, no script, and no client-side markdown execution; any link is server-generated and allowlisted.
 
@@ -125,20 +125,20 @@ Forbidden, without exception: prompt text, raw model output beyond validated str
 
 ## 9. Error Taxonomy and Client Semantics
 
-| Class | HTTP | Behavior |
-| --- | --- | --- |
-| Schema/validation | 400 | No state change; field-level message |
-| CSRF/origin failure | 403 | No state change |
-| Body too large | 413 | No state change |
-| Stale revision | 409 `STALE_REVISION` | UI refreshes; command is not replayed |
-| Operation in progress | 409 `OPERATION_IN_PROGRESS` | UI waits for current operation |
-| Unfinished failed checkpoint | 409 `RECOVERY_REQUIRED` | Retry the same operation through the technical control; preserve unsent ordinary input |
-| Stale/expired decision | 409 `STALE_DECISION` | Refresh projection; no resume executed |
-| Rate limit | 429 | `Retry-After`, safe message |
-| Ownership | 404 | Uniform body |
-| Simulated provider fault | 200 projection/event | Labeled `Simulated failure`; not an incident |
-| Dependency unavailable | 502/503 | Retryable envelope; operation remains durable |
-| Internal | 500 | Safe message; operation marked failed with recovery path |
+| Class                        | HTTP                        | Behavior                                                                               |
+| ---------------------------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| Schema/validation            | 400                         | No state change; field-level message                                                   |
+| CSRF/origin failure          | 403                         | No state change                                                                        |
+| Body too large               | 413                         | No state change                                                                        |
+| Stale revision               | 409 `STALE_REVISION`        | UI refreshes; command is not replayed                                                  |
+| Operation in progress        | 409 `OPERATION_IN_PROGRESS` | UI waits for current operation                                                         |
+| Unfinished failed checkpoint | 409 `RECOVERY_REQUIRED`     | Retry the same operation through the technical control; preserve unsent ordinary input |
+| Stale/expired decision       | 409 `STALE_DECISION`        | Refresh projection; no resume executed                                                 |
+| Rate limit                   | 429                         | `Retry-After`, safe message                                                            |
+| Ownership                    | 404                         | Uniform body                                                                           |
+| Simulated provider fault     | 200 projection/event        | Labeled `Simulated failure`; not an incident                                           |
+| Dependency unavailable       | 502/503                     | Retryable envelope; operation remains durable                                          |
+| Internal                     | 500                         | Safe message; operation marked failed with recovery path                               |
 
 Trip operations return `202` with operation ID/revision; session creation/renewal returns `200`, and identical request replay returns its stored outcome/status. No `202` is rendered as success. A booking transaction is atomic, but a fully committed booking may precede checkpoint failure: display the saved booking and recovery-needed workflow honestly, never claim that the failed workflow had no domain effect.
 
@@ -154,14 +154,14 @@ Trip operations return `202` with operation ID/revision; session creation/renewa
 
 ### Degraded modes
 
-| Degraded dependency | Behavior |
-| --- | --- |
-| OpenRouter unavailable (openrouter mode) | Affected operation fails with a safe retryable error after bounded attempts; deterministic wizard steps and fixture mode are unaffected |
-| Map tiles unavailable or blocked | Offline schematic map per [08 Frontend UX](08-frontend-ux.md) section 9; planning is unaffected |
-| SSE unavailable | Polling fallback via `GET /api/trips/:id`; operations are unaffected |
-| PostgreSQL unavailable | Writes fail with a safe retryable error and no partial booking; the worker stops claiming while writes fail |
-| Worker stopped or crashed | Commands still queue (`202`) and display as `queued`; after restart, lease expiry recovers the same operations |
-| Checkpointer schema missing or incompatible | Readiness check fails; the worker does not claim; run the explicit setup/migration procedure |
+| Degraded dependency                         | Behavior                                                                                                                                |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenRouter unavailable (openrouter mode)    | Affected operation fails with a safe retryable error after bounded attempts; deterministic wizard steps and fixture mode are unaffected |
+| Map tiles unavailable or blocked            | Offline schematic map per [08 Frontend UX](08-frontend-ux.md) section 9; planning is unaffected                                         |
+| SSE unavailable                             | Polling fallback via `GET /api/trips/:id`; operations are unaffected                                                                    |
+| PostgreSQL unavailable                      | Writes fail with a safe retryable error and no partial booking; the worker stops claiming while writes fail                             |
+| Worker stopped or crashed                   | Commands still queue (`202`) and display as `queued`; after restart, lease expiry recovers the same operations                          |
+| Checkpointer schema missing or incompatible | Readiness check fails; the worker does not claim; run the explicit setup/migration procedure                                            |
 
 ## 11. Privacy, Retention, and Data Hygiene
 
@@ -184,3 +184,13 @@ Specified for [11 Testing](11-testing-strategy.md) and scheduled by [12 Roadmap]
 - Recovery: worker restart at a pending decision resumes the exact decision; duplicate confirmation after a crash creates one reservation; stale route approval cannot be reused after a city change.
 - Redaction: inspector DOM/events contain no prompts, reasoning, provider payloads, SQL, secrets, or cookies; client bundles contain no server secrets or `pg`/LangGraph server modules.
 - No-payment invariant: no payment provider package, endpoint, or record exists; the booking service cannot construct a payment intent.
+
+## Voice security and reliability addendum (2026-10-15)
+
+- **Guarded speech routes.** All three voice routes run the standard guard chain (Origin -> session -> CSRF -> rate bucket: `voice:stt` 10/min, `voice:tts` 20/min) before any transport; trips and messages are looked up server-side (owned trip, same-trip settled operation) with a uniform 404 that never leaks existence. Rejected input classes perform zero provider calls.
+- **Byte and duration caps.** The transcription body is read with a hard 2 MiB stream cap (cancel on overflow, `Content-Length` never trusted); the JSON cap stays 64 KiB. Only canonical 16 kHz mono PCM WAV is accepted (strict header/length/sample validation) and the profile's recording-duration limit is enforced before any billable transport; TTS responses are capped at 8 MiB and content-type checked.
+- **Ephemeral audio policy.** No audio bytes, transcripts, or TTS text are persisted or logged; the ledger stores only safe accounting fields. The browser discards recorder chunks after transcription and keeps at most one decoded reply buffer for the _Play reply_ gesture.
+- **Private responses.** Every voice response carries `Cache-Control: no-store` and `Vary: Cookie`; raw audio responses forward no upstream headers. Keys are server-side only, never in URLs, bodies, or the browser.
+- **Unknown-billing behavior.** Timeout/transport/abort and ambiguous upstream failures retain the reservation (`unknown_reserved`); only explicit operator reconciliation with verified billing evidence settles it, and failures that provably never reached the provider close as `failed` with the reservation retained.
+- **Key/allowlist runbook (operator).** Create a separate inference key; create a guardrail with provider allowlist exactly `groq` and model allowlist exactly `openai/whisper-large-v3-turbo`; **assign** it to the key (a guardrail enforces nothing until assigned); set only that key as `OPENROUTER_STT_API_KEY`; verify the effective policy with a disallowed-model attempt before enabling live voice. Failure behavior is a voice-only 503 - never a silent fallback or key substitution. Effective-policy verification is currently pending guardrail assignment.
+- **Local VAD assets and redaction tests.** The Silero model, worklet, and ONNX runtime files are same-origin only (`/voice-vad/`, licenses recorded in the generated MANIFEST); no raw audio frames leave the device; CSP is unchanged because the verified integration needs no external CDN. Redaction is pinned by T-UT-VOICE-12 (event whitelist), the inspector integration test (no content/fingerprints/generation ids), and the client-bundle token scan (`OPENROUTER_STT_API_KEY`, `VOICE_CONFIG_PATH`, `VOICE_ENABLED`, `voice-profiles.json`).

@@ -11,6 +11,9 @@ speech.
   Drives the timing tests: the 2.65 s initial silence must not stop an
   unconfirmed recording; the 1.25 s internal pause is below the 2 s threshold;
   the trailing silence must complete exactly one dictation.
+- `live-smoke-16k.wav` — 16 kHz mono PCM16, 4.85 s: the two phrases (2.60–7.45 s)
+  resampled to the canonical upload format. Used by the credential-gated live
+  speech smoke (T-LIVE-VOICE-01); never uploaded by CI.
 
 Provenance: rendered offline with `meSpeak.js` (eSpeak heritage, GPL-3.0; used
 only as a local generator, NOT a project or runtime dependency) using the

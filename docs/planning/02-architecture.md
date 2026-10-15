@@ -63,16 +63,16 @@ Use npm workspaces and a single committed lockfile. Do not introduce Nx or Turbo
 
 ## 4. Dependency Boundaries
 
-| Module | Responsibility | Forbidden responsibility |
-| --- | --- | --- |
-| contracts | Runtime schemas, command/decision/API contracts | Database clients, secret configuration, LLM SDKs |
-| domain | Deterministic business rules and typed errors | LLM calls, browser state, graph scheduling |
-| data | Reference lookup, seeded generation, provider implementations | Booking mutations, user approval |
-| ai | Intent interpretation, explanations, candidate ordering, planning/review proposals | SQL writes, invented offers, executable arbitrary operations |
-| persistence | SQL, atomic booking commits, immutable artifacts, operation/event ledger | Making itinerary or AI decisions |
-| workflow | Orchestration, routing, parallelism, interrupts, bounded retries | Reimplementing pricing, authorization, feasibility, or booking rules |
-| web | Session/ownership checks, validation, command admission, responsive UI | Calling OpenRouter from the browser, running graph jobs inline |
-| worker | Exclusive trip execution, recovery, checkpoint driving | Public authentication endpoints, new business rules |
+| Module      | Responsibility                                                                     | Forbidden responsibility                                             |
+| ----------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| contracts   | Runtime schemas, command/decision/API contracts                                    | Database clients, secret configuration, LLM SDKs                     |
+| domain      | Deterministic business rules and typed errors                                      | LLM calls, browser state, graph scheduling                           |
+| data        | Reference lookup, seeded generation, provider implementations                      | Booking mutations, user approval                                     |
+| ai          | Intent interpretation, explanations, candidate ordering, planning/review proposals | SQL writes, invented offers, executable arbitrary operations         |
+| persistence | SQL, atomic booking commits, immutable artifacts, operation/event ledger           | Making itinerary or AI decisions                                     |
+| workflow    | Orchestration, routing, parallelism, interrupts, bounded retries                   | Reimplementing pricing, authorization, feasibility, or booking rules |
+| web         | Session/ownership checks, validation, command admission, responsive UI             | Calling OpenRouter from the browser, running graph jobs inline       |
+| worker      | Exclusive trip execution, recovery, checkpoint driving                             | Public authentication endpoints, new business rules                  |
 
 Browser imports are limited to public contracts and UI-safe pure helpers. Mark web database/configuration modules server-only and verify that production client bundles do not contain secrets or `pg`/LangGraph server dependencies.
 
@@ -143,19 +143,19 @@ Effect scopes include proposal ID or itinerary attempt where one node can intent
 
 The BFF reads domain projections. The worker publishes structured, persisted execution events. Do not scrape private graph internals or expose prompts, credentials, raw SQL, or chain-of-thought.
 
-| Route | Contract |
-| --- | --- |
-| `POST /api/session` | Create/renew anonymous session; return CSRF token and expiry |
-| `GET /api/reference/countries?q=` | Offline admitted-country search |
-| `GET /api/reference/cities?country=&q=&cursor=` | Offline city search with coverage flags |
-| `GET /api/reference/airports?q=&cursor=` | Offline European origin autocomplete |
-| `GET /api/reference/cities/:id/airports` | Suitable nearby/cross-border airports and estimated transfers |
-| `POST /api/trips` | Validate welcome/destination input and enqueue initialization |
-| `GET /api/trips/:id` | Authorized complete read projection, revision, active operation, pending decision |
-| `POST /api/trips/:id/commands` | Admit a strict UI command or bounded chat message |
-| `POST /api/trips/:id/resume` | Admit a response to the exact current decision |
-| `GET /api/trips/:id/events?after=` | SSE replay and live delivery of persisted events |
-| `GET /api/trips/:id/operations/:operationId` | Durable status, outcome, and safe error information |
+| Route                                               | Contract                                                                                     |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /api/session`                                 | Create/renew anonymous session; return CSRF token and expiry                                 |
+| `GET /api/reference/countries?q=`                   | Offline admitted-country search                                                              |
+| `GET /api/reference/cities?country=&q=&cursor=`     | Offline city search with coverage flags                                                      |
+| `GET /api/reference/airports?q=&cursor=`            | Offline European origin autocomplete                                                         |
+| `GET /api/reference/cities/:id/airports`            | Suitable nearby/cross-border airports and estimated transfers                                |
+| `POST /api/trips`                                   | Validate welcome/destination input and enqueue initialization                                |
+| `GET /api/trips/:id`                                | Authorized complete read projection, revision, active operation, pending decision            |
+| `POST /api/trips/:id/commands`                      | Admit a strict UI command or bounded chat message                                            |
+| `POST /api/trips/:id/resume`                        | Admit a response to the exact current decision                                               |
+| `GET /api/trips/:id/events?after=`                  | SSE replay and live delivery of persisted events                                             |
+| `GET /api/trips/:id/operations/:operationId`        | Durable status, outcome, and safe error information                                          |
 | `POST /api/trips/:id/operations/:operationId/retry` | Explicit bounded technical recovery of the same unfinished operation, not new business input |
 
 All endpoints use Zod. Existing-trip business/decision/control writes use `requestId` and `expectedRevision`; creation has no existing revision and session bootstrap is a separate origin-protected contract. Responses distinguish accepted/waiting/succeeded/failed. HTTP errors use `{ code, message, retryable, currentRevision?, operationId? }`, never raw provider exceptions.
@@ -168,21 +168,21 @@ Next.js routes using the database/SSE run in the Node.js runtime, not Edge. SSE 
 
 Validate configuration at startup and fail with actionable errors. Configuration is server-side, with only safe display flags exposed through the read projection.
 
-| Setting | Rule/default |
-| --- | --- |
-| `DATABASE_URL` | Required server secret; never log it |
-| `PUBLIC_BASE_URL` | Exact origin used by cookie/CSRF checks |
-| `SESSION_HMAC_KEY` | Required random server secret, no built-in production value |
-| `AI_MODE` | `fixture` by default; `openrouter` requires valid role profiles and credentials |
-| `OPENROUTER_API_KEY` | Required only in OpenRouter mode |
-| `AI_CONFIG_PATH` | Server-only JSON role profiles; see [AI design](06-ai-agent-design.md) |
-| `MAX_PLANNING_ATTEMPTS` | 3 total attempts, not 3 additional retries |
-| `MAX_PROVIDER_ATTEMPTS` | 2 total attempts per affected domain per operation |
-| `MAX_LLM_CALLS_PER_TRIP` | 40 attempted billable calls including retries |
-| `MAX_LLM_COST_USD_PER_TRIP` | 1.00 default; reserve estimated worst-case cost before calls |
-| `DEMO_CONTROLS_ENABLED` | Enabled locally; disabled by default outside demo deployment |
-| `MAP_TILE_URL` | Optional policy-compliant tile source; no tiles means offline fallback |
-| `WORKER_CONCURRENCY` | 2 trips; never concurrent invocations of one trip |
+| Setting                     | Rule/default                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `DATABASE_URL`              | Required server secret; never log it                                            |
+| `PUBLIC_BASE_URL`           | Exact origin used by cookie/CSRF checks                                         |
+| `SESSION_HMAC_KEY`          | Required random server secret, no built-in production value                     |
+| `AI_MODE`                   | `fixture` by default; `openrouter` requires valid role profiles and credentials |
+| `OPENROUTER_API_KEY`        | Required only in OpenRouter mode                                                |
+| `AI_CONFIG_PATH`            | Server-only JSON role profiles; see [AI design](06-ai-agent-design.md)          |
+| `MAX_PLANNING_ATTEMPTS`     | 3 total attempts, not 3 additional retries                                      |
+| `MAX_PROVIDER_ATTEMPTS`     | 2 total attempts per affected domain per operation                              |
+| `MAX_LLM_CALLS_PER_TRIP`    | 40 attempted billable calls including retries                                   |
+| `MAX_LLM_COST_USD_PER_TRIP` | 1.00 default; reserve estimated worst-case cost before calls                    |
+| `DEMO_CONTROLS_ENABLED`     | Enabled locally; disabled by default outside demo deployment                    |
+| `MAP_TILE_URL`              | Optional policy-compliant tile source; no tiles means offline fallback          |
+| `WORKER_CONCURRENCY`        | 2 trips; never concurrent invocations of one trip                               |
 
 Local `.env` files are ignored. `.env.example` contains names and placeholders, not real keys. Production requires HTTPS, secure cookies, explicit origin, and a least-privilege database role.
 
@@ -225,3 +225,15 @@ Container startup uses PostgreSQL health checks and an explicit migration/setup 
 - [Synthetic data](05-synthetic-data-design.md): geography, timing, pricing, snapshots.
 - [Security](10-security-reliability.md): admission, rate limits, untrusted text, ownership.
 - [Roadmap](12-implementation-roadmap.md): dependencies and phase gates.
+
+## Voice control addendum (2026-10-15)
+
+Optional speech runs **browser -> owned BFF -> OpenRouter speech endpoints**; it is never a direct provider call and never a graph invocation.
+
+- **Routes (three).** `GET /api/trips/[id]/voice/capabilities` (safe availability DTO), `POST .../voice/transcribe` (raw canonical WAV, 2 MiB cap, `X-Voice-Request-Id`), `POST .../voice/synthesize` (`{requestId, messageId}`, raw MP3 back). All Node-runtime, owned-trip, private (`no-store`, `Vary: Cookie`).
+- **Package ownership.** Contracts (`packages/contracts/src/voice.ts`: strict profile/capabilities/transcription/synthesis/telemetry schemas, `VOICE_DEFAULT_LIMITS`); `@odft/ai` (speech config loader, capability snapshot + per-call tariff recheck, exact-arithmetic costs, fixture/OpenRouter adapters); persistence (`voice_calls` ledger + migration `0012-voice`, atomic `conversation.message_added`); web (`voice-service.ts`, `voice-routes.ts`, browser capture/playback/selection in `apps/web/src/lib`).
+- **Dedicated STT key.** `OPENROUTER_STT_API_KEY` is a separate inference key restricted to Groq by an **assigned** guardrail (provider allowlist exactly `groq`, model allowlist exactly `openai/whisper-large-v3-turbo`); the shared `OPENROUTER_API_KEY` stays for TTS/reasoning and is never a substitute. Assigned-policy verification is an operator gate.
+- **Optional configuration.** `VOICE_ENABLED` defaults to `false`; fixture mode needs no credentials and no profile; live mode requires `VOICE_CONFIG_PATH` plus the dedicated key and fails closed with a voice-only 503, never blocking unrelated routes.
+- **Separate voice budget.** The `voice_calls` ledger reserves USD before transport (60 s / 2 MiB / 2 000 chars / 60 calls / 1.00 USD defaults) independently of the 40-call / 1.00 USD LLM budget; uncertain charges are retained until explicit reconciliation.
+- **No business revision, no graph involvement.** Successful speech changes no trip revision, decision, reservation, or booking, and never touches graph checkpoints; inserted messages emit exactly one atomic `conversation.message_added` event.
+- **Browser-local VAD (FR-VOICE-14).** The pinned Silero detector runs in the browser with **self-hosted, same-origin assets** (`/voice-vad/`: model, worklet, matching ONNX `.wasm`/`.mjs`, prepared by `predev`/`prebuild`, licenses in the generated MANIFEST); no CDN, no raw audio frames leave the device, and there is **no VAD provider billing**.

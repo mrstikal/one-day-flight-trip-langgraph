@@ -19,16 +19,16 @@ Direction: a warm travel journal: cream paper, ink text, teal accent, restrained
 - Headings: Georgia, `"Times New Roman"`, serif (`--font-serif`). Body/UI: Roboto webfont with system-sans fallback (`system-ui`, `-apple-system`, `"Segoe UI"`, `sans-serif`). Roboto is loaded with `next/font/google` in the root layout (`variable: "--font-roboto"` on `<html>`) and wired as the `--font-sans` token (`var(--font-roboto), …`); assets are self-hosted, so there is no runtime font CDN.
 - Core tokens (fixed initial values; verify contrast in Phase 01, changing only a pair that demonstrably fails):
 
-| Token | Role | Value |
-| --- | --- | --- |
-| `--color-cream` | page background | `#FAF6EC` |
-| `--color-paper` | cards, sheets | `#FFFDF7` |
-| `--color-ink` | primary text | `#1F2A2E` |
-| `--color-ink-muted` | secondary text | `#566266` |
-| `--color-teal` | primary action/accent | `#0E6B6B` |
-| `--color-teal-strong` | hover/active, focus ring | `#0A4F4F` |
-| `--color-clay` | warnings, simulated-failure tags | `#8A4B2A` |
-| `--color-border` | hairlines | `#D9D2C2` |
+| Token                 | Role                             | Value     |
+| --------------------- | -------------------------------- | --------- |
+| `--color-cream`       | page background                  | `#FAF6EC` |
+| `--color-paper`       | cards, sheets                    | `#FFFDF7` |
+| `--color-ink`         | primary text                     | `#1F2A2E` |
+| `--color-ink-muted`   | secondary text                   | `#566266` |
+| `--color-teal`        | primary action/accent            | `#0E6B6B` |
+| `--color-teal-strong` | hover/active, focus ring         | `#0A4F4F` |
+| `--color-clay`        | warnings, simulated-failure tags | `#8A4B2A` |
+| `--color-border`      | hairlines                        | `#D9D2C2` |
 
 - Provenance labels are always text, not color alone: `Geographic reference`, `Demo offer`, `Simulated schedule/price`, `Approximate location`, `AI recommendation` (see [05 Synthetic data](05-synthetic-data-design.md)).
 - Motion: only short fades/slides; `prefers-reduced-motion: reduce` disables non-essential animation.
@@ -52,6 +52,7 @@ Direction: a warm travel journal: cream paper, ink text, teal accent, restrained
   **Simulated booking - not valid for travel, accommodation, or restaurant admission.**
 
   Both strings use the ASCII hyphen exactly as written; they are asserted verbatim by UI tests and are never translated or truncated.
+
 - Desktop (>= 1024 px): wizard content (8/12) and a persistent assistant rail (4/12, 360-400 px). The map lives in a tab/section beside the timeline.
 - Mobile (< 640 px): single column; the assistant collapses into a bottom sheet (Radix Dialog) opened from a sticky "Assistant" button; forms remain fully usable with one hand.
 - Offline/error states: a small persistent status area shows queued operations, connection loss, and SSE reconnection via polling fallback (see [02 Architecture](02-architecture.md) section 8).
@@ -60,19 +61,19 @@ Direction: a warm travel journal: cream paper, ink text, teal accent, restrained
 
 Routes below match the brief's Step 0-10. Welcome/country/city are a local draft before the first trip exists; once the trip exists the same two routes render its recorded values read-only, and the record is kept in the tab's `sessionStorage`, so a page reload (also after using the Trip steps links) still shows the created trip's values instead of an empty new-trip form — `Start a new trip` clears the record (2026-10-14). After Step 2, `POST /api/trips` receives the complete validated input and `requestId`; a creation request has no existing trip revision. Existing-trip writes use the command/resume routes with `requestId` and `expectedRevision`. All trip reads use the authorized projection. The UI's screen headers carry a shared step indicator, `Step N of 8`, over the eight user-facing screens (details, destination, flights, hotel, meals, activities, itinerary, summary), derived from the shared step list in `apps/web/src/lib/trip-step.ts` — the same order the sticky step navigation renders, so the captions cannot drift from each other or from the nav. The brief's Step 0-10 numbering is the planning reference for routes, never a header label (2026-10-14).
 
-| Step | Route | Content and required controls |
-| --- | --- | --- |
-| 0 Welcome | `/` | First name (1-60 chars), sightseeing date, origin airport combobox, adults 1-6 (default 1), Travel Variant cards, default Service Level segmented control, Activity Pace segmented control, optional budget (party total, EUR) |
-| 1 Country | `/destination` before creation | Country search over the admitted manifest with coverage note |
-| 2 City | `/destination` before creation | City/airport coverage; submit complete welcome+destination draft to create the trip. Later route edits happen in place on the trip (`set_route` from the flights route-fix card or the assistant), not by re-entering this step (2026-10-14). |
-| 3 Flights | `/trips/[id]/flights` | Flight combination cards: airline, demo flight number, airports, local+UTC times, duration, stops, total travel time, party-total EUR, variant compatibility badge; select then confirm (`Confirm simulated booking` / `I don't want to book`) |
-| 4 Hotel | `/trips/[id]/hotel` | Hotel cards: category, rating, nights, party-total EUR, center distance, approximate anchor; hotel quality control (override) inline; select then confirm (`Confirm simulated booking` / `I don't want to book`); a settled hotel (confirmed or kept) offers `Change hotel`, which re-opens the refreshed choice (2026-10-14) |
-| 5 Meals | `/trips/[id]/meals` | Breakfast/lunch/dinner cards with per-meal level control; optional simulated reservation per meal; the saved program offers a per-meal `Change <meal>` action that re-opens the program choices with the refreshed offers (2026-10-14) |
-| 6 Activities | `/trips/[id]/activities` | Culture/Relaxation/Entertainment groups, interest sliders, pace display, tag filters, active requirement chips, live visit-time budget; visits are OPT-IN (2026-10-14) — the plan contains only pinned activities plus what satisfies the requirements, and the step states what the current plan already contains and marks planned/pinned cards |
-| 7-8 Itinerary | `/trips/[id]/itinerary` | Chronological timeline (meals, activities, breaks, transfers, buffers), validator errors/warnings, review notes, approval action; cost rows of an unbooked kept flight/hotel carry a `Not booked` badge |
-| 9 Modifications | any route + assistant | Same command schemas as the assistant; selective change previews |
-| 10 Summary | `/trips/[id]/summary` | Name, destination, dates, flights, hotel, meals, activities, timeline, map, party-total estimate, demo references, trip notes; `Not booked` selections with a booking action; stays editable through the assistant |
-| Inspector | `/trips/[id]/inspector` | Execution panel; see section 9 |
+| Step            | Route                          | Content and required controls                                                                                                                                                                                                                                                                                                                     |
+| --------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 Welcome       | `/`                            | First name (1-60 chars), sightseeing date, origin airport combobox, adults 1-6 (default 1), Travel Variant cards, default Service Level segmented control, Activity Pace segmented control, optional budget (party total, EUR)                                                                                                                    |
+| 1 Country       | `/destination` before creation | Country search over the admitted manifest with coverage note                                                                                                                                                                                                                                                                                      |
+| 2 City          | `/destination` before creation | City/airport coverage; submit complete welcome+destination draft to create the trip. Later route edits happen in place on the trip (`set_route` from the flights route-fix card or the assistant), not by re-entering this step (2026-10-14).                                                                                                     |
+| 3 Flights       | `/trips/[id]/flights`          | Flight combination cards: airline, demo flight number, airports, local+UTC times, duration, stops, total travel time, party-total EUR, variant compatibility badge; select then confirm (`Confirm simulated booking` / `I don't want to book`)                                                                                                    |
+| 4 Hotel         | `/trips/[id]/hotel`            | Hotel cards: category, rating, nights, party-total EUR, center distance, approximate anchor; hotel quality control (override) inline; select then confirm (`Confirm simulated booking` / `I don't want to book`); a settled hotel (confirmed or kept) offers `Change hotel`, which re-opens the refreshed choice (2026-10-14)                     |
+| 5 Meals         | `/trips/[id]/meals`            | Breakfast/lunch/dinner cards with per-meal level control; optional simulated reservation per meal; the saved program offers a per-meal `Change <meal>` action that re-opens the program choices with the refreshed offers (2026-10-14)                                                                                                            |
+| 6 Activities    | `/trips/[id]/activities`       | Culture/Relaxation/Entertainment groups, interest sliders, pace display, tag filters, active requirement chips, live visit-time budget; visits are OPT-IN (2026-10-14) — the plan contains only pinned activities plus what satisfies the requirements, and the step states what the current plan already contains and marks planned/pinned cards |
+| 7-8 Itinerary   | `/trips/[id]/itinerary`        | Chronological timeline (meals, activities, breaks, transfers, buffers), validator errors/warnings, review notes, approval action; cost rows of an unbooked kept flight/hotel carry a `Not booked` badge                                                                                                                                           |
+| 9 Modifications | any route + assistant          | Same command schemas as the assistant; selective change previews                                                                                                                                                                                                                                                                                  |
+| 10 Summary      | `/trips/[id]/summary`          | Name, destination, dates, flights, hotel, meals, activities, timeline, map, party-total estimate, demo references, trip notes; `Not booked` selections with a booking action; stays editable through the assistant                                                                                                                                |
+| Inspector       | `/trips/[id]/inspector`        | Execution panel; see section 9                                                                                                                                                                                                                                                                                                                    |
 
 Wizard rules:
 
@@ -108,16 +109,16 @@ flowchart TD
 
 Pace controls intensity, never category. A relaxed itinerary may be all museums; an intensive itinerary may be all parks. Targets are guidelines; duration templates and feasibility override raw counts. Metric names below are the values the deterministic planner and validator use (see [03 LangGraph](03-langgraph-design.md) section 4 and [05 Synthetic data](05-synthetic-data-design.md) section 9).
 
-| Metric | Relaxed | Moderate | Intensive |
-| --- | --- | --- | --- |
-| Target major activities (guideline only — visits are opt-in, 2026-10-14) | 2-3 | 3-5 | 5-7 |
-| Daily activity-visit time cap (sum of visit durations) | 240 min | 360 min | 480 min |
-| Rhythm break | 20 min seated after each activity | 10-15 min every ~2 h | 5-10 min as needed |
-| Long break | one 60-90 min block | one 30-45 min block | optional |
-| Breakfast / lunch / dinner duration | 60 / 90 / 120 min | 45 / 60 / 90 min | 30 / 45 / 60 min |
-| Estimated walking cap | 4 km/day, 1 km/leg | 7 km/day, 1.5 km/leg | 10 km/day, 2 km/leg |
-| Minimum inter-event transfer buffer | +20 min | +15 min | +10 min |
-| Physical-demand tolerance | no high-demand legs; avoid consecutive moderate legs | short high-demand legs allowed | high-demand legs allowed if feasible |
+| Metric                                                                   | Relaxed                                              | Moderate                       | Intensive                            |
+| ------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------ | ------------------------------------ |
+| Target major activities (guideline only — visits are opt-in, 2026-10-14) | 2-3                                                  | 3-5                            | 5-7                                  |
+| Daily activity-visit time cap (sum of visit durations)                   | 240 min                                              | 360 min                        | 480 min                              |
+| Rhythm break                                                             | 20 min seated after each activity                    | 10-15 min every ~2 h           | 5-10 min as needed                   |
+| Long break                                                               | one 60-90 min block                                  | one 30-45 min block            | optional                             |
+| Breakfast / lunch / dinner duration                                      | 60 / 90 / 120 min                                    | 45 / 60 / 90 min               | 30 / 45 / 60 min                     |
+| Estimated walking cap                                                    | 4 km/day, 1 km/leg                                   | 7 km/day, 1.5 km/leg           | 10 km/day, 2 km/leg                  |
+| Minimum inter-event transfer buffer                                      | +20 min                                              | +15 min                        | +10 min                              |
+| Physical-demand tolerance                                                | no high-demand legs; avoid consecutive moderate legs | short high-demand legs allowed | high-demand legs allowed if feasible |
 
 - Duration override: a long activity consumes the cap; e.g., two 120-minute museums fit relaxed but seven museums do not fit any pace. Seven 20-minute exterior landmarks fit intensive; six major museums at relaxed pace is a conflict, never silently reduced.
 - Luxury meals use the same meal-duration floor plus up to +15 min; confirmed reservation times are fixed and never moved to make pace fit.
@@ -164,11 +165,11 @@ Pace controls intensity, never category. A relaxed itinerary may be all museums;
 
 ## 12. Responsive Behavior
 
-| Breakpoint | Layout |
-| --- | --- |
-| < 640 px | Single column; assistant bottom sheet; map collapsed behind "Show map"; stepper horizontal scroll with sticky current step |
-| 640-1023 px | Single column with wider cards; assistant still a sheet; timeline vertical |
-| >= 1024 px | Wizard + assistant rail; timeline and map side-by-side tabs; inspector as a full-width route |
+| Breakpoint  | Layout                                                                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| < 640 px    | Single column; assistant bottom sheet; map collapsed behind "Show map"; stepper horizontal scroll with sticky current step |
+| 640-1023 px | Single column with wider cards; assistant still a sheet; timeline vertical                                                 |
+| >= 1024 px  | Wizard + assistant rail; timeline and map side-by-side tabs; inspector as a full-width route                               |
 
 Dates render in the destination IANA zone with an explicit zone label; money renders as EUR with an explicit `Total for N adults` label. Number/date formatting uses `Intl` with one documented locale configuration so tests are stable.
 
@@ -186,15 +187,15 @@ The itinerary timeline renders the immutable itinerary version from the projecti
 
 ## 14. State, Empty, and Error Presentation
 
-| Status | Presentation |
-| --- | --- |
-| `idle` / no operation | Normal screens; submit buttons enabled |
-| `queued` (after 202) | Persistent inline `Accepted - planning in progress` banner with operation ID; submit buttons disabled for the same trip |
-| `running` | Same banner with live step label from SSE events; no spinner-only screens |
-| `waiting_user` | Decision card or modal; the assistant input accepts clarification text |
-| `blocked` | Reason card with machine-readable code plus plain explanation and allowed alternatives; no dead end |
-| `ready` | Summary/approval surfaces enabled |
-| `failed` | Typed error with `retryable` flag; retry action only when the operation is retryable and within bounds |
+| Status                | Presentation                                                                                                            |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `idle` / no operation | Normal screens; submit buttons enabled                                                                                  |
+| `queued` (after 202)  | Persistent inline `Accepted - planning in progress` banner with operation ID; submit buttons disabled for the same trip |
+| `running`             | Same banner with live step label from SSE events; no spinner-only screens                                               |
+| `waiting_user`        | Decision card or modal; the assistant input accepts clarification text                                                  |
+| `blocked`             | Reason card with machine-readable code plus plain explanation and allowed alternatives; no dead end                     |
+| `ready`               | Summary/approval surfaces enabled                                                                                       |
+| `failed`              | Typed error with `retryable` flag; retry action only when the operation is retryable and within bounds                  |
 
 - Loading uses skeletons that preserve layout; the UI never renders fake offer cards or placeholder prices.
 - A user-initiated client request gets a full-screen operation preloader only after it has remained pending for 500 ms. The preloader names the current action in English, leaves focus where it was, and is announced through a polite live region; it is not a completion signal for the asynchronously queued worker operation, which remains represented by the status panel above.
@@ -208,3 +209,15 @@ The itinerary timeline renders the immutable itinerary version from the projecti
 - Playwright drives the full wizard, keyboard-only flows, stale-revision conflict, decision dialogs, offline map fallback, and inspector redaction.
 - Verbatim string assertions cover both disclaimer sentences on all routes and every confirmation.
 - Tests never assert real availability, real routes, or completion on a `202` response. Cross-references: [11 Testing](11-testing-strategy.md), [12 Roadmap](12-implementation-roadmap.md).
+
+## Persistent assistant - voice extension addendum (2026-10-15)
+
+Extends section 8 with the implemented voice controls (plan: [`../../VOICE_CONTROLL.md`](../../VOICE_CONTROLL.md) sections 10-12; tests: `tests/e2e/voice-control.spec.ts`).
+
+- **Exact English helper.** "Use your microphone and speakers/headphones to control the assistant." renders as the immediate next help element below Send (`id="assistant-voice-help"`, referenced by the controls section via `aria-describedby`) on desktop and mobile.
+- **Controls and order (inside the existing form, never replacing it).** textarea -> _Dictate_ / _Stop recording_ (one toggle button, `aria-pressed`) plus _Cancel dictation_ while capturing -> _Read replies aloud_ checkbox -> _Stop speaking_ while generating/playing and _Play reply_ when a decoded buffer waits for a gesture -> live status (`role="status"`) and errors (`role="alert"`) -> _Send_ -> helper. Every voice button is `type="button"` and can never submit the form.
+- **First-use activation and preference.** The first explicit _Dictate_ enables voice and "Read replies aloud" for the tab; later dictation never silently re-enables replies the user turned off. The checkbox alone can enable replies for typed messages without microphone access. The privacy notice states the OpenRouter use and the activation behavior before first use.
+- **Permission, privacy, and unsupported states.** Permission denied, no device, and unsupported browsers show the exact section-12 copy and keep typed chat usable; voice is disabled server-side shows the disabled copy; an invalid live configuration is an explicit voice-only 503.
+- **Limits and completion.** A 2 000 ms speech pause ends dictation automatically after valid speech (initial silence and shorter pauses never do); _Stop recording_ is always available; the hard 60-second cap remains effective in manual mode (discarding speechless recordings with zero STT). A longer pause may split the question - edit the draft or dictate more before sending; automatic completion never sends.
+- **Autoplay fallback and stopping.** Playback starts in a user gesture; if the context stays suspended the decoded reply is kept and _Play reply_ is offered. _Stop speaking_ aborts generation/playback without aborting a transcription; cancellation, replies-off, trip change, and unmount stop tracks and sources and discard pending work.
+- **Desktop/mobile and accessibility acceptance.** Keyboard access, newest-first history, fixed scroll height, card rendering, and mobile layout are preserved; the E2E matrix (T-E2E-VOICE-01..12) asserts selectors, helper order, no auto-Send, manual and VAD insertion, spoken-reply selection, and cleanup on both Chromium projects.

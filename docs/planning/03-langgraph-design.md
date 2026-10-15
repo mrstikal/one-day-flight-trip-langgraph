@@ -73,20 +73,20 @@ Missing flights, missing hotels, and rejected route validation do not fall throu
 
 Use `StateSchema` with Zod runtime validation. The compact checkpoint contract is:
 
-| Channel | Owner/update rule |
-| --- | --- |
-| `stateSchemaVersion`, `graphVersion`, `tripId` | Immutable validated initialization values |
-| `operationId`, `acceptedRevision`, `operationKind` | Accepted operation identity, kinds `start`, `command`, `resume`; recovery is a driver-context mode, not new business input |
-| `commandRef`, `conversationMessageRef`, `intentRef` | IDs of validated persisted inputs, not entire conversation |
-| `routeInputFingerprint`, `routeValidationRef`, `scheduleValidationRef` | Replaced only by serial route/schedule nodes |
-| `scenarioSnapshotRef` | Immutable snapshot/version reference; never full inventory |
-| `requiredDomains`, `researchRunId` | Unique bounded domain array and operation/run scope |
-| `researchResults` | Reducer map keyed by `researchRunId:domain`; each value is a small tagged result/ref |
-| `pendingDecisionRef` | One current domain decision; its actual checkpoint/interrupt binding is stored by the driver in the domain projection |
-| `proposalRef`, `itineraryRef`, `validationRef`, `reviewRef` | Persisted artifact references with source fingerprints |
-| `planningAttempt`, `providerAttempts` | Per-operation counters, total-attempt limits |
-| `nextWork` | Enum: `route`, `research`, `hotel_choice`, `program`, `plan`, `logistics`, `summary`, `decision` |
-| `lastOutcome` | `success`, `waiting`, `blocked`, or typed recoverable failure |
+| Channel                                                                | Owner/update rule                                                                                                          |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `stateSchemaVersion`, `graphVersion`, `tripId`                         | Immutable validated initialization values                                                                                  |
+| `operationId`, `acceptedRevision`, `operationKind`                     | Accepted operation identity, kinds `start`, `command`, `resume`; recovery is a driver-context mode, not new business input |
+| `commandRef`, `conversationMessageRef`, `intentRef`                    | IDs of validated persisted inputs, not entire conversation                                                                 |
+| `routeInputFingerprint`, `routeValidationRef`, `scheduleValidationRef` | Replaced only by serial route/schedule nodes                                                                               |
+| `scenarioSnapshotRef`                                                  | Immutable snapshot/version reference; never full inventory                                                                 |
+| `requiredDomains`, `researchRunId`                                     | Unique bounded domain array and operation/run scope                                                                        |
+| `researchResults`                                                      | Reducer map keyed by `researchRunId:domain`; each value is a small tagged result/ref                                       |
+| `pendingDecisionRef`                                                   | One current domain decision; its actual checkpoint/interrupt binding is stored by the driver in the domain projection      |
+| `proposalRef`, `itineraryRef`, `validationRef`, `reviewRef`            | Persisted artifact references with source fingerprints                                                                     |
+| `planningAttempt`, `providerAttempts`                                  | Per-operation counters, total-attempt limits                                                                               |
+| `nextWork`                                                             | Enum: `route`, `research`, `hotel_choice`, `program`, `plan`, `logistics`, `summary`, `decision`                           |
+| `lastOutcome`                                                          | `success`, `waiting`, `blocked`, or typed recoverable failure                                                              |
 
 No database handles, secret tokens, provider clients, raw prompts, model reasoning, or large datasets belong in checkpoint state. Pass server dependencies through the non-checkpointed invocation `context`; never rely on "private" state channels as a security boundary.
 
@@ -96,30 +96,30 @@ The domain store remains authoritative. Hydration checks source fingerprints bef
 
 ## 4. Node Contracts
 
-| Node | Input | Output/effect | Retry/side-effect policy |
-| --- | --- | --- | --- |
-| `load_context` | Trip and operation refs | Valid current context, source hashes, next-work requirements | Read-only; rejects unsupported graph/schema versions |
-| `interpret_intent` | Chat ref and compact authorized context | Strict persisted intent or clarification ref | AI adapter owns at most one retry; no mutations |
-| `apply_commands` | Valid command/intent ref | Idempotent preferences/search intent changes; invalidation set or route-change proposal | Domain transaction with effect key; no silent booking change |
-| `validate_route` | Current route inputs/reference versions | Persisted Stage A result and current fingerprint | Deterministic; must precede generation |
-| `generate_flights` | Fresh `FeasibleRouteApproval` | Stable persisted scenario flight candidates/ref | Generator independently verifies approval; idempotent |
-| `validate_schedules` | Current Stage A and candidate combinations | Stage B valid IDs or structured no-offer result | Deterministic and no invented repair |
-| `prepare_decision` | Typed reason/kind and valid artifacts | Persisted descriptor; state stores safe ref only | Idempotent creation, before interrupt; effect scope includes preceding resolved decision/proposal ID |
-| `await_decision` | Exact descriptor and interrupt payload | Valid trusted resume envelope, new operation identity/counters, or suspension | One `interrupt()`; no side effects and no broad catch; recovery of same operation does not reset counters |
-| `apply_decision` | Authorized response and descriptor | Next-work enum, proposal action, or validated command ref | Idempotent resolution; freshness and membership rechecked |
-| `stage_selection` | Valid current offer ID | Proposed selection, before/after prices, replacement impact | No confirmation; old reservation stays active |
-| `commit_booking` | Explicit confirmed proposal | Deterministic reservation service result | Atomic idempotent SQL; no LLM calls |
-| `decline_booking` | Explicit decline decision for a staged flight/hotel proposal | Persisted offer selection (no reservation), proposal withdrawn, run continues to the next step | Atomic idempotent SQL; a confirmed service cannot be declined (2026-10-14) |
-| `commit_route_change` | Explicit impact confirmation | New route inputs; affected reservations explicitly cancelled/superseded as previewed | Atomic SQL; invalidate both feasibility stages |
-| `dispatch_research` | Required/failed domains and current hashes | Ensure missing inventories once after confirmed valid flights, then new `Send` tasks, or direct continuation for zero domains | Idempotent single snapshot extension before fan-out; resets only current work scope |
-| `research_domain` | One domain, snapshot, source fingerprint, attempt | Tagged success/unavailable/retryable-error ref | Read-only provider plus idempotent artifact write; bounded failure injection |
-| `join_research` | All scheduled task results | Merged retained successes, necessary-domain gate, failed-domain retry scope | Verifies expected result set, not completion ordering |
-| `rank_recommendations` | Existing valid candidates and relevant preferences | Valid ordered IDs and supported explanation | Deterministic default; optional AI tradeoff ranking |
-| `validate_selected_logistics` | Confirmed/current services and date/route refs | Hotel/meal/airport compatibility or explicit conflict | Deterministic; never edits reservations to make it pass |
-| `plan_itinerary` | Selected/confirmed services, candidate IDs, fixed constraints, feedback | Immutable proposed itinerary version; attempt increment | AI/fixture proposal only; costs/route metrics resolved by code |
-| `validate_itinerary` | Proposal and current fingerprints | Structured deterministic errors/warnings/metrics | Invalid result is normal routing, not an exception retry |
-| `review_itinerary` | Deterministically valid itinerary, interests/pace | Structured qualitative review, proposed safe revision or warnings | AI/fixture; never overrules deterministic rejection |
-| `publish_summary` | Committed domain outcomes/current artifacts | Persisted safe summary, conversation result, terminal projection | Idempotent; states proposals versus completed changes precisely |
+| Node                          | Input                                                                   | Output/effect                                                                                                                 | Retry/side-effect policy                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `load_context`                | Trip and operation refs                                                 | Valid current context, source hashes, next-work requirements                                                                  | Read-only; rejects unsupported graph/schema versions                                                      |
+| `interpret_intent`            | Chat ref and compact authorized context                                 | Strict persisted intent or clarification ref                                                                                  | AI adapter owns at most one retry; no mutations                                                           |
+| `apply_commands`              | Valid command/intent ref                                                | Idempotent preferences/search intent changes; invalidation set or route-change proposal                                       | Domain transaction with effect key; no silent booking change                                              |
+| `validate_route`              | Current route inputs/reference versions                                 | Persisted Stage A result and current fingerprint                                                                              | Deterministic; must precede generation                                                                    |
+| `generate_flights`            | Fresh `FeasibleRouteApproval`                                           | Stable persisted scenario flight candidates/ref                                                                               | Generator independently verifies approval; idempotent                                                     |
+| `validate_schedules`          | Current Stage A and candidate combinations                              | Stage B valid IDs or structured no-offer result                                                                               | Deterministic and no invented repair                                                                      |
+| `prepare_decision`            | Typed reason/kind and valid artifacts                                   | Persisted descriptor; state stores safe ref only                                                                              | Idempotent creation, before interrupt; effect scope includes preceding resolved decision/proposal ID      |
+| `await_decision`              | Exact descriptor and interrupt payload                                  | Valid trusted resume envelope, new operation identity/counters, or suspension                                                 | One `interrupt()`; no side effects and no broad catch; recovery of same operation does not reset counters |
+| `apply_decision`              | Authorized response and descriptor                                      | Next-work enum, proposal action, or validated command ref                                                                     | Idempotent resolution; freshness and membership rechecked                                                 |
+| `stage_selection`             | Valid current offer ID                                                  | Proposed selection, before/after prices, replacement impact                                                                   | No confirmation; old reservation stays active                                                             |
+| `commit_booking`              | Explicit confirmed proposal                                             | Deterministic reservation service result                                                                                      | Atomic idempotent SQL; no LLM calls                                                                       |
+| `decline_booking`             | Explicit decline decision for a staged flight/hotel proposal            | Persisted offer selection (no reservation), proposal withdrawn, run continues to the next step                                | Atomic idempotent SQL; a confirmed service cannot be declined (2026-10-14)                                |
+| `commit_route_change`         | Explicit impact confirmation                                            | New route inputs; affected reservations explicitly cancelled/superseded as previewed                                          | Atomic SQL; invalidate both feasibility stages                                                            |
+| `dispatch_research`           | Required/failed domains and current hashes                              | Ensure missing inventories once after confirmed valid flights, then new `Send` tasks, or direct continuation for zero domains | Idempotent single snapshot extension before fan-out; resets only current work scope                       |
+| `research_domain`             | One domain, snapshot, source fingerprint, attempt                       | Tagged success/unavailable/retryable-error ref                                                                                | Read-only provider plus idempotent artifact write; bounded failure injection                              |
+| `join_research`               | All scheduled task results                                              | Merged retained successes, necessary-domain gate, failed-domain retry scope                                                   | Verifies expected result set, not completion ordering                                                     |
+| `rank_recommendations`        | Existing valid candidates and relevant preferences                      | Valid ordered IDs and supported explanation                                                                                   | Deterministic default; optional AI tradeoff ranking                                                       |
+| `validate_selected_logistics` | Confirmed/current services and date/route refs                          | Hotel/meal/airport compatibility or explicit conflict                                                                         | Deterministic; never edits reservations to make it pass                                                   |
+| `plan_itinerary`              | Selected/confirmed services, candidate IDs, fixed constraints, feedback | Immutable proposed itinerary version; attempt increment                                                                       | AI/fixture proposal only; costs/route metrics resolved by code                                            |
+| `validate_itinerary`          | Proposal and current fingerprints                                       | Structured deterministic errors/warnings/metrics                                                                              | Invalid result is normal routing, not an exception retry                                                  |
+| `review_itinerary`            | Deterministically valid itinerary, interests/pace                       | Structured qualitative review, proposed safe revision or warnings                                                             | AI/fixture; never overrules deterministic rejection                                                       |
+| `publish_summary`             | Committed domain outcomes/current artifacts                             | Persisted safe summary, conversation result, terminal projection                                                              | Idempotent; states proposals versus completed changes precisely                                           |
 
 Every mutating node delegates to a domain/repository service. A thrown database/checkpoint failure fails the operation; it does not become an apparently valid empty result. Catch only known simulated/provider errors inside research tasks.
 
@@ -154,29 +154,29 @@ Known provider failure is a tagged domain result, allowing successful siblings t
 
 ## 6. Conditional Routing Table
 
-| Condition | Action | Preserved state |
-| --- | --- | --- |
-| Stage A `FEASIBLE`, matching fingerprint | Generate flights, then Stage B | Stable unrelated data |
-| Stage A `INFEASIBLE` | Recovery decision explaining reason and alternative origin/city | No new downstream effects |
-| Stage A `UNDETERMINED` | Conservative limitation decision; require supported alternative | No invented flight generation |
-| Stage B no valid combination | Explain schedule reason; offer date/variant/origin/city changes | No booking/research progression |
-| Flight choice | Stage proposal, then interrupt for explicit confirmation | No reservation until confirmation |
-| Flight confirmed | Dispatch independent research | Existing approved flight reservation |
-| Necessary hotel domain unavailable | Bounded retry or recovery decision | Flights and successful research results |
-| Restaurant/events unavailable | Explain missing option; block missing mandatory meal or use explicitly allowed fallback | Other valid research |
-| Hotel choice/replacement | Proposal then explicit booking/replacement confirmation | Old confirmed hotel until commit |
+| Condition                                         | Action                                                                                                                                                           | Preserved state                                                                                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stage A `FEASIBLE`, matching fingerprint          | Generate flights, then Stage B                                                                                                                                   | Stable unrelated data                                                                                                                                |
+| Stage A `INFEASIBLE`                              | Recovery decision explaining reason and alternative origin/city                                                                                                  | No new downstream effects                                                                                                                            |
+| Stage A `UNDETERMINED`                            | Conservative limitation decision; require supported alternative                                                                                                  | No invented flight generation                                                                                                                        |
+| Stage B no valid combination                      | Explain schedule reason; offer date/variant/origin/city changes                                                                                                  | No booking/research progression                                                                                                                      |
+| Flight choice                                     | Stage proposal, then interrupt for explicit confirmation                                                                                                         | No reservation until confirmation                                                                                                                    |
+| Flight confirmed                                  | Dispatch independent research                                                                                                                                    | Existing approved flight reservation                                                                                                                 |
+| Necessary hotel domain unavailable                | Bounded retry or recovery decision                                                                                                                               | Flights and successful research results                                                                                                              |
+| Restaurant/events unavailable                     | Explain missing option; block missing mandatory meal or use explicitly allowed fallback                                                                          | Other valid research                                                                                                                                 |
+| Hotel choice/replacement                          | Proposal then explicit booking/replacement confirmation                                                                                                          | Old confirmed hotel until commit                                                                                                                     |
 | Declined flight/hotel booking (`decline_booking`) | Keep the chosen offer as the step's selection (no reservation row) and continue to the next step; a late booking stages the same offer as a proposal and replans | Selection persisted; plan inputs (flight times, airport buffer, hotel anchor, costs) computed as if the service existed; overviews show `Not booked` |
-| Confirmed flight/hotel | Dispatch independent research; program step | Existing approved reservation |
-| `Not booked` selection settles the step | Hotel/program step unlocks exactly like a confirmed service; booking later replans on confirmation | Selection row plus existing plan artifacts |
-| Preference-only service change | Refresh affected recommendations, present alternatives | All selections/reservations and current schedule |
-| Pace/interests change | Replan program, validate, review | Flights/hotel/confirmed meals |
-| Deterministic invalid schedule, attempt < 3 | Replan with machine-readable feedback | All fixed reservations |
-| Budget exceeded | Stop automatic loop; lower-cost alternatives or budget clarification | No automatic downgrades/replacements |
-| Attempt limit reached | Recovery/clarification decision with best valid partial information | No invalid approval |
-| AI ambiguity/contradiction | Clarification interrupt | No proposed command executed |
-| Itinerary approved | Publish summary and `END` | Thread/checkpoints remain available |
-| Completed trip receives new request | New plain-input invocation on same thread | Compatible existing domain state |
-| Existing pending decision receives modification | Resume with worker-created `modify` response, then apply command | Safe unaffected state; old decision explicitly resolved/cancelled |
+| Confirmed flight/hotel                            | Dispatch independent research; program step                                                                                                                      | Existing approved reservation                                                                                                                        |
+| `Not booked` selection settles the step           | Hotel/program step unlocks exactly like a confirmed service; booking later replans on confirmation                                                               | Selection row plus existing plan artifacts                                                                                                           |
+| Preference-only service change                    | Refresh affected recommendations, present alternatives                                                                                                           | All selections/reservations and current schedule                                                                                                     |
+| Pace/interests change                             | Replan program, validate, review                                                                                                                                 | Flights/hotel/confirmed meals                                                                                                                        |
+| Deterministic invalid schedule, attempt < 3       | Replan with machine-readable feedback                                                                                                                            | All fixed reservations                                                                                                                               |
+| Budget exceeded                                   | Stop automatic loop; lower-cost alternatives or budget clarification                                                                                             | No automatic downgrades/replacements                                                                                                                 |
+| Attempt limit reached                             | Recovery/clarification decision with best valid partial information                                                                                              | No invalid approval                                                                                                                                  |
+| AI ambiguity/contradiction                        | Clarification interrupt                                                                                                                                          | No proposed command executed                                                                                                                         |
+| Itinerary approved                                | Publish summary and `END`                                                                                                                                        | Thread/checkpoints remain available                                                                                                                  |
+| Completed trip receives new request               | New plain-input invocation on same thread                                                                                                                        | Compatible existing domain state                                                                                                                     |
+| Existing pending decision receives modification   | Resume with worker-created `modify` response, then apply command                                                                                                 | Safe unaffected state; old decision explicitly resolved/cancelled                                                                                    |
 
 For initial planning, hotel selection is followed by a `program_choices` interrupt containing breakfast/lunch/dinner defaults and activity choices. The user can accept recommendations or select alternatives through normal controls before building the itinerary. Optional meal reservations use the same serialized proposal/confirmation flow, not an automatic booking hidden inside itinerary generation.
 
@@ -216,21 +216,21 @@ The interrupt node restarts from its beginning when resumed. Do not write a book
 
 The worker is the only graph invoker. Thread ID is the trip UUID. Acquire operation lease/fencing and trip advisory lock, then reconcile the authoritative domain inputs and `getState` before selecting the call. Use the operation-bound fenced wrapper around official saver writes described in [architecture](02-architecture.md#6-command-admission-and-concurrency); domain fencing alone cannot protect a checkpoint written after lock loss.
 
-| State and admitted operation | Invocation |
-| --- | --- |
-| New thread | Plain validated initial input |
-| Completed thread, new command/chat | Plain new-operation input; begins again at `START` with persisted state |
-| Current dynamic interrupt, exact answer/modification | `new Command({ resume: trustedGraphResumeEnvelope })` |
-| Crashed/errored invocation with unfinished tasks and no unanswered interrupt | `null` on the same thread; resume unfinished work |
-| Unanswered dynamic interrupt during recovery | Restore waiting projection; do not invent a resume answer |
-| Current interrupt, accepted resume/modification operation crashed before its answer was checkpointed | Revalidate/replay the original persisted envelope under the same operation ID; reuse already stored decision/effect results |
-| Completed checkpoint, job outcome missing | Reconcile terminal outcome; `null` would be a no-op |
-| Unfinished failed checkpoint, new ordinary command | Reject `RECOVERY_REQUIRED`; do not interpret/ignore a new request while resuming old work |
-| Terminal failure of a decision resume (the interrupt was already consumed) | Finalize the operation as unfinished failure: `failed` + `recoveryRequired` + `last_unfinished_operation_id`; the pending decision is no longer answerable and a new resume would only conflict (2026-10-13) |
-| Rejected resume whose checkpoint head is unfinished work owned by a DIFFERENT operation | Record owner recovery for that checkpoint owner (`unfinishedOperationId`), never for the rejected row; repeated clicks cannot wedge the decision |
-| Explicit owner technical retry of the latest failed unfinished operation | Requeue the same operation/input and follow unfinished-recovery or accepted-envelope replay rules; while `recoveryRequired` is set, the recorded `last_unfinished_operation_id` is an accepted target even when newer rejected conflict rows exist |
-| Resume request but no matching interrupt | Return stale-decision conflict; do not invoke |
-| No checkpoint after worker crash before first invoke | Start the original persisted input exactly once under the same operation effect keys |
+| State and admitted operation                                                                         | Invocation                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New thread                                                                                           | Plain validated initial input                                                                                                                                                                                                                      |
+| Completed thread, new command/chat                                                                   | Plain new-operation input; begins again at `START` with persisted state                                                                                                                                                                            |
+| Current dynamic interrupt, exact answer/modification                                                 | `new Command({ resume: trustedGraphResumeEnvelope })`                                                                                                                                                                                              |
+| Crashed/errored invocation with unfinished tasks and no unanswered interrupt                         | `null` on the same thread; resume unfinished work                                                                                                                                                                                                  |
+| Unanswered dynamic interrupt during recovery                                                         | Restore waiting projection; do not invent a resume answer                                                                                                                                                                                          |
+| Current interrupt, accepted resume/modification operation crashed before its answer was checkpointed | Revalidate/replay the original persisted envelope under the same operation ID; reuse already stored decision/effect results                                                                                                                        |
+| Completed checkpoint, job outcome missing                                                            | Reconcile terminal outcome; `null` would be a no-op                                                                                                                                                                                                |
+| Unfinished failed checkpoint, new ordinary command                                                   | Reject `RECOVERY_REQUIRED`; do not interpret/ignore a new request while resuming old work                                                                                                                                                          |
+| Terminal failure of a decision resume (the interrupt was already consumed)                           | Finalize the operation as unfinished failure: `failed` + `recoveryRequired` + `last_unfinished_operation_id`; the pending decision is no longer answerable and a new resume would only conflict (2026-10-13)                                       |
+| Rejected resume whose checkpoint head is unfinished work owned by a DIFFERENT operation              | Record owner recovery for that checkpoint owner (`unfinishedOperationId`), never for the rejected row; repeated clicks cannot wedge the decision                                                                                                   |
+| Explicit owner technical retry of the latest failed unfinished operation                             | Requeue the same operation/input and follow unfinished-recovery or accepted-envelope replay rules; while `recoveryRequired` is set, the recorded `last_unfinished_operation_id` is an accepted target even when newer rejected conflict rows exist |
+| Resume request but no matching interrupt                                                             | Return stale-decision conflict; do not invoke                                                                                                                                                                                                      |
+| No checkpoint after worker crash before first invoke                                                 | Start the original persisted input exactly once under the same operation effect keys                                                                                                                                                               |
 
 Do not use input `Command({ update })` to start a new run after `END`, and do not use `null` to enter a new modification. `getState` reports pending tasks/errors/interrupts; completing a stream alone does not prove success.
 
@@ -242,14 +242,14 @@ Consume the entire worker stream and await checkpoint writes before releasing ow
 
 ## 9. Bounded Work and Retry Ownership
 
-| Operation | Bound and owner |
-| --- | --- |
-| Plan -> validate -> qualitative review -> replan | 3 total plan attempts per user operation; graph owns loop |
-| Recoverable research provider failure | 2 total calls per affected domain per operation; graph sends failed subset |
-| Invalid structured LLM output / transient OpenRouter failure | 2 total calls including one repair/retry; AI adapter owns retry |
-| Booking/domain transaction | Replay through effect ledger; no external side effect to retry |
-| Checkpoint/database failure | Fail current operation safely; durable driver recovery after bounded backoff |
-| Driver recovery | 3 automatic claims per recovery round; exhaustion needs explicit technical retry of the same operation; total counters never reset |
+| Operation                                                    | Bound and owner                                                                                                                    |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Plan -> validate -> qualitative review -> replan             | 3 total plan attempts per user operation; graph owns loop                                                                          |
+| Recoverable research provider failure                        | 2 total calls per affected domain per operation; graph sends failed subset                                                         |
+| Invalid structured LLM output / transient OpenRouter failure | 2 total calls including one repair/retry; AI adapter owns retry                                                                    |
+| Booking/domain transaction                                   | Replay through effect ledger; no external side effect to retry                                                                     |
+| Checkpoint/database failure                                  | Fail current operation safely; durable driver recovery after bounded backoff                                                       |
+| Driver recovery                                              | 3 automatic claims per recovery round; exhaustion needs explicit technical retry of the same operation; total counters never reset |
 
 Do not stack a graph retry policy on top of an adapter retry for the same LLM call. Do not catch validation errors and retry indefinitely. Abort/authentication/model-capability/schema errors are not transient provider failures. Human-triggered later retries are new admitted operations and remain subject to session and trip cost limits.
 
@@ -257,21 +257,21 @@ Do not stack a graph retry policy on top of an adapter retry for the same LLM ca
 
 `R` refreshes recommendations only. `V` validates dependent logistics. `P` creates a new itinerary proposal. `X` requires explicit impact confirmation before incompatible booked state changes. `-` preserves the domain and content hash.
 
-| Change | Stage A/B + flights | Hotel | Breakfast | Lunch | Dinner | Activities/events | Itinerary |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Hotel level / cheaper-hotel search | - | R; keep booking | - | - | - | - | V only if proposal chosen; P after confirmed replacement |
-| Breakfast override | - | - | R; keep booking | - | - | - | V/P after approved selection change |
-| Lunch override | - | - | - | R; keep booking | - | - | V/P after approved selection change |
-| Dinner override | - | - | - | - | R; keep booking | - | V/P after approved selection change |
-| Global service level | - | R if inherited | R if inherited | R if inherited | R if inherited | - | No selection changes; V/P only after accepted alternatives |
-| Activity pace | - | - | Keep fixed booking | Keep fixed booking | Keep fixed booking | Reuse inventory, rerank if needed | P then full feasibility validation |
-| Interests / preferred tags / minimum counts | - | - | - | - | - | R on existing candidate inventory | P, or clarification if incompatible |
-| Selected hotel replacement | - | X then new selection | Preserve selections; V route | Preserve; V route | Preserve; V route | Preserve selections; V route | P with new route estimates |
-| Selected meal replacement | - | - | Only target meal X/V | Only target meal X/V | Only target meal X/V | Keep choices; V adjacent transfers | P on affected slot and full safety validation |
-| Flight combination change, same route/dates | Revalidate approval/schedule; X | V dates; X only if incompatible | V fixed times | V fixed times | V fixed times | Preserve inventory | P with new airport windows |
-| Origin/city/date/variant change | Fresh A/B; X | Destination/date-dependent X | Destination/date-dependent X | Destination/date-dependent X | Destination/date-dependent X | New/extended relevant snapshot | P, previous approval not current |
-| Budget change | - | R suggestions if necessary | R suggestions if necessary | R suggestions if necessary | R suggestions if necessary | R free/cheaper alternatives | Validate total; no auto-replacement |
-| Inject hotel provider failure | - | Only call outcome changes | - | - | - | - | Preserve valid previous plan/results |
+| Change                                      | Stage A/B + flights             | Hotel                           | Breakfast                    | Lunch                        | Dinner                       | Activities/events                  | Itinerary                                                  |
+| ------------------------------------------- | ------------------------------- | ------------------------------- | ---------------------------- | ---------------------------- | ---------------------------- | ---------------------------------- | ---------------------------------------------------------- |
+| Hotel level / cheaper-hotel search          | -                               | R; keep booking                 | -                            | -                            | -                            | -                                  | V only if proposal chosen; P after confirmed replacement   |
+| Breakfast override                          | -                               | -                               | R; keep booking              | -                            | -                            | -                                  | V/P after approved selection change                        |
+| Lunch override                              | -                               | -                               | -                            | R; keep booking              | -                            | -                                  | V/P after approved selection change                        |
+| Dinner override                             | -                               | -                               | -                            | -                            | R; keep booking              | -                                  | V/P after approved selection change                        |
+| Global service level                        | -                               | R if inherited                  | R if inherited               | R if inherited               | R if inherited               | -                                  | No selection changes; V/P only after accepted alternatives |
+| Activity pace                               | -                               | -                               | Keep fixed booking           | Keep fixed booking           | Keep fixed booking           | Reuse inventory, rerank if needed  | P then full feasibility validation                         |
+| Interests / preferred tags / minimum counts | -                               | -                               | -                            | -                            | -                            | R on existing candidate inventory  | P, or clarification if incompatible                        |
+| Selected hotel replacement                  | -                               | X then new selection            | Preserve selections; V route | Preserve; V route            | Preserve; V route            | Preserve selections; V route       | P with new route estimates                                 |
+| Selected meal replacement                   | -                               | -                               | Only target meal X/V         | Only target meal X/V         | Only target meal X/V         | Keep choices; V adjacent transfers | P on affected slot and full safety validation              |
+| Flight combination change, same route/dates | Revalidate approval/schedule; X | V dates; X only if incompatible | V fixed times                | V fixed times                | V fixed times                | Preserve inventory                 | P with new airport windows                                 |
+| Origin/city/date/variant change             | Fresh A/B; X                    | Destination/date-dependent X    | Destination/date-dependent X | Destination/date-dependent X | Destination/date-dependent X | New/extended relevant snapshot     | P, previous approval not current                           |
+| Budget change                               | -                               | R suggestions if necessary      | R suggestions if necessary   | R suggestions if necessary   | R suggestions if necessary   | R free/cheaper alternatives        | Validate total; no auto-replacement                        |
+| Inject hotel provider failure               | -                               | Only call outcome changes       | -                            | -                            | -                            | -                                  | Preserve valid previous plan/results                       |
 
 ```mermaid
 flowchart LR
@@ -319,3 +319,11 @@ Checked 2026-10-10; implementation rechecks only when upgrading pinned packages.
 - [PostgreSQL checkpointer README](https://github.com/langchain-ai/langgraphjs/blob/main/libs/checkpoint-postgres/README.md)
 - [LangGraph 1.4.21 registry metadata](https://registry.npmjs.org/@langchain/langgraph/1.4.21)
 - [PostgreSQL saver 1.0.6 registry metadata](https://registry.npmjs.org/@langchain/langgraph-checkpoint-postgres/1.0.6)
+
+## Voice boundary addendum (2026-10-15)
+
+Speech is **not** a graph node, interrupt, or effect. The boundary:
+
+- **STT precedes ordinary chat admission.** A finished transcript only fills the composer; the existing commands route and graph admission are entered exclusively by an explicit Send, with the same request id, revision checks, and authorization as typed chat.
+- **TTS follows a settled linked reply.** Synthesis requires a persisted assistant message with a non-null `operationId` whose same-trip operation is in a settled status (`succeeded`/`waiting`/`failed`); running or queued work never speaks.
+- **No authorization change.** Voice cannot confirm, cancel, or book anything, cannot bypass pending decisions, and cannot weaken the existing command/booking authorization. The separate `voice_calls` ledger never touches graph checkpoints, revisions, or travel accounting.
