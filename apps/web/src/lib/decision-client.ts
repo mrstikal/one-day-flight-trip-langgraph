@@ -1,6 +1,6 @@
 import type { PublicDecisionResponse, ResumeRequest } from "@odft/contracts";
 import { apiPost } from "./api-client";
-import { runWithOperationPreloader } from "./operation-preloader";
+import { operationPreloader, runWithOperationPreloader } from "./operation-preloader";
 import { withCsrfSession } from "./session-client";
 
 /** Decision and command submission (PRG: POST then refresh, never replay). */
@@ -41,13 +41,15 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<{ oper
     decisionId: input.decisionId,
     response: input.response,
   };
-  return runWithOperationPreloader("Saving your decision...", () =>
-    withCsrfSession((csrfToken) =>
+  return runWithOperationPreloader("Saving your decision...", async () => {
+    const response = await withCsrfSession((csrfToken) =>
       apiPost<{ operationId: string }>(`/api/trips/${input.tripId}/resume`, request, {
         "x-csrf-token": csrfToken,
       }),
-    ),
-  );
+    );
+    operationPreloader.trackAcceptedOperation(response.operationId, "Saving your decision...");
+    return response;
+  });
 }
 
 export async function submitCommand(
@@ -60,13 +62,15 @@ export async function submitCommand(
     "chat" in request
       ? "Waiting for the AI assistant's response..."
       : commandMessage(request.command);
-  return runWithOperationPreloader(message, () =>
-    withCsrfSession((csrfToken) =>
+  return runWithOperationPreloader(message, async () => {
+    const response = await withCsrfSession((csrfToken) =>
       apiPost<{ operationId: string }>(`/api/trips/${tripId}/commands`, request, {
         "x-csrf-token": csrfToken,
       }),
-    ),
-  );
+    );
+    operationPreloader.trackAcceptedOperation(response.operationId, message);
+    return response;
+  });
 }
 
 /** Explicit owner technical retry for a failed/blocked operation. */
@@ -75,13 +79,15 @@ export async function retryOperation(
   operationId: string,
   expectedRevision: number,
 ): Promise<{ status: string }> {
-  return runWithOperationPreloader("Retrying your plan...", () =>
-    withCsrfSession((csrfToken) =>
+  return runWithOperationPreloader("Retrying your plan...", async () => {
+    const response = await withCsrfSession((csrfToken) =>
       apiPost<{ status: string }>(
         `/api/trips/${tripId}/operations/${operationId}/retry`,
         { expectedRevision },
         { "x-csrf-token": csrfToken },
       ),
-    ),
-  );
+    );
+    operationPreloader.trackAcceptedOperation(operationId, "Retrying your plan...");
+    return response;
+  });
 }

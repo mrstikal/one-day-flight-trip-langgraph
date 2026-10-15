@@ -7,7 +7,7 @@ import { createTripRequestSchema } from "@odft/contracts";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
 import { StepIndicator } from "@/components/trip/StepIndicator";
 import { ApiError, apiPost } from "@/lib/api-client";
-import { runWithOperationPreloader } from "@/lib/operation-preloader";
+import { operationPreloader, runWithOperationPreloader } from "@/lib/operation-preloader";
 import { searchCities, searchCountries, type CityOption } from "@/lib/reference-client";
 import { ensureSession } from "@/lib/session-client";
 import { buildPreferences } from "@/lib/wizard-form";
@@ -118,6 +118,7 @@ export function DestinationStep(): React.JSX.Element {
           { "x-csrf-token": csrfToken },
         );
       });
+      operationPreloader.trackAcceptedOperation(created.operationId, "Creating your plan...");
       update({ creationRequestId, tripId: created.tripId });
       router.push(`/trips/${created.tripId}/flights`);
     } catch (caught) {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TripProjection } from "@odft/contracts";
 import { ApiError, apiGet } from "./api-client";
+import { operationPreloader } from "./operation-preloader";
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_BACKOFF_MS = 10_000;
@@ -67,6 +68,7 @@ export function useTripProjection(
         return;
       }
       failures.current = 0;
+      operationPreloader.reconcileOperations(projection.operations);
       setState({ projection, error: null, loading: false });
       if (options.poll !== false && hasActiveWork(projection)) {
         schedule(POLL_INTERVAL_MS);

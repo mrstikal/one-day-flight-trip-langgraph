@@ -48,4 +48,18 @@ describe("OperationPreloader", () => {
     finishSecond();
     expect(preloader.getSnapshot()).toBeNull();
   });
+
+  it("keeps an accepted operation visible until its projected status settles", () => {
+    const preloader = new OperationPreloader();
+    preloader.trackAcceptedOperation("operation-1", "Saving your plan...");
+
+    vi.advanceTimersByTime(OPERATION_PRELOADER_DELAY_MS);
+    expect(preloader.getSnapshot()).toBe("Saving your plan...");
+
+    preloader.reconcileOperations([{ operationId: "operation-1", status: "running" }]);
+    expect(preloader.getSnapshot()).toBe("Saving your plan...");
+
+    preloader.reconcileOperations([{ operationId: "operation-1", status: "waiting_user" }]);
+    expect(preloader.getSnapshot()).toBeNull();
+  });
 });

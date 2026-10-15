@@ -198,7 +198,7 @@ The itinerary timeline renders the immutable itinerary version from the projecti
 | `failed`              | Typed error with `retryable` flag; retry action only when the operation is retryable and within bounds                  |
 
 - Loading uses skeletons that preserve layout; the UI never renders fake offer cards or placeholder prices.
-- A user-initiated client request gets a full-screen operation preloader only after it has remained pending for 500 ms. The preloader names the current action in English, leaves focus where it was, and is announced through a polite live region; it is not a completion signal for the asynchronously queued worker operation, which remains represented by the status panel above.
+- A user-initiated client request gets a full-screen operation preloader only after it has remained pending for 500 ms. For an accepted command or decision, it remains while the authorized projection reports that operation as `queued` or `running`; the preloader names the current action in English, leaves focus where it was, and is announced through a polite live region. The status panel remains the detailed source for the asynchronous worker state and outcome.
 - Unsaved form edits (welcome form, active filters) survive in-session navigation only and are never treated as trip truth.
 - Empty states: no matching countries/cities, no offers after filters, missing reference coverage, and "verified landmarks unavailable" all explain dataset limitations and offer a next action (broaden filters or pick a curated city).
 - SSE disconnection shows a reconnecting banner and falls back to polling; the last successful projection remains readable.

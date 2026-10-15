@@ -5,6 +5,11 @@ interface ActiveOperation {
   readonly startedAt: number;
 }
 
+interface ProjectedOperationStatus {
+  readonly operationId: string;
+  readonly status: string;
+}
+
 /**
  * Tracks user-initiated requests and exposes the most recent request that has
  * exceeded the display delay.
@@ -12,6 +17,7 @@ interface ActiveOperation {
 export class OperationPreloader {
   private readonly activeOperations = new Map<number, ActiveOperation>();
   private readonly listeners = new Set<() => void>();
+  private readonly trackedOperations = new Map<string, () => void>();
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private nextId = 0;
   private message: string | null = null;
@@ -34,6 +40,31 @@ export class OperationPreloader {
         this.update();
       }
     };
+  }
+
+  /**
+   * Keep accepted background work visible until a projection reports that the
+   * operation is no longer queued or running.
+   */
+  trackAcceptedOperation(operationId: string, message: string): void {
+    if (this.trackedOperations.has(operationId)) {
+      return;
+    }
+    this.trackedOperations.set(operationId, this.start(message));
+  }
+
+  reconcileOperations(operations: readonly ProjectedOperationStatus[]): void {
+    const statusByOperationId = new Map(
+      operations.map((operation) => [operation.operationId, operation.status]),
+    );
+
+    for (const [operationId, finish] of this.trackedOperations) {
+      const status = statusByOperationId.get(operationId);
+      if (status !== undefined && status !== "queued" && status !== "running") {
+        this.trackedOperations.delete(operationId);
+        finish();
+      }
+    }
   }
 
   private update(): void {
