@@ -333,8 +333,11 @@ model, writes the verified manifest to `$AI_CONFIG_PATH.capabilities.json`, stam
   model).
 - _HTTP 404_ → the model id does not exist on OpenRouter.
 
-The worker also refreshes the manifest automatically when the cache is missing, stale (> 24 h), or does
-not cover the configured models. A model whose capability or pricing is unknown is never called.
+The worker re-reads the cached manifest and fails closed with an actionable error when it is missing,
+stale (> 24 h), or does not cover the configured models. It never refreshes the manifest itself, so the
+operator-verified `pricingVersion` pins stay in operator control: re-run `npm run ai:validate-models`
+whenever it asks, then restart the worker so it reloads the profiles and the manifest. A model whose
+capability or pricing is unknown is never called.
 
 The committed example uses `openai/gpt-6-luna`; its endpoints publish a `reasoning` parameter (the
 model is reasoning-capable), but the example omits `reasoningEffort` — set it only when you want to

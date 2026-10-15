@@ -445,7 +445,6 @@ export function createAiService(deps: InterpretDeps): AiService {
       ? loadRoleProfiles({ mode: "openrouter", configPath: config.aiConfigPath })
       : ({ mode: "fixture" } as const);
   let manifest: CapabilityManifest | undefined;
-  let manifestFetchedAtMs = 0;
 
   async function resolveAdapter(
     role: AIRole,
@@ -459,30 +458,26 @@ export function createAiService(deps: InterpretDeps): AiService {
       return FIXTURE_ADAPTER;
     }
     const configuredModels = Object.values(loaded.profiles).map((profile) => profile.model);
-    // The 24-hour capability TTL must also apply to a long-lived process: reload
-    // the manifest when it is stale (or was never loaded) so reservations never
-    // use prices older than the cache policy allows.
-    const stale = manifest === undefined || Date.now() - manifestFetchedAtMs >= CAPABILITY_CACHE_TTL_MS;
+    // The 24-hour capability TTL also applies to a long-lived process: re-read the
+    // cached manifest once the loaded snapshot is older than the policy allows, so
+    // reservations never use prices older than the cache policy permits. The worker
+    // never refreshes the manifest itself: an automatic refresh would write a new
+    // `pricingVersion` that no longer matches the operator-stamped profile pins and
+    // would fail every call closed. A missing, stale, or non-covering cache fails
+    // closed with an actionable `ai:validate-models` error instead.
+    const manifestAgeMs = manifest
+      ? Date.now() - Date.parse(manifest.fetchedAt)
+      : Number.POSITIVE_INFINITY;
     const activeManifest =
-      stale || manifest === undefined
+      manifest === undefined ||
+      !Number.isFinite(manifestAgeMs) ||
+      manifestAgeMs >= CAPABILITY_CACHE_TTL_MS
         ? await loadCapabilityManifest({
           cachePath: capabilityCachePath(config),
           models: configuredModels,
-          fetchImpl: (url, init) =>
-            fetch(url, {
-              ...init,
-              headers: {
-                ...init?.headers,
-                ...(config.openrouterApiKey
-                  ? { authorization: `Bearer ${config.openrouterApiKey}` }
-                  : {}),
-              },
-            }),
-            ...(config.openrouterApiKey ? { apiKey: config.openrouterApiKey } : {}),
-          })
+        })
         : manifest;
     manifest = activeManifest;
-    manifestFetchedAtMs = Date.now();
     const profile = loaded.profiles[role];
     return new OpenRouterAdapter({
       apiKey: config.openrouterApiKey ?? "",

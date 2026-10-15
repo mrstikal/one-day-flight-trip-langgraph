@@ -277,27 +277,43 @@ export interface LoadCapabilityOptions {
   readonly apiKey?: string;
 }
 
-/** Load the cached manifest, refreshing only when explicitly allowed. */
+/**
+ * Load the cached manifest. A usable cache (fresh and covering every configured
+ * model) is returned as-is. Otherwise the manifest is refreshed over the network
+ * only when a `fetchImpl` is supplied (the explicit `ai:validate-models` path);
+ * a caller that forbids network access fails closed with an actionable error
+ * instead, so an automatic refresh can never invalidate the operator-stamped
+ * profile `pricingVersion` pins.
+ */
 export async function loadCapabilityManifest(
   options: LoadCapabilityOptions,
 ): Promise<CapabilityManifest> {
   const now = options.now ?? new Date();
   const maxAgeMs = options.maxAgeMs ?? CAPABILITY_CACHE_TTL_MS;
+  let cached: CapabilityManifest | undefined;
   try {
-    const cached = capabilityManifestSchema.parse(
-      JSON.parse(readFileSync(options.cachePath, "utf8")),
-    );
-    const coversModels = options.models.every((model) => cached.models[model] !== undefined);
-    if (coversModels && now.getTime() - Date.parse(cached.fetchedAt) < maxAgeMs) {
+    cached = capabilityManifestSchema.parse(JSON.parse(readFileSync(options.cachePath, "utf8")));
+  } catch {
+    cached = undefined;
+  }
+  if (cached) {
+    const uncovered = options.models.filter((model) => cached.models[model] === undefined);
+    const ageMs = now.getTime() - Date.parse(cached.fetchedAt);
+    if (uncovered.length === 0 && ageMs < maxAgeMs) {
       return cached;
     }
-  } catch {
-    // Fall through to an explicit refresh when one is allowed.
-  }
-  if (!options.fetchImpl) {
+    if (!options.fetchImpl) {
+      throw new AdapterError(
+        "AI_CAPABILITY_UNKNOWN",
+        uncovered.length > 0
+          ? `cached capability manifest does not cover configured model(s) ${uncovered.join(", ")}; run \`npm run ai:validate-models\` to refresh and stamp the profiles`
+          : `cached capability manifest is stale (fetched ${cached.fetchedAt}); run \`npm run ai:validate-models\` to refresh and stamp the profiles`,
+      );
+    }
+  } else if (!options.fetchImpl) {
     throw new AdapterError(
       "AI_CAPABILITY_UNKNOWN",
-      "no cached capability manifest and network refresh is not allowed",
+      `no cached capability manifest at ${options.cachePath}; run \`npm run ai:validate-models\` to create and verify it`,
     );
   }
   return refreshCapabilityManifest({
