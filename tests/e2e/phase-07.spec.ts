@@ -184,6 +184,11 @@ test("meals and activities live on separate pages with per-meal tile sections", 
   await page.getByRole("button", { name: "Save program" }).click();
   await expect(page.getByRole("heading", { name: "Meals" })).toBeVisible({ timeout: 60_000 });
 
+  // The saved view lists the choices; per-meal category selects live only in the
+  // program-choices view (a Change reopens them), never in the saved list.
+  await expect(page.getByTestId("level-select-breakfast")).toHaveCount(0);
+  await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
+
   // The activities page holds the activity choices and no meal selects.
   await page.getByRole("link", { name: "Review activities" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/activities$/, { timeout: 60_000 });

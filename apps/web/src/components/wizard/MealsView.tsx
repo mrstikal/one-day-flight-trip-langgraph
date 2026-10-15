@@ -601,26 +601,6 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
             <p>{program.dinnerNotIncludedReason}</p>
           </div>
         ) : null}
-        {changesEditable ? (
-          <div className="grid gap-3 sm:grid-cols-3">
-            {MEALS.filter(
-              (meal) =>
-                !(meal === "dinner" && program?.dinnerNotIncludedReason) &&
-                !(selfArranged?.[meal] ?? false),
-            ).map((meal) => (
-              <ServiceLevelSelect
-                key={meal}
-                tripId={tripId}
-                revision={projection.trip.revision}
-                service={meal}
-                label={meal}
-                levelState={serviceLevels[meal]}
-                customObjective={searchObjectives[meal]}
-                onChanged={refresh}
-              />
-            ))}
-          </div>
-        ) : null}
         <div className="flex flex-col gap-3">
           {MEALS.map((meal) => {
             const offerId = offerFor(program, meal);
