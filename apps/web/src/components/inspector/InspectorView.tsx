@@ -22,7 +22,7 @@ const STATUS_STYLES: Readonly<Record<string, string>> = {
   pending: "bg-cream text-ink-muted",
   active: "bg-amber-100 text-amber-900",
   completed: "bg-teal-50 text-teal-900",
-  interrupted: "bg-red-100 text-red-900",
+  interrupted: "bg-sky-100 text-sky-900",
   failed: "bg-red-100 text-red-900",
 };
 
@@ -253,6 +253,19 @@ export function InspectorView({ tripId }: { readonly tripId: string }): React.JS
               </tr>
             ))}
           </tbody>
+          {inspector.llmCalls.length > 0 ? (
+            <tfoot>
+              <tr className="border-t border-border font-semibold" data-testid="llm-total">
+                <td className="py-1 pr-3" colSpan={6}>
+                  Total ({inspector.llmCalls.length}{" "}
+                  {inspector.llmCalls.length === 1 ? "call" : "calls"}; unsettled rows count at
+                  their reserved amount)
+                </td>
+                <td className="py-1 pr-3">{inspector.llmCostTotalUsd}</td>
+                <td className="py-1" />
+              </tr>
+            </tfoot>
+          ) : null}
         </table>
       </section>
 

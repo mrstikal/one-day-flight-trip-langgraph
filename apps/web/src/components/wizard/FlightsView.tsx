@@ -378,7 +378,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
         {stalenessBanner}
         <SuccessPanel demoReference={confirmedFlight.demoReference} tripId={tripId} />
         <p className="text-sm">
-          <Link href={`/trips/${tripId}/hotel`} className="underline">
+          <Link href={`/trips/${tripId}/hotel`} className="button-link">
             Continue to hotel selection
           </Link>
         </p>
@@ -428,7 +428,7 @@ export function FlightsView({ tripId }: { readonly tripId: string }): React.JSX.
           />
         </ul>
         <p className="text-sm">
-          <Link href={`/trips/${tripId}/hotel`} className="underline">
+          <Link href={`/trips/${tripId}/hotel`} className="button-link">
             Continue to hotel selection
           </Link>
         </p>

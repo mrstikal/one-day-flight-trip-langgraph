@@ -190,7 +190,7 @@ test("meals and activities live on separate pages with per-meal tile sections", 
   await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
 
   // The activities page holds the activity choices and no meal selects.
-  await page.getByRole("link", { name: "Review activities" }).click();
+  await page.getByRole("link", { name: "Go to activities" }).click();
   await expect(page).toHaveURL(/\/trips\/[0-9a-f-]+\/activities$/, { timeout: 60_000 });
   await expect(page.getByLabel("Activity choices")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("level-select-lunch")).toHaveCount(0);
@@ -265,7 +265,7 @@ test("self-arranged meals and activities hide their offers and appear in the iti
       (response) => response.url().includes("/commands") && response.request().method() === "POST",
       { timeout: 60_000 },
     ),
-    page.getByRole("button", { name: "Save activity preferences" }).click(),
+    page.getByRole("button", { name: "Save plan" }).click(),
   ]);
   await expect(page.getByTestId("self-arranged-activities-note")).toBeVisible();
   await expect(async () => {

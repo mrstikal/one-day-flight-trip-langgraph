@@ -17,7 +17,7 @@ const STATUS_FILL: Readonly<Record<PublicInspectorNode["status"], string>> = {
   pending: "#f5f0e6",
   active: "#fde68a",
   completed: "#ccfbf1",
-  interrupted: "#fca5a5",
+  interrupted: "#bae6fd",
   failed: "#fecaca",
 };
 
@@ -25,7 +25,7 @@ const STATUS_STROKE: Readonly<Record<PublicInspectorNode["status"], string>> = {
   pending: "#c9c2b4",
   active: "#b45309",
   completed: "#0f766e",
-  interrupted: "#b91c1c",
+  interrupted: "#0369a1",
   failed: "#b91c1c",
 };
 

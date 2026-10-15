@@ -427,11 +427,11 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
                   onClick={() => void saveActivities()}
                   className="rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
                 >
-                  {busy ? "Saving…" : "Save activity preferences"}
+                  {busy ? "Saving…" : "Save plan"}
                 </button>
             </div>
             <p className="text-sm">
-              <Link href={`/trips/${tripId}/itinerary`} className="underline">
+              <Link href={`/trips/${tripId}/itinerary`} className="button-link">
                 Continue to the itinerary
               </Link>
             </p>

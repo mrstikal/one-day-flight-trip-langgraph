@@ -499,7 +499,7 @@ export function HotelView({ tripId }: { readonly tripId: string }): React.JSX.El
         ) : null}
         {changeControls}
         <p className="text-sm">
-          <Link href={`/trips/${tripId}/meals`} className="underline">
+          <Link href={`/trips/${tripId}/meals`} className="button-link">
             Continue to meals
           </Link>
         </p>

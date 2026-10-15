@@ -641,8 +641,8 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           <ConfirmationResult key={reservation.id} reservation={reservation} tripId={tripId} />
         ))}
         <p className="text-sm">
-          <Link href={`/trips/${tripId}/activities`} className="underline">
-            Review activities
+          <Link href={`/trips/${tripId}/activities`} className="button-link">
+            Go to activities
           </Link>
         </p>
       </div>

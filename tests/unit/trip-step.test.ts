@@ -199,7 +199,7 @@ describe("nextTripStep (no server calls)", () => {
       }),
     ).toEqual({
       href: `/trips/${tripId}/activities`,
-      cta: "Review activities",
+      cta: "Go to activities",
       open: "Open activities",
     });
   });
@@ -385,7 +385,7 @@ describe("nextTripStep (no server calls)", () => {
       }),
     ).toEqual({
       href: `/trips/${tripId}/activities`,
-      cta: "Review activities",
+      cta: "Go to activities",
       open: "Open activities",
     });
   });

@@ -13,7 +13,7 @@ import {
   type PublicInspectorNode,
   type PublicVoiceCall,
 } from "@odft/contracts";
-import { formatUsdAmount, usdFromDb } from "./usd.js";
+import { formatUsdAmount, parseUsdAmount, usdFromDb } from "./usd.js";
 
 /**
  * Phase 11 execution-inspector projection (08-frontend-ux.md section 10).
@@ -413,6 +413,15 @@ export async function loadPublicInspector(
       },
     ];
   });
+  // The footer total sums exactly the DISPLAYED rows with the same rule the rows
+  // render: a settled actual amount replaces its reservation, an unsettled row
+  // counts at its reserved worst case (BigInt-scaled, never a lossy float).
+  const llmCostTotalUsd = formatUsdAmount(
+    llmCalls.reduce(
+      (total, call) => total + parseUsdAmount(call.actualCostUsd ?? call.reservedCostUsd),
+      0n,
+    ),
+  );
 
   const voiceCalls = voiceResult.rows.flatMap((row): PublicVoiceCall[] => {
     const parsed = publicVoiceCallSchema.safeParse({
@@ -467,6 +476,7 @@ export async function loadPublicInspector(
     operations,
     checkpoints,
     llmCalls,
+    llmCostTotalUsd,
     voiceCalls,
     faults,
     events,
@@ -484,6 +494,7 @@ export async function loadPublicInspector(
     operations: [],
     checkpoints: [],
     llmCalls: [],
+    llmCostTotalUsd: "0",
     voiceCalls: [],
     faults: [],
     events: [],

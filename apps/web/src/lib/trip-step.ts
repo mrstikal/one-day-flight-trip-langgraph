@@ -58,7 +58,7 @@ function step(
     case "activities":
       return {
         href: `/trips/${input.tripId}/activities`,
-        cta: "Review activities",
+        cta: "Go to activities",
         open: "Open activities",
       };
     case "itinerary":

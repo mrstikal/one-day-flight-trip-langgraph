@@ -20,16 +20,22 @@ const MODES = [
     mode: "budget_conflict" as const,
     label: "Budget conflict",
     description: "Sets an explicit low budget; the itinerary planner reports a budget conflict.",
+    outcome:
+      "persists a €1 budget; the replan reports a budget conflict as a clarification card in the assistant rail (\"No price was changed\") where you can raise the budget.",
   },
   {
     mode: "preference_conflict" as const,
     label: "Preference conflict",
     description: "Requests six museums at a relaxed pace; the graph clarifies instead of inventing.",
+    outcome:
+      "the replan asks for a clarification card in the assistant rail instead of inventing a plan (e.g. a denser pace or fewer museums).",
   },
   {
     mode: "invalid_itinerary" as const,
     label: "Invalid itinerary (first attempt)",
     description: "Injects one labeled overlap on the first planning attempt; replanning repairs it.",
+    outcome:
+      "adds one labeled overlap to the next first planning attempt; replanning repairs it and the draft keeps the \"Simulated failure\" label on the itinerary page.",
   },
 ];
 
@@ -94,6 +100,25 @@ export function SimulationControls({
             {entry.label}
           </button>
         ))}
+      </div>
+      <div
+        className="mt-2 flex flex-col gap-1 rounded border border-border bg-cream p-2 text-xs text-ink-muted"
+        data-testid="scenario-help"
+      >
+        <p>
+          Arming a control only stores the simulated failure; its result appears during the next
+          planning run. Budget and preference conflicts change the trip&apos;s preferences, so the
+          meals/program step re-opens — save it to replan. The invalid-itinerary overlap applies to
+          the next planning attempt (change a meal or activity to replan if the trip is already
+          planned). The outcome shows up in the trip UI:
+        </p>
+        <ul className="flex flex-col gap-0.5">
+          {MODES.map((entry) => (
+            <li key={entry.mode}>
+              <span className="text-ink">{entry.label}</span> — {entry.outcome}
+            </li>
+          ))}
+        </ul>
       </div>
       {message ? (
         <p role="status" className="mt-2 text-xs text-ink-muted">

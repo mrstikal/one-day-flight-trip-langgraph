@@ -115,6 +115,8 @@ export const publicInspectorSchema = z
     operations: z.array(publicInspectorOperationSchema).max(200),
     checkpoints: z.array(publicInspectorCheckpointSchema).max(200),
     llmCalls: z.array(publicInspectorLlmCallSchema).max(200),
+    /** Sum of every DISPLAYED call's settled-or-reserved cost (`actual ?? reserved`). */
+    llmCostTotalUsd: z.string().regex(/^\d+(\.\d+)?$/),
     /** Voice usage stays a separate, USD-only section — never merged into LLM or travel totals. */
     voiceCalls: z.array(publicVoiceCallSchema).max(200),
     faults: z.array(publicInspectorFaultSchema).max(50),

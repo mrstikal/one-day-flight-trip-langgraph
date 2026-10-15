@@ -255,6 +255,7 @@ describe("public voice API schemas", () => {
       operations: [],
       checkpoints: [],
       llmCalls: [],
+      llmCostTotalUsd: "0",
       faults: [],
       events: [],
     };
