@@ -68,6 +68,7 @@ import type { TravelPorts } from "@odft/workflow";
 import { createFencedEventWriter, createFencedRunEffect } from "../driver.js";
 import { ensureCityLandmarks, type LandmarkDiscoveryOptions } from "./landmark-discovery.js";
 import type { AiService } from "../ai/service.js";
+import { evaluateItineraryReview } from "./itinerary-review.js";
 
 /**
  * Build the production travel-graph ports for one claimed operation. All access
@@ -300,9 +301,17 @@ function buildReviewerContext(
       activityTags: readonly string[];
       startMinute: number;
       durationMinutes: number;
+      locked: boolean;
       location: { lat: number; lon: number } | null;
     }[];
-    validation: { metrics: { walkingMinutes: number; transferMinutes: number; activityCount: number; museumCount: number } };
+    validation: {
+      metrics: {
+        walkingMinutes: number;
+        transferMinutes: number;
+        activityCount: number;
+        museumCount: number;
+      };
+    };
   },
 ): ReviewerContext {
   const requirements = Object.entries(data.trip.preferences.minimumActivityCounts)
@@ -320,6 +329,7 @@ function buildReviewerContext(
       tags: [...event.activityTags],
       startMinute: Math.min(1439, event.startMinute),
       durationMinutes: event.durationMinutes,
+      locked: event.locked,
       // Coordinates carry extra display precision fields; the reviewer context is
       // strict and only needs the two numbers.
       location: event.location ? { lat: event.location.lat, lon: event.location.lon } : null,
@@ -331,7 +341,10 @@ function buildReviewerContext(
       museumCount: record.validation.metrics.museumCount,
     },
     preferences: data.trip.preferences,
-    requirements,
+    preferredActivityIds: data.selfArrangedActivities ? [] : data.preferredActivityIds,
+    activitiesSelfArranged: data.selfArrangedActivities,
+    selfArrangedMeals: data.selfArrangedMeals,
+    requirements: data.selfArrangedActivities ? [] : requirements,
   });
 }
 
@@ -414,7 +427,11 @@ function normalizePlannerSchedule(
           }
         : // A located stop without a resolved reference cannot survive resolution;
           // keep its time budget as an unlocated break instead of inventing an id.
-          { kind: "break" as const, startMinute: stop.startMinute, durationMinutes: stop.durationMinutes }
+          {
+            kind: "break" as const,
+            startMinute: stop.startMinute,
+            durationMinutes: stop.durationMinutes,
+          }
       : { kind: stop.kind, startMinute: stop.startMinute, durationMinutes: stop.durationMinutes },
   );
   return { ...output, stops };
@@ -689,6 +706,7 @@ export function createTravelPortsFactory(
           preferredActivityIds: input.preferredActivityIds,
         });
       }
+      await insertFencedEvent(ctx, { type: "program.saved", payload: {} });
       return {
         applied: true,
         replacementStaged: firstReplacement !== null,
@@ -760,6 +778,10 @@ export function createTravelPortsFactory(
         data.zone,
       );
       const context = buildPlannerContext(data, input.feedback, departureMinuteRaw);
+      await insertFencedEvent(ctx, {
+        type: "itinerary.attempt_started",
+        payload: { attempt: input.attempt, candidateCount: context.candidates.length },
+      });
       const planned = await ai.plan({
         tripId: input.tripId,
         operationId: input.operationId,
@@ -767,11 +789,6 @@ export function createTravelPortsFactory(
         attempt: input.attempt,
         context,
         ...(signal ? { signal } : {}),
-      });
-
-      await insertFencedEvent(ctx, {
-        type: "itinerary.attempt_started",
-        payload: { attempt: input.attempt, mode: planned.mode, candidateCount: context.candidates.length },
       });
 
       // Scenario E: the persisted first-attempt overlay injects one labeled
@@ -999,6 +1016,10 @@ export function createTravelPortsFactory(
         throw new ItineraryPersistenceError("CONFLICT", "no itinerary draft is available to review");
       }
       const context = buildReviewerContext(data, record);
+      await insertFencedEvent(ctx, {
+        type: "itinerary.review_started",
+        payload: { attempt: input.attempt },
+      });
       const reviewed = await ai.review({
         tripId: input.tripId,
         operationId: input.operationId,
@@ -1007,19 +1028,19 @@ export function createTravelPortsFactory(
         context,
         ...(signal ? { signal } : {}),
       });
+      const evaluation = evaluateItineraryReview(context, reviewed.output, input);
       const suggestions = reviewed.output.issues
         .map((issue) => `${issue.code}: ${issue.explanation}`.slice(0, 300))
         .slice(0, 8);
-      const demoteToWarnings = reviewed.output.verdict === "revise" && input.atBound;
-      const reviewWarnings: ItineraryIssue[] = demoteToWarnings
-        ? reviewed.output.issues.slice(0, 8).map((issue) => ({
-            severity: "warning" as const,
-            code: "review_suggestion" as const,
-            message: `Review suggestion (${issue.code}): ${issue.explanation}`.slice(0, 400),
-            eventIds: issue.eventIds.slice(0, 8),
-            simulatedFailure: false,
-          }))
-        : [];
+      const reviewWarnings: ItineraryIssue[] = evaluation.warningIssues
+        .slice(0, 8)
+        .map((issue) => ({
+          severity: "warning" as const,
+          code: "review_suggestion" as const,
+          message: `Review suggestion (${issue.code}): ${issue.explanation}`.slice(0, 400),
+          eventIds: issue.eventIds.slice(0, 8),
+          simulatedFailure: false,
+        }));
       const validation = {
         ...record.validation,
         warnings: [
@@ -1032,7 +1053,7 @@ export function createTravelPortsFactory(
         issues: reviewed.output.issues,
         suggestedOrder: reviewed.output.suggestedOrder,
         explanation: reviewed.output.explanation,
-        suggestionsAsWarnings: demoteToWarnings,
+        suggestionsAsWarnings: evaluation.warningIssues.length > 0,
       };
       await saveItineraryReview(
         pool,
@@ -1048,7 +1069,7 @@ export function createTravelPortsFactory(
         fenceFor(ctx, input.operationId, input.tripId),
       );
       const conflictDecision =
-        reviewed.output.verdict === "conflict"
+        evaluation.verdict === "conflict"
           ? buildItineraryConflictDecision({
               errors: record.validation.errors,
               metrics: record.validation.metrics,
@@ -1060,7 +1081,8 @@ export function createTravelPortsFactory(
       await insertFencedEvent(ctx, {
         type: "itinerary.reviewed",
         payload: {
-          verdict: reviewed.output.verdict,
+          verdict: evaluation.verdict,
+          suppressionReason: evaluation.suppressionReason,
           issueCount: reviewed.output.issues.length,
           attempt: input.attempt,
           mode: reviewed.mode,
@@ -1070,7 +1092,7 @@ export function createTravelPortsFactory(
       // attempts); map it to the stable candidate refIds the planner recognizes.
       const eventRefById = new Map(
         record.events
-          .filter((event) => event.refId !== null)
+          .filter((event) => event.refId !== null && !event.locked)
           .map((event) => [event.id, event.refId as string]),
       );
       const suggestedCandidateOrder = [
@@ -1081,7 +1103,8 @@ export function createTravelPortsFactory(
         ),
       ];
       return {
-        verdict: reviewed.output.verdict,
+        verdict: evaluation.verdict,
+        revisionFingerprint: evaluation.revisionFingerprint,
         suggestions,
         issueCount: reviewed.output.issues.length,
         suggestedOrder: reviewed.output.suggestedOrder,

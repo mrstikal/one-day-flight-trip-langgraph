@@ -127,7 +127,14 @@ The domain assembly service resolves UTC times, actual reservation locks, route 
 
 Output: `{ verdict: "acceptable" | "revise" | "conflict", issues: ReviewIssue[], suggestedOrder: string[], explanation: string }`. Issues use enums `poor_sequence`, `excess_travel`, `pace_mismatch`, `interest_mismatch`, `insufficient_variety`, `unexplained_compromise`, and existing event IDs. Maximum eight issues. Suggested order contains known event IDs only, preserves fixed reservations, and is passed back to the planner, not applied as a state mutation.
 
-The reviewer cannot change a deterministic invalid status to valid. Nonblocking stylistic suggestions become visible warnings when the three-attempt bound is reached and the deterministic draft is still valid. Hard preference conflicts remain blocking until clarified.
+The reviewer cannot change a deterministic invalid status to valid. The context includes explicit activity pins,
+self-arranged services, and per-event reservation locks. Visits are opt-in: interests alone do not authorize
+extra activities, and intentional free time is not a defect. Minutes are destination-local minutes since midnight.
+Nonblocking stylistic suggestions become visible warnings immediately. A sequencing revision requires a different
+order of existing movable stops; travel/density revisions must affect movable content. Identical actionable
+findings on unchanged resolved structure (ignoring regenerated event IDs and model wording), or reaching the
+three-attempt bound, also demote a revision to warnings. The raw review remains persisted; the effective
+workflow verdict opens explicit approval. Hard preference conflicts remain blocking until clarified.
 
 ## 6. Versioned Prompt Specifications
 
@@ -175,14 +182,21 @@ If requirements cannot coexist, report the conflict/compromise rather than silen
 Return only the supplied strict proposal schema and a short explanation.
 ```
 
-### `reviewer-v1`
+### `reviewer-v2`
 
 ```text
 Review this deterministically validated demo itinerary for qualitative problems.
 Use only supplied event IDs, route metrics, interests, pace, and explicit activity requirements.
+Visits are OPT-IN: only preferredActivityIds and explicit tag minimums authorize visits. Interests alone do not request visits.
+A day without selected or required visits is valid; free time is intentional, not insufficient variety or an interest mismatch.
+Self-arranged meals and activities are intentionally excluded. Never suggest filling their time with unrequested services.
+startMinute is the destination-local minute since MIDNIGHT (450 means 07:30), not elapsed time since the itinerary began.
+Locked events cannot move. Transfers and airport buffers are deterministically computed, not optional time to reclaim.
 Look for poor sequencing, avoidable travel, exhausting density, and unexplained preference compromises.
 Do not re-authorize feasibility, compute authoritative prices, or alter confirmed reservations.
 Distinguish blocking user-requirement conflicts from nonblocking stylistic suggestions.
+Use acceptable for stylistic suggestions; revise only for an actionable structural improvement within the supplied choices.
+For poor sequencing, supply a genuinely different order of existing movable stops. Do not request extra activities or changes to locked events.
 Return the strict review schema and concise actionable findings, not private reasoning.
 ```
 
@@ -205,6 +219,12 @@ Trip limits: 40 attempted live calls and USD 1.00 by default. Every retry counts
 5. Record latency, input/output/cached/reasoning tokens where present, provider-reported cost or conservative calculated estimate, schema/semantic-validation status, finish reason, and retry count.
 6. Persist a successful validated object under the effect scope before returning to the graph; replay reuses it without another billable call.
 7. If a timeout/crash leaves billing unknown, keep the worst-case reservation until explicit reconciliation. A retry reserves another attempt/cost; do not release an uncertain charge as zero.
+
+Elapsed transport time uses a monotonic clock and includes response-body reads. Timeouts, aborts, network
+failures, and uncertain HTTP responses retain their measured latency even when token usage and billing are
+unknown; returned retry latency includes failed attempts. Persist `itinerary.attempt_started` and
+`itinerary.review_started` before the corresponding AI call, not after it returns. Public operation progress
+is derived from those events and `program.saved`, so acceptance is never presented as completed persistence.
 
 Store USD amounts as `numeric(18,9)` strings and compute ceilings with fixed-scale integer/BigInt arithmetic and upward rounding. Do not mix AI USD usage with trip EUR prices. Cached-token discounts are used only when authoritative usage/pricing supports them; otherwise conservatively count normal input price.
 

@@ -33,6 +33,11 @@ const PROJECTION_EVENTS = [
   "node.started",
   "node.updated",
   "conversation.message_added",
+  "program.saved",
+  "itinerary.attempt_started",
+  "itinerary.attempt_finished",
+  "itinerary.review_started",
+  "itinerary.reviewed",
 ] as const;
 
 /** Bounded dedupe window: ids are monotonic, so only recent ones need keeping. */

@@ -2,7 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
-import type { PublicDecisionResponse, PublicMealOffer, PublicProgramChoices, Meal } from "@odft/contracts";
+import type {
+  PublicDecisionResponse,
+  PublicMealOffer,
+  PublicProgramChoices,
+  Meal,
+} from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
 import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
@@ -182,13 +187,14 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
     [handleError, projection, refresh, tripId],
   );
 
-  const activeWork = useMemo(
+  const activeOperation = useMemo(
     () =>
-      projection?.operations.some(
+      projection?.operations.find(
         (operation) => operation.status === "queued" || operation.status === "running",
-      ) ?? false,
+      ),
     [projection],
   );
+  const activeWork = activeOperation !== undefined;
 
   if (!projection) {
     if (error) {
@@ -197,8 +203,15 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
     return <StatusPanel message="Loading your meal options…" />;
   }
 
-  const { meals, program, pendingDecision, proposal, reservations, serviceLevels, searchObjectives } =
-    projection;
+  const {
+    meals,
+    program,
+    pendingDecision,
+    proposal,
+    reservations,
+    serviceLevels,
+    searchObjectives,
+  } = projection;
   const confirmedMeals = reservations.filter(
     (reservation) =>
       reservation.status === "confirmed" &&
@@ -226,7 +239,6 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
       Live updates reconnecting…
     </p>
   ) : null;
-
   // Unfinished failed planning always wins: a pending decision that can no
   // longer be answered must not present a Save button that silently conflicts.
   if (projection.trip.recoveryRequired || projection.trip.workflowStatus === "failed") {
@@ -396,7 +408,13 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
             }
             className="rounded bg-teal px-4 py-2 text-sm font-medium text-paper hover:bg-teal-strong disabled:opacity-50"
           >
-            {busy ? "Saving…" : "Save program"}
+            {busy
+              ? "Saving…"
+              : activeOperation?.progress?.programSaved
+                ? "Selections saved"
+                : activeWork
+                  ? "Request accepted"
+                  : "Save program"}
           </button>
         </div>
         <p role="note" className="text-sm text-ink-muted">

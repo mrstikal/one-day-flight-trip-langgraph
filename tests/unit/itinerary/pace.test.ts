@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { PACE_PROFILES } from "../../../packages/domain/src/itinerary/taxonomy.js";
 import { fixturePlanner, fixtureReviewer } from "../../../packages/ai/src/fixture-adapter.js";
-import { plannerContextSchema, type PlannerContext } from "../../../packages/ai/src/context/role-contexts.js";
+import {
+  plannerContextSchema,
+  type PlannerContext,
+} from "../../../packages/ai/src/context/role-contexts.js";
 import { tripPreferencesSchema } from "@odft/contracts";
 
 /** 08-frontend-ux.md section 7 pace semantics must survive both implementations. */
@@ -23,9 +26,33 @@ function context(pace: "relaxed" | "moderate" | "intensive"): PlannerContext {
       { kind: "airport", refId: "return_flight", startMinute: 23 * 60, endMinute: 23 * 60 },
     ],
     candidates: [
-      { id: "m-b", kind: "meal", meal: "breakfast", tags: [], durationMinutes: meals.breakfast, openingStartMinute: 8 * 60, openingEndMinute: 10 * 60 },
-      { id: "m-l", kind: "meal", meal: "lunch", tags: [], durationMinutes: meals.lunch, openingStartMinute: 12 * 60, openingEndMinute: 14 * 60 },
-      { id: "m-d", kind: "meal", meal: "dinner", tags: [], durationMinutes: meals.dinner, openingStartMinute: 19 * 60, openingEndMinute: 22 * 60 },
+      {
+        id: "m-b",
+        kind: "meal",
+        meal: "breakfast",
+        tags: [],
+        durationMinutes: meals.breakfast,
+        openingStartMinute: 8 * 60,
+        openingEndMinute: 10 * 60,
+      },
+      {
+        id: "m-l",
+        kind: "meal",
+        meal: "lunch",
+        tags: [],
+        durationMinutes: meals.lunch,
+        openingStartMinute: 12 * 60,
+        openingEndMinute: 14 * 60,
+      },
+      {
+        id: "m-d",
+        kind: "meal",
+        meal: "dinner",
+        tags: [],
+        durationMinutes: meals.dinner,
+        openingStartMinute: 19 * 60,
+        openingEndMinute: 22 * 60,
+      },
       ...Array.from({ length: 10 }, (_, index) => ({
         id: `a-${String(index).padStart(2, "0")}`,
         kind: "activity" as const,
@@ -165,6 +192,9 @@ describe("pace profiles (08-frontend-ux.md section 7)", () => {
   it("does not double-count walking in the fixture review travel total", () => {
     const base = {
       role: "reviewer" as const,
+      preferredActivityIds: [],
+      activitiesSelfArranged: false,
+      selfArrangedMeals: [],
       events: [],
       preferences: tripPreferencesSchema.parse({
         travelVariant: "one_night",

@@ -88,6 +88,12 @@ function summarizeEvent(type: string, payload: unknown): string | null {
       return `awaiting ${shortString(record.kind, 60) ?? "decision"}`;
     case "itinerary.attempt_finished":
       return `itinerary attempt ${String(record.attempt ?? "?")} ${shortString(record.status, 20) ?? ""}`.trim();
+    case "program.saved":
+      return "meal selections saved";
+    case "itinerary.attempt_started":
+      return `planning itinerary (attempt ${String(record.attempt ?? "?")})`;
+    case "itinerary.review_started":
+      return `reviewing itinerary (attempt ${String(record.attempt ?? "?")})`;
     case "itinerary.reviewed":
       return `itinerary reviewed: ${shortString(record.verdict, 20) ?? "unknown"}`;
     case "itinerary.approved":

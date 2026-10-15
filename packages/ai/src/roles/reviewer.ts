@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { nonEmptyStringSchema } from "@odft/contracts";
 import { reviewerContextSchema } from "../context/role-contexts.js";
-import { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_PROMPT } from "../prompts/reviewer-v1.js";
+import { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_PROMPT } from "../prompts/reviewer-v2.js";
 import type { RoleDefaultLimits } from "./limits.js";
 
 /** Reviewer role contract (06-ai-agent-design.md section 5). */

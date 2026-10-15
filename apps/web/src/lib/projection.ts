@@ -449,10 +449,23 @@ export async function buildTripProjection(
     status: OperationStatus;
     accepted_revision: number;
     attempts: number;
+    progress_type:
+      "program.saved" | "itinerary.attempt_started" | "itinerary.review_started" | null;
+    program_saved: boolean | null;
   }>(
-    `SELECT id, status, accepted_revision, attempts
-       FROM odft_app.workflow_operations WHERE trip_id = $1
-      ORDER BY created_at ASC`,
+    `SELECT o.id, o.status, o.accepted_revision, o.attempts,
+            progress.progress_type, progress.program_saved
+       FROM odft_app.workflow_operations o
+       LEFT JOIN LATERAL (
+         SELECT (array_agg(e.type ORDER BY e.id DESC))[1] AS progress_type,
+                bool_or(e.type = 'program.saved') AS program_saved
+           FROM odft_app.execution_events e
+          WHERE e.trip_id = o.trip_id AND e.operation_id = o.id
+            AND o.status IN ('queued','running')
+            AND e.type IN ('program.saved','itinerary.attempt_started','itinerary.review_started')
+       ) progress ON true
+      WHERE o.trip_id = $1
+      ORDER BY o.created_at ASC`,
     [tripId],
   );
   const operations: OperationStatusResponse[] = operationsResult.rows.map((operation) => ({
@@ -460,6 +473,19 @@ export async function buildTripProjection(
     status: operation.status,
     acceptedRevision: operation.accepted_revision,
     attempts: operation.attempts,
+    ...(operation.progress_type
+      ? {
+          progress: {
+            stage:
+              operation.progress_type === "program.saved"
+                ? ("program_saved" as const)
+                : operation.progress_type === "itinerary.attempt_started"
+                  ? ("planning_itinerary" as const)
+                  : ("reviewing_itinerary" as const),
+            programSaved: operation.program_saved === true,
+          },
+        }
+      : {}),
   }));
 
   const decisionResult = await pool.query<{

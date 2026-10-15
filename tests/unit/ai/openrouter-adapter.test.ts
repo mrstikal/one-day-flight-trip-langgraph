@@ -63,7 +63,10 @@ function manifest(): CapabilityManifest {
 }
 
 function response(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function completion(content: unknown, extra: Record<string, unknown> = {}): unknown {
@@ -122,11 +125,13 @@ function governor() {
   const reservations: string[] = [];
   const settled: { callId: string; usage: AdapterUsage }[] = [];
   const unknown: string[] = [];
+  const unknownTimings: { callId: string; reason: string; latencyMs: number }[] = [];
   let next = 0;
   return {
     reservations,
     settled,
     unknown,
+    unknownTimings,
     governor: {
       reserve: async () => {
         next += 1;
@@ -137,8 +142,9 @@ function governor() {
       settle: async (callId: string, usage: AdapterUsage) => {
         settled.push({ callId, usage });
       },
-      markUnknown: async (callId: string) => {
+      markUnknown: async (callId: string, reason: string, latencyMs: number) => {
         unknown.push(callId);
+        unknownTimings.push({ callId, reason, latencyMs });
       },
     },
   };
@@ -233,10 +239,89 @@ describe("OpenRouter adapter transport", () => {
       profiles: profiles(),
       fetchImpl: fetchImpl as never,
     });
-    await expect(
-      adapter.generateObject(request()),
-    ).rejects.toMatchObject({ code: "AI_AUTH_FAILED", retryable: false });
+    await expect(adapter.generateObject(request())).rejects.toMatchObject({
+      code: "AI_AUTH_FAILED",
+      retryable: false,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a full-response timeout and includes it in retry latency without releasing its charge", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const g = governor();
+      let calls = 0;
+      const fetchImpl: typeof fetch = async (_url, init) => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                init?.signal?.addEventListener("abort", () =>
+                  controller.error(new Error("stalled body")),
+                );
+              },
+            }),
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return response(completion({ result: { value: "ok" } }));
+      };
+      const adapter = new OpenRouterAdapter({
+        apiKey: "secret",
+        manifest: manifest(),
+        profiles: profiles(),
+        governor: g.governor,
+        fetchImpl,
+      });
+      const pending = adapter.generateObject(request());
+      await vi.advanceTimersByTimeAsync(5_120);
+      const result = await pending;
+      expect(result.latencyMs).toBe(5_120);
+      expect(g.unknownTimings).toEqual([
+        { callId: "call-1", reason: "AI_TIMEOUT", latencyMs: 5_000 },
+      ]);
+      expect(g.settled).toHaveLength(1);
+      expect(g.settled[0]?.usage).toMatchObject({ validationStatus: "valid", latencyMs: 120 });
+      expect(g.reservations).toEqual(["call-1", "call-2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records elapsed time for a network failure and a worker shutdown abort", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      for (const aborted of [false, true]) {
+        const controller = new AbortController();
+        const g = governor();
+        const configured = profiles();
+        configured.intent.maxAttempts = 1;
+        const adapter = new OpenRouterAdapter({
+          apiKey: "secret",
+          manifest: manifest(),
+          profiles: configured,
+          governor: g.governor,
+          fetchImpl: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            if (aborted) controller.abort(new Error("shutdown"));
+            throw new Error("network disconnected");
+          },
+        });
+        const pending = expect(
+          adapter.generateObject({ ...request(), signal: controller.signal }),
+        ).rejects.toMatchObject({ code: aborted ? "AI_ABORTED" : "AI_TRANSPORT_FAILED" });
+        await vi.advanceTimersByTimeAsync(250);
+        await pending;
+        expect(g.unknownTimings[0]).toMatchObject({
+          latencyMs: 250,
+          reason: aborted ? "AI_ABORTED" : "AI_TRANSPORT_FAILED",
+        });
+        expect(g.settled).toEqual([]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("classifies a shutdown abort as AI_ABORTED even when the error is not an AbortError (P2-13)", async () => {
@@ -260,18 +345,21 @@ describe("OpenRouter adapter transport", () => {
   it("discards reasoning fields from the response", async () => {
     const fetchImpl = vi.fn(async () =>
       response(
-        completion({ result: { value: "ok" } }, {
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({ result: { value: "ok" } }),
-                reasoning: "hidden chain of thought",
-                reasoning_details: [{ text: "secret" }],
+        completion(
+          { result: { value: "ok" } },
+          {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ result: { value: "ok" } }),
+                  reasoning: "hidden chain of thought",
+                  reasoning_details: [{ text: "secret" }],
+                },
+                finish_reason: "stop",
               },
-              finish_reason: "stop",
-            },
-          ],
-        }),
+            ],
+          },
+        ),
       ),
     );
     const adapter = new OpenRouterAdapter({

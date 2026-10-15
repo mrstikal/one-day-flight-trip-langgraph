@@ -223,5 +223,5 @@ export {
   RECOMMENDATION_SYSTEM_PROMPT,
 } from "./prompts/recommendation-v1.js";
 export { PLANNER_PROMPT_VERSION, PLANNER_SYSTEM_PROMPT } from "./prompts/planner-v2.js";
-export { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_PROMPT } from "./prompts/reviewer-v1.js";
+export { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_PROMPT } from "./prompts/reviewer-v2.js";
 export { enforceOptInVisits } from "./opt-in-visits.js";

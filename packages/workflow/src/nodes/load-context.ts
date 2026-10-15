@@ -92,6 +92,7 @@ export async function loadContextNode(state: TravelState, runtime: unknown): Pro
     itineraryFeedback: [],
     itineraryReviewVerdict: null,
     itineraryReviewSuggestions: [],
+    itineraryReviewFingerprint: null,
     itineraryBudgetConflict: false,
     itineraryTotalCostMinor: 0,
     recoveryOptionIds: [],

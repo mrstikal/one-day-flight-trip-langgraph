@@ -64,7 +64,10 @@ interface ChatResponse {
  */
 export const OPTIONAL_TRANSPORT_FIELDS: Readonly<Record<string, ReadonlyMap<string, ReadonlySet<string>>>> = {
   intent: new Map([
-    ["set_route", new Set(["originAirportId", "destinationCityId", "sightseeingDate", "travelVariant"])],
+    [
+      "set_route",
+      new Set(["originAirportId", "destinationCityId", "sightseeingDate", "travelVariant"]),
+    ],
     ["find_alternatives", new Set(["level"])],
   ]),
   recommendation: new Map(),
@@ -314,7 +317,7 @@ export class OpenRouterAdapter implements LLMAdapter {
     const fetchImpl = this.options.fetchImpl ?? globalThis.fetch;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error("ai timeout")), profile.timeoutMs);
-    const started = Date.now();
+    const started = performance.now();
     try {
       const response = await fetchImpl(this.options.endpoint ?? OPENROUTER_CHAT_URL, {
         method: "POST",
@@ -326,7 +329,12 @@ export class OpenRouterAdapter implements LLMAdapter {
         signal: combineSignals([signal, timeout.signal]),
       });
       const text = await response.text();
-      return { status: response.status, ok: response.ok, text, latencyMs: Date.now() - started };
+      return {
+        status: response.status,
+        ok: response.ok,
+        text,
+        latencyMs: Math.max(0, Math.round(performance.now() - started)),
+      };
     } catch (error) {
       // Classify by which signal fired, not by the error name: an abort reason may
       // surface as a plain Error (e.g. the driver's shutdown abort).
@@ -378,12 +386,16 @@ export class OpenRouterAdapter implements LLMAdapter {
       settledCalls.add(callId);
       await this.options.governor.settle(callId, usage);
     };
-    const markUnknownOnce = async (callId: string, reason: string): Promise<void> => {
+    const markUnknownOnce = async (
+      callId: string,
+      reason: string,
+      latencyMs: number,
+    ): Promise<void> => {
       if (!this.options.governor || settledCalls.has(callId)) {
         return;
       }
       settledCalls.add(callId);
-      await this.options.governor.markUnknown(callId, reason);
+      await this.options.governor.markUnknown(callId, reason, latencyMs);
     };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -435,8 +447,11 @@ export class OpenRouterAdapter implements LLMAdapter {
         },
       };
 
+      const transportStarted = performance.now();
+      let transportCompleted = false;
       try {
         const { ok, status, text, latencyMs } = await this.transport(body, request.signal, profile);
+        transportCompleted = true;
         totalLatency += latencyMs;
         let parsedBody: ChatResponse = {};
         try {
@@ -448,7 +463,7 @@ export class OpenRouterAdapter implements LLMAdapter {
           const failure = classifyHttpFailure(status, parsedBody);
           if (reservation) {
             if (failure.retryable) {
-              await markUnknownOnce(reservation.callId, failure.code);
+              await markUnknownOnce(reservation.callId, failure.code, latencyMs);
             } else {
               await settleOnce(reservation.callId, {
                 latencyMs,
@@ -499,7 +514,7 @@ export class OpenRouterAdapter implements LLMAdapter {
             true,
           );
           if (reservation) {
-            await markUnknownOnce(reservation.callId, failure.code);
+            await markUnknownOnce(reservation.callId, failure.code, latencyMs);
           }
           if (attempt >= maxAttempts) {
             throw failure;
@@ -597,6 +612,10 @@ export class OpenRouterAdapter implements LLMAdapter {
         };
       } catch (error) {
         if (error instanceof AdapterError) {
+          const failedLatencyMs = Math.max(0, Math.round(performance.now() - transportStarted));
+          if (!transportCompleted) {
+            totalLatency += failedLatencyMs;
+          }
           // Transport-level timeouts/network failures were never settled inline.
           if (
             reservation &&
@@ -604,7 +623,7 @@ export class OpenRouterAdapter implements LLMAdapter {
               error.code === "AI_TRANSPORT_FAILED" ||
               error.code === "AI_ABORTED")
           ) {
-            await markUnknownOnce(reservation.callId, error.code);
+            await markUnknownOnce(reservation.callId, error.code, failedLatencyMs);
           }
           if (!error.retryable || attempt >= maxAttempts) {
             throw error;

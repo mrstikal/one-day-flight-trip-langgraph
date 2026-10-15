@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { AIRole, CostStatus, LlmCallStatus } from "@odft/contracts";
 import { assertOperationFence } from "./effects.js";
-import { countTripLlmCalls, formatUsdAmount, parseUsdAmount, sumTripLlmCostUsd, usdFromDb } from "./usd.js";
+import {
+  countTripLlmCalls,
+  formatUsdAmount,
+  parseUsdAmount,
+  sumTripLlmCostUsd,
+  usdFromDb,
+} from "./usd.js";
 
 /**
  * Durable AI call governance (06-ai-agent-design.md section 8).
@@ -38,7 +44,11 @@ export interface ReserveCallInput {
 
 export type ReserveCallOutcome =
   | { readonly ok: true; readonly callId: string }
-  | { readonly ok: false; readonly code: "AI_BUDGET_EXCEEDED" | "AI_PRICING_UNKNOWN"; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly code: "AI_BUDGET_EXCEEDED" | "AI_PRICING_UNKNOWN";
+      readonly message: string;
+    };
 
 export interface RecordCallResultInput {
   readonly inputTokens?: number;
@@ -170,7 +180,11 @@ export async function reserveCall(
       reserved = parseUsdAmount(input.reservedCostUsd);
     } catch {
       await client.query("ROLLBACK");
-      return { ok: false, code: "AI_PRICING_UNKNOWN", message: "reserved cost is not a valid USD amount" };
+      return {
+        ok: false,
+        code: "AI_PRICING_UNKNOWN",
+        message: "reserved cost is not a valid USD amount",
+      };
     }
     const ceiling = parseUsdAmount(input.maxCallCostUsd);
     if (reserved > ceiling) {
@@ -296,12 +310,24 @@ export async function recordCallResult(
 }
 
 /** Mark a call whose billing is unknown; the reservation is retained, not zeroed. */
-export async function markCallUnknown(pool: Pool, callId: string, errorCode: string): Promise<void> {
+export async function markCallUnknown(
+  pool: Pool,
+  callId: string,
+  errorCode: string,
+  latencyMs?: number,
+): Promise<void> {
+  const elapsed =
+    latencyMs === undefined
+      ? null
+      : Number.isFinite(latencyMs)
+        ? Math.max(0, Math.round(latencyMs))
+        : 0;
   await pool.query(
     `UPDATE odft_app.llm_calls
-        SET status = 'unknown_reserved', cost_status = 'unknown_reserved', error_code = $2
+        SET status = 'unknown_reserved', cost_status = 'unknown_reserved', error_code = $2,
+            latency_ms = COALESCE($3::integer, latency_ms)
       WHERE id = $1`,
-    [callId, errorCode],
+    [callId, errorCode, elapsed],
   );
 }
 

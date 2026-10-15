@@ -106,11 +106,12 @@ describe("LLM call ledger (real PostgreSQL)", () => {
     if (!reserved.ok) {
       throw new Error("reservation refused");
     }
-    await markCallUnknown(pool, reserved.callId, "AI_TIMEOUT");
+    await markCallUnknown(pool, reserved.callId, "AI_TIMEOUT", 30_000);
     const unknown = await getLlmCall(pool, reserved.callId);
     expect(unknown?.status).toBe("unknown_reserved");
     expect(unknown?.costStatus).toBe("unknown_reserved");
     expect(unknown?.costUsd).toBe("0.011404");
+    expect(unknown?.latencyMs).toBe(30_000);
 
     await reconcileUnknownBilling(pool, reserved.callId, { actualCostUsd: "0.002" });
     const reconciled = await getLlmCall(pool, reserved.callId);

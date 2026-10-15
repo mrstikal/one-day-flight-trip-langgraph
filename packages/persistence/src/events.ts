@@ -51,6 +51,8 @@ const EVENT_FIELD_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
     "fingerprint",
   ],
   "itinerary.attempt_started": ["attempt", "mode", "candidateCount"],
+  "program.saved": [],
+  "itinerary.review_started": ["attempt"],
   "itinerary.attempt_finished": [
     "attempt",
     "status",
@@ -59,7 +61,7 @@ const EVENT_FIELD_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
     "simulatedFailure",
     "mode",
   ],
-  "itinerary.reviewed": ["verdict", "issueCount", "attempt", "mode"],
+  "itinerary.reviewed": ["verdict", "issueCount", "attempt", "mode", "suppressionReason"],
   "itinerary.approved": ["itineraryId", "version", "decisionId"],
   "node.started": ["node"],
   "node.updated": ["node"],

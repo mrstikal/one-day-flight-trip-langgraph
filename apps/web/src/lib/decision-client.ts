@@ -47,7 +47,10 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<{ oper
         "x-csrf-token": csrfToken,
       }),
     );
-    operationPreloader.trackAcceptedOperation(response.operationId, "Saving your decision...");
+    operationPreloader.trackAcceptedOperation(
+      response.operationId,
+      "Request accepted. Processing your decision...",
+    );
     return response;
   });
 }
@@ -68,7 +71,10 @@ export async function submitCommand(
         "x-csrf-token": csrfToken,
       }),
     );
-    operationPreloader.trackAcceptedOperation(response.operationId, message);
+    operationPreloader.trackAcceptedOperation(
+      response.operationId,
+      "Request accepted. Preparing your plan...",
+    );
     return response;
   });
 }
@@ -87,7 +93,10 @@ export async function retryOperation(
         { "x-csrf-token": csrfToken },
       ),
     );
-    operationPreloader.trackAcceptedOperation(operationId, "Retrying your plan...");
+    operationPreloader.trackAcceptedOperation(
+      operationId,
+      "Retry accepted. Preparing your plan...",
+    );
     return response;
   });
 }

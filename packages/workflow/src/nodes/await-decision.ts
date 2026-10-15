@@ -61,6 +61,7 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
     // (3 total attempts per user operation) and clears stale replan feedback.
     planningAttempt: 0,
     itineraryFeedback: [],
+    itineraryReviewFingerprint: null,
   } satisfies Partial<TravelUpdate>;
 
   // Phase 11: a free-text follow-up is admitted as a modification for EVERY
@@ -173,7 +174,9 @@ export async function awaitDecisionNode(state: TravelState): Promise<TravelUpdat
       throw new InvalidUpdateError("the confirmation does not match the staged route change");
     }
     const named = [...response.affectedReservationIds].sort();
-    const preview = [...(state.routeChangePreview?.affectedReservations.map((entry) => entry.id) ?? [])].sort();
+    const preview = [
+      ...(state.routeChangePreview?.affectedReservations.map((entry) => entry.id) ?? []),
+    ].sort();
     if (preview.length === 0 || named.join(",") !== preview.join(",")) {
       throw new InvalidUpdateError(
         "the confirmation must name exactly the reservations the preview listed",

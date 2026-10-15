@@ -235,7 +235,11 @@ export const travelStateFields = {
   /** Bounded validator/review feedback for the next planning attempt. */
   itineraryFeedback: z.array(z.string().min(1).max(300)).max(10).default(() => []),
   itineraryReviewVerdict: z.enum(["acceptable", "revise", "conflict"]).nullable().default(null),
-  itineraryReviewSuggestions: z.array(z.string().min(1).max(300)).max(8).default(() => []),
+  itineraryReviewSuggestions: z
+    .array(z.string().min(1).max(300))
+    .max(8)
+    .default(() => []),
+  itineraryReviewFingerprint: z.string().nullable().default(null),
   /** True when the deterministic validator reported a budget conflict. */
   itineraryBudgetConflict: z.boolean().default(false),
   /** Plan-derived cost total reported by the clarification (minor units). */

@@ -86,8 +86,16 @@ export interface AiService {
     readonly context: PlannerContext;
     readonly signal?: AbortSignal;
   }): Promise<
-    | { readonly kind: "planned"; readonly output: PlannerOutput; readonly mode: "fixture" | "openrouter" }
-    | { readonly kind: "rejected"; readonly reason: string; readonly mode: "fixture" | "openrouter" }
+    | {
+        readonly kind: "planned";
+        readonly output: PlannerOutput;
+        readonly mode: "fixture" | "openrouter";
+      }
+    | {
+        readonly kind: "rejected";
+        readonly reason: string;
+        readonly mode: "fixture" | "openrouter";
+      }
   >;
   /**
    * Phase 10: one reviewer-role call (or fixture) over the deterministically
@@ -187,14 +195,8 @@ async function loadIntentSource(
     [trip.id],
   );
 
-  const knownAirportIds = [
-    trip.originAirportId,
-    ...airports.rows.map((row) => row.airport_id),
-  ];
-  const knownOfferIds = [
-    ...selections.rows.map((row) => row.offer_id),
-    ...validIds,
-  ].slice(0, 50);
+  const knownAirportIds = [trip.originAirportId, ...airports.rows.map((row) => row.airport_id)];
+  const knownOfferIds = [...selections.rows.map((row) => row.offer_id), ...validIds].slice(0, 50);
 
   const offerPrices = new Map<string, number>();
   const offerLevels = new Map<string, "budget" | "standard" | "luxury">();
@@ -432,8 +434,8 @@ function createGovernor(
         errorCode: usage.errorCode,
       });
     },
-    async markUnknown(callId, reason) {
-      await markCallUnknown(pool, callId, reason);
+    async markUnknown(callId, reason, latencyMs) {
+      await markCallUnknown(pool, callId, reason, latencyMs);
     },
   };
 }

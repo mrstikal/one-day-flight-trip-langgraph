@@ -68,6 +68,12 @@ simulated bookings, replacements, impactful route changes, and itinerary approva
    reservations, activity counts, and budget. Planner/reviewer feedback can revise the draft; unresolved
    conflicts require a user decision. A map, validation messages, and a party-total EUR breakdown
    accompany the itinerary; approving it is separate from booking anything.
+   Saving meal choices accepts the request asynchronously, then shows when the choices are persisted,
+   the itinerary is being built, and the draft is being reviewed inside a blocking full-screen preloader.
+   Navigation and controls stay unavailable until the operation settles. Visits are opt-in, so an otherwise
+   valid day without selected or required activities is not repeatedly replanned to fill free time.
+   Stylistic advice is shown as warnings; only actionable structural feedback triggers another attempt,
+   and identical feedback on unchanged structure stops early.
 5. **Revise and observe.** Chat or supported controls can change preferences, search alternatives, or
    rebuild the relevant part of the plan. Confirmed services remain fixed until an explicit replacement
    or route-impact confirmation. Persisted decisions survive browser closure, and checkpoint/effect
@@ -90,8 +96,8 @@ The plan and detailed contracts are in [ODFT_PLAN.md](ODFT_PLAN.md) and
 [reference data and generators](docs/planning/05-synthetic-data-design.md), and
 [AI roles](docs/planning/06-ai-agent-design.md).
 
-**Demo limitations:** As this is only a demo, application performance optimization and responsive
-design have not been addressed; both are potential future TODO tasks. This is not a production-ready
+**Demo limitations:** Broader application performance tuning and responsive-design validation
+remain future tasks. This is not a production-ready
 booking system, and its schedules, estimates, and confirmations are not valid for real travel.
 
 ## Inspector
@@ -296,11 +302,11 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
 }
 ```
 
-| Field                                                                    | Rule                                                                                                                               |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`                                                               | Must be `"openrouter"`                                                                                                             |
-| `model`                                                                  | Exact OpenRouter model id (`author/slug`)                                                                                          |
-| `reasoningEffort`                                                        | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint                          |
+| Field                                                                    | Rule                                                                                                                                                   |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provider`                                                               | Must be `"openrouter"`                                                                                                                                 |
+| `model`                                                                  | Exact OpenRouter model id (`author/slug`)                                                                                                              |
+| `reasoningEffort`                                                        | Optional: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; must be supported by the matched endpoint                                              |
 | `temperature`                                                            | Optional, 0–2; only when the matched endpoints publish `temperature` — an unpublished parameter makes routing fail with HTTP 404 (checked pre-billing) |
 | `timeoutMs`                                                              | 1000–45000; keep below the worker operation lease (default 60 s)                                                                   |
 | `maxInputTokens`                                                         | ≤ 6000 (whole role input cap, history included)                                                                                    |

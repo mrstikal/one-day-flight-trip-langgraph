@@ -58,6 +58,7 @@ describe("load_context reset (P1-3)", () => {
         snapshotId: "s",
         gate: "booked",
         nextDecisionKind: "booking_confirmation",
+        itineraryReviewFingerprint: "a".repeat(64),
       }),
       runtime,
     );
@@ -80,6 +81,7 @@ describe("load_context reset (P1-3)", () => {
     expect(update.hotelOfferIds).toEqual([]);
     expect(update.activityIds).toEqual([]);
     expect(update.programApplied).toBe(false);
+    expect(update.itineraryReviewFingerprint).toBeNull();
   });
 });
 
@@ -383,7 +385,11 @@ describe("routers", () => {
     ).toBe("validate_selected_logistics");
     expect(
       routeAfterDecline(
-        state({ bookingService: "flights", nextDecisionKind: null, declinedSelectionChanged: true }),
+        state({
+          bookingService: "flights",
+          nextDecisionKind: null,
+          declinedSelectionChanged: true,
+        }),
       ),
     ).toBe("validate_selected_logistics");
   });

@@ -90,6 +90,7 @@ const reviewerEventSchema = z
     tags: z.array(activityTagSchema).max(9),
     startMinute: z.number().int().min(0).max(1439),
     durationMinutes: z.number().int().min(0).max(1440),
+    locked: z.boolean().default(false),
     /** Resolved stop coordinates (meal/activity events) for sequence review. */
     location: z
       .object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180) })
@@ -111,6 +112,15 @@ export const reviewerContextSchema = z
       })
       .strict(),
     preferences: tripPreferencesSchema,
+    preferredActivityIds: z
+      .array(nonEmptyStringSchema)
+      .max(30)
+      .default(() => []),
+    activitiesSelfArranged: z.boolean().default(false),
+    selfArrangedMeals: z
+      .array(mealSchema)
+      .max(3)
+      .default(() => []),
     requirements: z
       .array(z.object({ tag: activityTagSchema, minimumCount: z.number().int().min(1).max(7) }).strict())
       .max(8),

@@ -77,7 +77,7 @@ export interface AdapterUsage {
 export interface CallGovernor {
   reserve(attempt: number): Promise<{ readonly callId: string }>;
   settle(callId: string, usage: AdapterUsage): Promise<void>;
-  markUnknown(callId: string, reason: string): Promise<void>;
+  markUnknown(callId: string, reason: string, latencyMs: number): Promise<void>;
 }
 
 export type AdapterErrorCode =

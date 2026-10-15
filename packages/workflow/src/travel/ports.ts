@@ -161,6 +161,7 @@ export interface TravelItineraryPlanResult {
 
 export interface TravelItineraryReviewResult {
   readonly verdict: "acceptable" | "revise" | "conflict";
+  readonly revisionFingerprint: string;
   readonly suggestions: readonly string[];
   readonly issueCount: number;
   /** Suggested event order (known ids only) passed back to the planner. */
@@ -168,8 +169,7 @@ export interface TravelItineraryReviewResult {
   /** Suggested order translated to stable planner candidate refIds. */
   readonly suggestedCandidateOrder: readonly string[];
   /**
-   * Validation warnings appended when nonblocking suggestions were demoted at
-   * the attempt bound (empty otherwise).
+   * Nonblocking advice, including suppressed repeated or bounded revisions.
    */
   readonly warnings: readonly ItineraryIssue[];
   /** Ready-made decision when the reviewer reported a blocking conflict. */
@@ -327,6 +327,7 @@ export interface TravelPorts {
     operationId: string;
     attempt: number;
     atBound: boolean;
+    previousRevisionFingerprint: string | null;
   }): Promise<TravelItineraryReviewResult>;
   /** Phase 10: fenced approval of the current draft (fingerprint-bound). */
   approveItinerary(input: {

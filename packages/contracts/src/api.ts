@@ -17,10 +17,7 @@ import {
   tripDisplaySchema,
 } from "./projection.js";
 import { publicInspectorSchema } from "./inspector.js";
-import {
-  publicClarificationSchema,
-  publicConversationMessageSchema,
-} from "./ai.js";
+import { publicClarificationSchema, publicConversationMessageSchema } from "./ai.js";
 import { publicItinerarySchema } from "./itinerary.js";
 import { customSearchObjectiveSchema } from "./preferences.js";
 import {
@@ -119,6 +116,13 @@ export const operationStatusResponseSchema = z
     acceptedRevision: z.number().int().min(0),
     attempts: z.number().int().min(0),
     result: z.unknown().optional(),
+    progress: z
+      .object({
+        stage: z.enum(["program_saved", "planning_itinerary", "reviewing_itinerary"]),
+        programSaved: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type OperationStatusResponse = z.infer<typeof operationStatusResponseSchema>;

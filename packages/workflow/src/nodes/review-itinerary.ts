@@ -21,6 +21,7 @@ export async function reviewItineraryNode(
     operationId: state.operationId,
     attempt: state.planningAttempt,
     atBound,
+    previousRevisionFingerprint: state.itineraryReviewFingerprint,
   });
 
   if (result.verdict === "revise" && !atBound) {
@@ -29,11 +30,10 @@ export async function reviewItineraryNode(
     // mutation.
     const orderFeedback =
       result.suggestedCandidateOrder.length > 0
-        ? [
-            `review: suggested order: ${result.suggestedCandidateOrder.join(" > ")}`.slice(0, 300),
-          ]
+        ? [`review: suggested order: ${result.suggestedCandidateOrder.join(" > ")}`.slice(0, 300)]
         : [];
     return {
+      itineraryReviewFingerprint: result.revisionFingerprint,
       itineraryReviewVerdict: "revise",
       itineraryReviewSuggestions: [...result.suggestions],
       itineraryFeedback: [
@@ -46,6 +46,7 @@ export async function reviewItineraryNode(
   if (result.verdict === "conflict") {
     const conflict = result.conflictDecision;
     return {
+      itineraryReviewFingerprint: result.revisionFingerprint,
       itineraryReviewVerdict: "conflict",
       itineraryReviewSuggestions: [...result.suggestions],
       itineraryWarningCodes: [
@@ -74,6 +75,7 @@ export async function reviewItineraryNode(
 
   // Acceptable, or revise demoted to warnings at the bound: open the approval.
   return {
+    itineraryReviewFingerprint: result.revisionFingerprint,
     itineraryReviewVerdict: result.verdict,
     itineraryReviewSuggestions: [...result.suggestions],
     itineraryWarningCodes: [

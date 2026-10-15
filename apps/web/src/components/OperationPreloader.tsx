@@ -14,10 +14,22 @@ export function OperationPreloaderProvider({
     operationPreloader.getSnapshot,
     () => null,
   );
+  const blocking = useSyncExternalStore(
+    operationPreloader.subscribe,
+    operationPreloader.getBlockingSnapshot,
+    () => false,
+  );
 
   return (
     <>
-      {children}
+      <div
+        inert={blocking}
+        aria-busy={blocking}
+        className="contents"
+        data-testid="operation-content"
+      >
+        {children}
+      </div>
       {message ? (
         <div
           aria-atomic="true"
