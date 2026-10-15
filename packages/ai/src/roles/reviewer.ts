@@ -46,7 +46,10 @@ export const reviewerRole = {
 
 export const REVIEWER_LIMITS: RoleDefaultLimits = {
   timeoutMs: 20_000,
-  maxOutputTokens: 1_024,
+  // Reasoning-capable models count hidden reasoning tokens toward maxOutputTokens
+  // (2026-10-15: reviews of a revised draft hit the old 1024 cap and failed the
+  // planning loop), so the reviewer gets the planner-sized headroom.
+  maxOutputTokens: 2_048,
   maxAttempts: 2,
   maxInputTokens: 6_000,
   maxCallCostUsd: "0.05",

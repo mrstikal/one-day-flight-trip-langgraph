@@ -304,7 +304,7 @@ Example (`ai-profiles.json`, one role shown; all four roles use the same shape):
 | `temperature`                                                            | Optional, 0–2; only when the matched endpoints publish `temperature` — an unpublished parameter makes routing fail with HTTP 404 (checked pre-billing) |
 | `timeoutMs`                                                              | 1000–45000; keep below the worker operation lease (default 60 s)                                                                   |
 | `maxInputTokens`                                                         | ≤ 6000 (whole role input cap, history included)                                                                                    |
-| `maxOutputTokens`                                                        | Role output cap (defaults: 1024; planner 2048)                                                                                     |
+| `maxOutputTokens`                                                        | Role output cap (defaults: 1024; reviewer 2048, planner 6144; hidden reasoning tokens count toward it)                             |
 | `maxAttempts`                                                            | 1–2 (the adapter owns at most one repair/retry; never stacked)                                                                     |
 | `maxCallCostUsd`                                                         | Worst-case per-call ceiling in USD; the tool refuses a profile whose worst case exceeds it                                         |
 | `inputPriceUsdPerMillion`, `outputPriceUsdPerMillion`, `requestPriceUsd` | **Verified upper bounds** (USD); must be ≥ every matched endpoint's published rate, otherwise the call fails closed before billing |
@@ -337,9 +337,11 @@ operator-verified `pricingVersion` pins stay in operator control: re-run `npm ru
 whenever it asks, then restart the worker so it reloads the profiles and the manifest. A model whose
 capability or pricing is unknown is never called.
 
-The committed example uses `openai/gpt-6-luna`; its endpoints publish a `reasoning` parameter (the
-model is reasoning-capable), but the example omits `reasoningEffort` — set it only when you want to
-pin the effort. The Luna endpoints do not publish `temperature`, so the example omits it too: a profile
+The committed example uses `openai/gpt-6-luna`; its endpoints publish `reasoning` and `reasoning_effort`.
+Hidden reasoning tokens count toward `maxOutputTokens` (and dominate latency), and Luna's unpinned effort
+regularly truncated reviews/plans at the output cap, so the example pins `reasoningEffort: "low"` on the
+planning roles — raise it only when you want deeper thinking. The Luna
+endpoints do not publish `temperature`, so the example omits it too: a profile
 `temperature` against endpoints without the parameter fails closed before billing (OpenRouter routing
 with `require_parameters` would reject the whole request with a 404 otherwise). The example price fields
 are the verified worst case over the matched

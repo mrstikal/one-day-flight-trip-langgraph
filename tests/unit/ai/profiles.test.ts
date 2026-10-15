@@ -305,7 +305,8 @@ describe("pricing version stamping", () => {
       mode: "openrouter",
       configPath: new URL("../../../ai-profiles.example.json", import.meta.url).pathname,
     });
-    expect(loaded.profiles?.planner.maxOutputTokens).toBe(2_048);
+    expect(loaded.profiles?.planner.maxOutputTokens).toBe(6_144);
+    expect(loaded.profiles?.planner.reasoningEffort).toBe("low");
     expect(loaded.profiles?.intent.allowedEndpointProviderIds).toEqual(["openai"]);
   });
 });

@@ -474,7 +474,7 @@ export class OpenRouterAdapter implements LLMAdapter {
         if (finishReason === "length") {
           const failure = new AdapterError(
             "AI_TRANSPORT_FAILED",
-            "the completion hit the output cap with no usable content",
+            "the completion hit the output cap with no usable content; raise the role maxOutputTokens (reasoning tokens count toward it)",
             false,
           );
           if (reservation) {

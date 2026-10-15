@@ -182,13 +182,21 @@ export async function reserveCall(
       };
     }
     // The two-attempt bound is durable: a restarted worker cannot restart the
-    // adapter's local loop from zero for the same interpretation.
+    // adapter's local loop from zero for the same interpretation. An explicit owner
+    // retry opens a new recovery round and with it a fresh budget for the scope it
+    // was authorized to recover; a crash/restart inside the same round still cannot.
+    const recovery = await client.query<{ recovery_rounds: number }>(
+      `SELECT recovery_rounds FROM odft_app.workflow_operations WHERE id = $1`,
+      [input.operationId],
+    );
+    const attemptLimit =
+      input.maxAttemptsPerScope * ((recovery.rows[0]?.recovery_rounds ?? 0) + 1);
     const scopeAttempts = await client.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM odft_app.llm_calls
         WHERE operation_id = $1 AND effect_scope = $2`,
       [input.operationId, input.effectScope],
     );
-    if (Number.parseInt(scopeAttempts.rows[0]?.count ?? "0", 10) + 1 > input.maxAttemptsPerScope) {
+    if (Number.parseInt(scopeAttempts.rows[0]?.count ?? "0", 10) + 1 > attemptLimit) {
       await client.query("ROLLBACK");
       return {
         ok: false,

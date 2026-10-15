@@ -38,7 +38,9 @@ export const plannerRole = {
 
 export const PLANNER_LIMITS: RoleDefaultLimits = {
   timeoutMs: 30_000,
-  maxOutputTokens: 2_048,
+  // Triple the previous 2048 cap (2026-10-15): revision drafts carry more context
+  // and reasoning, and the output cap must never truncate a valid plan.
+  maxOutputTokens: 6_144,
   maxAttempts: 2,
   maxInputTokens: 6_000,
   maxCallCostUsd: "0.20",

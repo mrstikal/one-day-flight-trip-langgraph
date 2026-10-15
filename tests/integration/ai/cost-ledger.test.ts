@@ -147,6 +147,24 @@ describe("LLM call ledger (real PostgreSQL)", () => {
     expect(other.ok).toBe(true);
   });
 
+  it("grants a fresh per-scope budget in a new owner recovery round", async () => {
+    const operationId = randomUUID();
+    await pool.query(
+      `INSERT INTO odft_app.workflow_operations
+         (id, trip_id, request_id, payload_hash, accepted_revision, status, kind, payload, recovery_rounds)
+       VALUES ($1, $2, $3, $4, 0, 'failed', 'command', '{}'::jsonb, 1)`,
+      [operationId, tripId, randomUUID(), "0".repeat(64)],
+    );
+    const first = await reserveCall(pool, reservation({ operationId }));
+    const second = await reserveCall(pool, reservation({ operationId }));
+    const third = await reserveCall(pool, reservation({ operationId }));
+    const fourth = await reserveCall(pool, reservation({ operationId }));
+    // Round 1 (one owner retry) doubles the durable bound: 2 * (1 + 1) = 4 rows.
+    expect(first.ok && second.ok && third.ok && fourth.ok).toBe(true);
+    const fifth = await reserveCall(pool, reservation({ operationId }));
+    expect(fifth).toMatchObject({ ok: false, code: "AI_BUDGET_EXCEEDED" });
+  });
+
   it("refuses a reservation or a conversation write with a stale fencing token (P1-3)", async () => {
     // Reuse the trip's existing operation and pin its token to a known value.
     const existing = await pool.query<{ id: string }>(
