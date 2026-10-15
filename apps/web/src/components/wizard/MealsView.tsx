@@ -9,7 +9,6 @@ import type {
   Meal,
 } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
-import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { formatEuroMinor } from "@/lib/format/money";
 import { useTripProjection } from "@/lib/use-trip-projection";
@@ -417,9 +416,6 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
                   : "Save program"}
           </button>
         </div>
-        <p role="note" className="text-sm text-ink-muted">
-          {DEMO_DISCLAIMER}
-        </p>
       </div>
     );
   }
@@ -648,9 +644,6 @@ export function MealsView({ tripId }: { readonly tripId: string }): React.JSX.El
           <Link href={`/trips/${tripId}/activities`} className="underline">
             Review activities
           </Link>
-        </p>
-        <p role="note" className="text-sm text-ink-muted">
-          {DEMO_DISCLAIMER}
         </p>
       </div>
     );

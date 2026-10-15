@@ -9,7 +9,6 @@ import {
   type PublicDecisionResponse,
 } from "@odft/contracts";
 import { ApiError } from "@/lib/api-client";
-import { DEMO_DISCLAIMER } from "@/lib/disclaimers";
 import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
@@ -480,9 +479,6 @@ export function ActivitiesView({ tripId }: { readonly tripId: string }): React.J
             )}
           </>
         )}
-        <p role="note" className="text-sm text-ink-muted">
-          {DEMO_DISCLAIMER}
-        </p>
       </div>
     );
   }
