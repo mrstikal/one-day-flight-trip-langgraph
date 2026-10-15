@@ -26,6 +26,17 @@ export const VOICE_COPY = {
   replyNotAvailable: "The assistant reply is not available yet.",
   maxDuration: "The recording reached the 60-second limit. Try again with a shorter message.",
   fixtureMode: "Voice fixture mode: scripted transcription and test audio, no live speech service.",
+  dictate: "Dictate",
+  stopRecording: "Stop recording",
+  cancelDictation: "Cancel dictation",
+  readReplies: "Read replies aloud",
+  stopSpeaking: "Stop speaking",
+  playReply: "Play reply",
+  privacyNotice:
+    "Voice recording and spoken replies use OpenRouter. Starting dictation also enables spoken replies for this tab. You can turn them off at any time.",
+  helper: "Use your microphone and speakers/headphones to control the assistant.",
+  pauseHint:
+    "A pause longer than two seconds may split the question; edit the draft or dictate more before sending.",
 } as const;
 
 /**
@@ -73,7 +84,7 @@ export function appendTranscript(current: ComposerState, transcript: string): Co
 export interface VoiceReplyMessage {
   readonly id: string;
   readonly sequence: number;
-  readonly role: "user" | "assistant";
+  readonly role: "user" | "assistant" | "system";
   readonly content: string;
   readonly operationId: string | null;
 }

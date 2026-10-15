@@ -8,9 +8,12 @@ import { submitCommand, submitDecision } from "@/lib/decision-client";
 import { useTripProjection } from "@/lib/use-trip-projection";
 import { useTripEvents } from "@/lib/use-sse";
 import { hasSavedProgram, nextTripStep } from "@/lib/trip-step";
+import { useAssistantVoice } from "@/lib/use-assistant-voice";
+import { appendTranscript, VOICE_COPY, type ComposerState } from "@/lib/voice-state";
 import { ClarificationOptions } from "./clarification-options";
 import { MessageList } from "./message-list";
 import { RouteChangeCard } from "./route-change-card";
+import { VoiceControls } from "./voice-controls";
 
 /**
  * The assistant rail (08-frontend-ux.md): persisted conversation, the pending
@@ -29,7 +32,14 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
   const router = useRouter();
   const pathname = usePathname();
 
-  const [draft, setDraft] = useState("");
+  // One small composer state object; `draft` stays derived so the existing
+  // Send logic and textarea value are unchanged (VOICE_CONTROLL.md section 10).
+  const [composer, setComposer] = useState<ComposerState>({
+    draft: "",
+    voiceInsertionError: null,
+  });
+  const draft = composer.draft;
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>();
   // The operation started by the last chat message: when it settles at a NEW
@@ -38,6 +48,41 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
     readonly operationId: string;
     readonly previousDecisionId: string | null;
   } | null>(null);
+
+  // Voice selection works on message DTOs only (never DOM scraping), and the
+  // voice state stays separate from the auto-navigation effect below.
+  const voiceMessages = useMemo(
+    () =>
+      (projection?.conversation ?? []).map((message) => ({
+        id: message.id,
+        sequence: message.sequence,
+        role: message.role,
+        content: message.content,
+        operationId: message.operationId,
+      })),
+    [projection],
+  );
+  const voiceOperations = useMemo(
+    () =>
+      (projection?.operations ?? []).map((operation) => ({
+        operationId: operation.operationId,
+        status: operation.status,
+      })),
+    [projection],
+  );
+  const handleTranscript = useCallback((transcript: string): void => {
+    setComposer((current) => appendTranscript(current, transcript));
+    // Focus without forcing an unexpected page scroll.
+    textareaRef.current?.focus({ preventScroll: true });
+  }, []);
+  const voice = useAssistantVoice({
+    tripId,
+    messages: voiceMessages,
+    operations: voiceOperations,
+    projectionLoaded: projection !== null && projection.trip.id === tripId,
+    refreshProjection: refresh,
+    onTranscript: handleTranscript,
+  });
 
   const activeWork = useMemo(
     () =>
@@ -84,14 +129,17 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
         operationId,
         previousDecisionId: projection.pendingDecision?.id ?? null,
       };
-      setDraft("");
+      // Registered separately from the auto-navigation reference: the bounded
+      // reply refresh belongs to the voice hook, not to autopilot routing.
+      voice.registerSentOperation(operationId);
+      setComposer({ draft: "", voiceInsertionError: null });
       refresh();
     } catch (caught) {
       handleError(caught);
     } finally {
       setBusy(false);
     }
-  }, [draft, handleError, projection, refresh, tripId]);
+  }, [draft, handleError, projection, refresh, tripId, voice]);
 
   const chooseOption = useCallback(
     async (optionId: string): Promise<void> => {
@@ -268,19 +316,32 @@ export function ConversationRail({ tripId }: { readonly tripId: string }): React
           name="chat"
           rows={2}
           maxLength={2000}
+          ref={textareaRef}
           value={draft}
           disabled={busy || !projection}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setComposer({ draft: value, voiceInsertionError: null });
+          }}
           placeholder="e.g. Make the day less exhausting, or find a cheaper hotel"
           className="resize-none rounded border border-border bg-cream px-3 py-2 text-sm"
         />
+        {composer.voiceInsertionError ? (
+          <p role="alert" className="text-sm text-red-700" data-testid="voice-insertion-error">
+            {composer.voiceInsertionError}
+          </p>
+        ) : null}
+        <VoiceControls voice={voice} />
         <button
           type="submit"
-          disabled={busy || activeWork || draft.trim().length === 0}
+          disabled={busy || activeWork || voice.busy || draft.trim().length === 0}
           className="self-end rounded bg-teal px-4 py-2 text-sm font-medium text-paper disabled:opacity-50"
         >
           {activeWork ? "Working…" : "Send"}
         </button>
+        <p id="assistant-voice-help" className="text-xs text-ink-muted">
+          {VOICE_COPY.helper}
+        </p>
       </form>
     </aside>
   );

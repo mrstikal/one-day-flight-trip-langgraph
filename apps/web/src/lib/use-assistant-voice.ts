@@ -16,7 +16,8 @@ import {
   type MediaStreamLike,
   type RecorderLike,
 } from "./voice-capture";
-import { fetchSynthesizedReply, submitTranscription } from "./voice-client";
+import { ensureSession } from "./session-client";
+import { fetchSynthesizedReply, fetchVoiceCapabilities, submitTranscription } from "./voice-client";
 import {
   anchorReplyRefresh,
   canPlayReply,
@@ -91,6 +92,10 @@ export interface UseAssistantVoiceOptions {
 
 export interface AssistantVoice {
   readonly supported: boolean;
+  /** Server voice availability for this trip; null until the query resolves. */
+  readonly serverEnabled: boolean | null;
+  /** Effective gateway mode once the capabilities query resolves. */
+  readonly mode: "fixture" | "openrouter" | null;
   readonly activated: boolean;
   readonly repliesEnabled: boolean;
   /** Recording/stopping/normalizing/transcribing — Send must stay disabled. */
@@ -102,6 +107,8 @@ export interface AssistantVoice {
   readonly error: string | null;
   readonly notice: string | null;
   readonly offerPlayReply: boolean;
+  /** Speech generation or playback is active (Stop speaking applicable). */
+  readonly speaking: boolean;
   readonly dictate: () => void;
   readonly stopRecording: () => void;
   readonly cancelDictation: () => void;
@@ -161,6 +168,8 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
   // snapshot is `false`, the client snapshot is computed once.
   const supported = useSyncExternalStore(subscribeNoop, detectVoiceSupport, () => false);
 
+  const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<"fixture" | "openrouter" | null>(null);
   const [activated, setActivated] = useState(false);
   const [repliesEnabled, setRepliesEnabledState] = useState(false);
   const [phase, setPhase] = useState<VoicePhase>("idle");
@@ -199,6 +208,43 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
   }, [onTranscript]);
+
+  // Safe availability query (no microphone access). A deep-linked visitor with
+  // an expired cookie boots a fresh anonymous session once, exactly like the
+  // first Send would.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const capabilities = await fetchVoiceCapabilities(tripId);
+        if (!cancelled) {
+          setServerEnabled(capabilities.enabled);
+          setMode(capabilities.mode);
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "UNAUTHORIZED") {
+          try {
+            await ensureSession();
+            const capabilities = await fetchVoiceCapabilities(tripId);
+            if (!cancelled) {
+              setServerEnabled(capabilities.enabled);
+              setMode(capabilities.mode);
+            }
+            return;
+          } catch {
+            // Fall through: treated as unknown below.
+          }
+        }
+        if (!cancelled) {
+          setServerEnabled(null);
+          setMode(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tripId]);
 
   /** Real-API ports for the capture controller (stable for the hook's life). */
   const ports = useMemo(
@@ -319,7 +365,7 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
       phaseRef.current === "recording" ||
       phaseRef.current === "stopping" ||
       phaseRef.current === "transcribing";
-    if (!supported || captureBusy) {
+    if (!supported || serverEnabled !== true || captureBusy) {
       return;
     }
     setError(null);
@@ -341,7 +387,7 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
       .resume()
       .catch(() => {});
     controller().start();
-  }, [controller, stopSpeaking, supported]);
+  }, [controller, serverEnabled, stopSpeaking, supported]);
 
   const stopRecording = useCallback((): void => {
     controller().stopManual();
@@ -542,6 +588,12 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
       if (tracker.operationId === null) {
         return;
       }
+      if (!repliesEnabledRef.current) {
+        // No speech is pending while replies are off: stop the bounded refresh
+        // (and never show the "not available yet" notice for silent sends).
+        refreshRef.current = stopReplyRefresh();
+        return;
+      }
       const operation = operations.find((entry) => entry.operationId === tracker.operationId);
       const settled =
         operation !== undefined && operation.status !== "queued" && operation.status !== "running";
@@ -641,6 +693,8 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
 
   return {
     supported,
+    serverEnabled,
+    mode,
     activated,
     repliesEnabled,
     busy,
@@ -651,6 +705,7 @@ export function useAssistantVoice(options: UseAssistantVoiceOptions): AssistantV
     error,
     notice,
     offerPlayReply: canPlayReply(playback),
+    speaking: phase === "tts-preparing" || playback.phase === "playing",
     dictate,
     stopRecording,
     cancelDictation,

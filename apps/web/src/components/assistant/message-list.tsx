@@ -24,13 +24,18 @@ export function MessageList({
       {[...messages].reverse().map((message) => (
         <li
           key={message.id}
+          data-message-id={message.id}
+          data-message-role={message.role}
+          data-operation-id={message.operationId ?? ""}
           className={
             message.role === "user"
               ? "self-end rounded bg-cream px-3 py-2 text-sm"
               : "self-start rounded border border-border px-3 py-2 text-sm"
           }
         >
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <p className="whitespace-pre-wrap" data-testid="conversation-message-content">
+            {message.content}
+          </p>
           {message.interpretation ? (
             <InterpretationCard interpretation={message.interpretation} />
           ) : null}

@@ -1,4 +1,4 @@
-import { VOICE_COPY, VOICE_CAPTURE_LIMIT_MS, type VoicePhase } from "./voice-state.js";
+import { VOICE_COPY, VOICE_CAPTURE_LIMIT_MS, type VoicePhase } from "./voice-state";
 import {
   beginCapture,
   cancelCapture,
@@ -10,7 +10,7 @@ import {
   speechEnd,
   speechStart,
   type CaptureState,
-} from "./voice-vad.js";
+} from "./voice-vad";
 
 /**
  * Framework-free capture pipeline (VOICE_CONTROLL.md section 10).

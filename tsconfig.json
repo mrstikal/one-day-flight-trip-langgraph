@@ -6,12 +6,27 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "paths": {
-      "@odft/*": ["./packages/*/src/index.ts"],
-      "@/*": ["./apps/web/src/*.ts"],
-      "next/server": ["./node_modules/next/server.d.ts"]
-    }
+      "@odft/*": [
+        "./packages/*/src/index.ts"
+      ],
+      "@/*": [
+        "./apps/web/src/*.ts"
+      ],
+      "next/server": [
+        "./node_modules/next/server.d.ts"
+      ]
+    },
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ]
   },
   "include": [
     "scripts/**/*.ts",

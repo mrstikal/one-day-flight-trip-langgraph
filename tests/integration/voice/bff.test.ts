@@ -216,7 +216,9 @@ function fakeFetch(options: { sttPayload?: unknown; ttsBytes?: Uint8Array } = {}
     if (target === OPENROUTER_SPEECH_URL) {
       calls.tts += 1;
       ttsBodies.push(JSON.parse(String(init?.body)));
-      return new Response(options.ttsBytes ?? new Uint8Array([0xff, 0xfb, 0x90, 0x00]), {
+      // `slice()` yields an ArrayBuffer-backed view accepted by DOM BodyInit.
+      const audioBytes = options.ttsBytes ?? new Uint8Array([0xff, 0xfb, 0x90, 0x00]);
+      return new Response(audioBytes.slice(), {
         status: 200,
         // A distinctive upstream header the route must NOT forward.
         headers: { "content-type": "audio/mpeg", "x-generation-id": "gen-upstream-1" },
@@ -291,7 +293,8 @@ function transcribeRequest(
       "x-voice-request-id": randomUUID(),
       ...extra,
     },
-    body: new Uint8Array(audio),
+    // `slice()` yields an ArrayBuffer-backed view accepted by BodyInit.
+    body: audio.slice(),
   });
 }
 

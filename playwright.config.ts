@@ -35,7 +35,8 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    // The end-to-end suite must run in deterministic fixture mode (AC-06-10).
-    env: { AI_MODE: "fixture" },
+    // The end-to-end suite must run in deterministic fixture mode (AC-06-10);
+    // voice is enabled without credentials (fixture needs no profile/keys).
+    env: { AI_MODE: "fixture", VOICE_ENABLED: "true" },
   },
 });
